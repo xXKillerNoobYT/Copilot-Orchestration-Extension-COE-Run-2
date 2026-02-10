@@ -1,6 +1,6 @@
 # Copilot Orchestration Extension (COE) — True Plan
 
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: February 9, 2026
 
 ---
@@ -20,11 +20,11 @@ Use this folder as the single source of truth for understanding the project's go
 | 01 | [Vision & Goals](01-Vision-and-Goals.md) | What COE is, the problem it solves, the 8 core goals, target users, and core philosophy |
 | 02 | [System Architecture & Design](02-System-Architecture-and-Design.md) | The four layers (UI, Agents, MCP, Services), data architecture, visual design system, and design principles |
 | 03 | [Agent Teams & Roles](03-Agent-Teams-and-Roles.md) | Every AI agent in the system — Boss, Orchestrator, Planning, Answer, Verification, Research, Clarity, Custom Agents, and the external Coding AI |
-| 04 | [Workflows & How It Works](04-Workflows-and-How-It-Works.md) | Step-by-step flowcharts for issue resolution, planning, Q&A, task decomposition, tickets, verification, fresh restart, and self-improvement |
+| 04 | [Workflows & How It Works](04-Workflows-and-How-It-Works.md) | Step-by-step flowcharts for issue resolution, planning, Q&A, task decomposition, tickets, verification, fresh restart, self-improvement, and **custom agent execution loop** |
 | 05 | [User Experience & Interface](05-User-Experience-and-Interface.md) | Every screen and panel — sidebar layout, planning wizard, ticket view, verification panel, custom agent builder, next actions, and evolution dashboard |
 | 06 | [User & Developer Stories](06-User-and-Developer-Stories.md) | Real-world scenarios told from the perspective of solo developers, tech leads, product owners, and even the AI coding agent itself |
-| 07 | [Program Lifecycle & Evolution](07-Program-Lifecycle-and-Evolution.md) | The four overlapping lifecycle phases (Birth → Growth → Evolution → Refinement) and how the system learns and improves over time |
-| 08 | [Context Management & Safety](08-Context-Management-and-Safety.md) | Token management, error recovery, offline support, loop detection, security, input validation, and performance guardrails |
+| 07 | [Program Lifecycle & Evolution](07-Program-Lifecycle-and-Evolution.md) | The four overlapping lifecycle phases (Birth → Growth → Evolution → Refinement), how the system learns, and **smart improvement systems** that drive continuous self-tuning |
+| 08 | [Context Management & Safety](08-Context-Management-and-Safety.md) | Token management, error recovery, offline support, loop detection, **custom agent safety loop & hardlock protections**, **smart improvement systems**, security, input validation, and performance guardrails |
 | 09 | [Features & Capabilities](09-Features-and-Capabilities.md) | Complete list of 35 features across 7 categories, success metrics, and risk management |
 
 ---

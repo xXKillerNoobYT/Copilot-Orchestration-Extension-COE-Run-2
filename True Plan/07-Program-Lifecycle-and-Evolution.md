@@ -181,6 +181,25 @@ flowchart TB
    - Batch LLM requests for efficiency
    - Improve cache hit rates
 
+5. **Custom Agent Refinement**
+   - Custom agents with high success rates → recommended to other users
+   - Custom agent goals that frequently timeout → flagged for user revision
+   - Routing rules that misfire → auto-suggest improved keyword patterns
+   - Checklist items that never contribute to results → flagged for removal
+
+### Smart Improvement Systems
+
+The Refinement phase relies on several **smart improvement systems** that run continuously in the background. These are detailed in [Context Management & Safety](08-Context-Management-and-Safety.md), but here is a summary of how they connect to the lifecycle:
+
+| Smart System | Lifecycle Role |
+|-------------|---------------|
+| **Intelligent Retry Logic** | Fewer transient failures → more completed tasks → faster Growth phase |
+| **Proactive Drift Detection** | Catches plan-vs-code mismatches before they compound → cleaner Evolution |
+| **Smart Context Preloading** | Predicts what context is needed next → smoother task transitions |
+| **Intelligent Task Reordering** | Keeps the queue optimal → maximizes throughput during Growth |
+| **Quality Learning Loop** | Records outcomes so the system auto-tunes time estimates, agent preferences, and context strategies → core of Refinement |
+| **Custom Agent Audit Trail** | Provides data for refining custom agent templates and safety thresholds |
+
 ---
 
 ## Success Criteria Per Phase

@@ -223,6 +223,16 @@ Not Started → In Progress → Pending Verification → Verified ✓
 - Routing rules (keywords/patterns that trigger this agent)
 - Permissions (always read-only for files)
 
+**Built-In Safety Loop**: Every custom agent runs through a guarded execution cycle:
+1. Load config → hardlock check (write/execute = always denied)
+2. Process each goal one at a time, in priority order
+3. After each goal: check token usage, time budget, and loop detection
+4. If any check fails → agent halts, saves partial results, notifies user
+5. Maximum 50 LLM calls, 20 goals, and 30 minutes total per run
+6. Full audit trail logged for every action
+
+See [Context Management & Safety](08-Context-Management-and-Safety.md) for the complete safety diagram.
+
 ---
 
 ## The Coding AI (External — Not Part of COE)

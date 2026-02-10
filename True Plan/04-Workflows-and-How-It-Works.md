@@ -303,3 +303,49 @@ flowchart TB
 - Breaking strategies when context is too large
 - Task decomposition rules
 - Error handling patterns
+- Custom agent goals and checklists
+- Task time estimates (based on historical data)
+- Agent routing accuracy
+
+---
+
+## Workflow 9: Custom Agent Execution Loop
+
+How user-created custom agents safely run their tasks.
+
+```mermaid
+flowchart TB
+    TRIGGER[Custom Agent Triggered<br/>Via keyword, ticket, or manual] --> LOAD[Load Agent YAML Config<br/>Prompt, goals, checklist, permissions]
+    LOAD --> HARDLOCK{Hardlock Check}
+
+    HARDLOCK -->|Write/Execute Detected| BLOCK[🔒 BLOCKED<br/>Operation Denied<br/>Log to Audit]
+    HARDLOCK -->|All Permissions Valid| START[Begin Goal Processing]
+
+    START --> GOAL[Process Next Goal<br/>In Priority Order]
+    GOAL --> LLM[Call LLM with Goal Context]
+    LLM --> VALIDATE{Response Valid?}
+
+    VALIDATE -->|Yes| CHECK_LIST[Run Through Checklist Items]
+    VALIDATE -->|No / Loop Detected| RETRY{Retry Count < 3?}
+    RETRY -->|Yes| LLM
+    RETRY -->|No| HALT[⚠️ Halt Goal<br/>Report Issue to User]
+
+    CHECK_LIST --> SAFETY{Safety Checks OK?<br/>Time · Tokens · No Loops}
+    SAFETY -->|Yes| MORE_GOALS{More Goals?}
+    SAFETY -->|No| HALT
+
+    MORE_GOALS -->|Yes| GOAL
+    MORE_GOALS -->|No| RESULTS[Return All Results<br/>Via Ticket System]
+    RESULTS --> IDLE[Agent Goes Idle]
+
+    HALT --> TICKET[Create Investigation Ticket<br/>With Partial Results]
+    TICKET --> IDLE
+```
+
+**Key Safety Features**:
+- Custom agents can **never** write files or execute commands (hardlocked)
+- Every goal has a 5-minute timeout
+- Loop detection catches the agent repeating itself (3 similar responses = halt)
+- Total runtime capped at 30 minutes
+- Full audit trail of every action taken
+- If any safety guard triggers, the agent halts gracefully and reports partial results
