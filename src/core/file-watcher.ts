@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { Database } from './database';
 import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from './config';
+import { TaskStatus } from '../types';
 
 export class FileWatcherService {
     private watchers: vscode.FileSystemWatcher[] = [];
@@ -70,6 +72,33 @@ export class FileWatcherService {
     private onPlanChanged(uri: vscode.Uri): void {
         this.outputChannel.appendLine(`Plan file changed: ${uri.fsPath}`);
         this.database.addAuditLog('file_watcher', 'plan_changed', uri.fsPath);
+
+        // Plan change detection: flag verified tasks for recheck if their plan changed
+        try {
+            const content = fs.readFileSync(uri.fsPath, 'utf-8');
+            const parsed = JSON.parse(content);
+
+            if (parsed.tasks && Array.isArray(parsed.tasks)) {
+                // Find all verified tasks in the active plan and flag for recheck
+                const allTasks = this.database.getTasksByStatus(TaskStatus.Verified);
+                let rechecked = 0;
+                for (const task of allTasks) {
+                    // If the task belongs to a plan and has been verified, mark for recheck
+                    if (task.plan_id) {
+                        this.database.updateTask(task.id, { status: TaskStatus.NeedsReCheck });
+                        rechecked++;
+                    }
+                }
+                if (rechecked > 0) {
+                    this.outputChannel.appendLine(`Plan changed: ${rechecked} verified tasks flagged for recheck`);
+                    this.database.addAuditLog('file_watcher', 'plan_recheck_triggered',
+                        `${rechecked} tasks flagged for recheck after plan file change: ${uri.fsPath}`);
+                }
+            }
+        } catch {
+            // Not JSON or couldn't parse — just log
+            this.outputChannel.appendLine(`Could not parse plan file for change detection: ${uri.fsPath}`);
+        }
     }
 
     private onIssueChanged(uri: vscode.Uri): void {
@@ -78,8 +107,28 @@ export class FileWatcherService {
     }
 
     private onCodeChanged(uri: vscode.Uri): void {
-        // Only log, don't trigger expensive operations on every save
-        this.database.addAuditLog('file_watcher', 'code_changed', path.relative(this.workspaceRoot, uri.fsPath));
+        const relativePath = path.relative(this.workspaceRoot, uri.fsPath);
+        this.database.addAuditLog('file_watcher', 'code_changed', relativePath);
+
+        // Verification trigger: if a changed file is referenced by a pending_verification task, mark for recheck
+        const pendingTasks = this.database.getTasksByStatus(TaskStatus.PendingVerification);
+        for (const task of pendingTasks) {
+            if (task.files_modified && task.files_modified.length > 0) {
+                const normalizedChanged = relativePath.replace(/\\/g, '/');
+                const matches = task.files_modified.some(f =>
+                    f.replace(/\\/g, '/') === normalizedChanged ||
+                    normalizedChanged.endsWith(f.replace(/\\/g, '/'))
+                );
+                if (matches) {
+                    this.database.updateTask(task.id, { status: TaskStatus.NeedsReCheck });
+                    this.outputChannel.appendLine(
+                        `Code change in ${relativePath} triggered recheck for task "${task.title}"`
+                    );
+                    this.database.addAuditLog('file_watcher', 'code_recheck_triggered',
+                        `Task "${task.title}" flagged for recheck after code change: ${relativePath}`);
+                }
+            }
+        }
     }
 
     stop(): void {

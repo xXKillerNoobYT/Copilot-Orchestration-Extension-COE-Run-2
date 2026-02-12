@@ -7,6 +7,8 @@ import { MCPServer } from './mcp/server';
 import { StatusViewProvider } from './views/status-view';
 import { registerCommands } from './commands';
 import { FileWatcherService } from './core/file-watcher';
+import { TestRunnerService } from './core/test-runner';
+import { EvolutionService } from './core/evolution-service';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -37,6 +39,18 @@ export async function activate(context: vscode.ExtensionContext) {
         // Phase 2: Initialize agent framework
         orchestrator = new Orchestrator(database, llmService, configManager, outputChannel);
         await orchestrator.initialize();
+
+        // Phase 2b: Wire test runner into verification agent
+        if (workspaceRoot) {
+            const testRunner = new TestRunnerService(workspaceRoot, outputChannel);
+            orchestrator.getVerificationAgent().setTestRunner(testRunner);
+            outputChannel.appendLine('TestRunnerService wired into Verification Agent.');
+        }
+
+        // Phase 2c: Wire evolution service into orchestrator
+        const evolutionService = new EvolutionService(database, configManager, llmService, outputChannel);
+        orchestrator.setEvolutionService(evolutionService);
+        outputChannel.appendLine('EvolutionService wired into Orchestrator.');
 
         // Phase 3: Initialize MCP server
         mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel);

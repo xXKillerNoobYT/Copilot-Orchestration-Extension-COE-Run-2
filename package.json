@@ -1,15 +1,38 @@
 {
   "name": "copilot-orchestration-extension",
   "displayName": "Copilot Orchestration Extension (COE)",
-  "description": "An intelligent planning, orchestration, and tracking layer for AI-assisted software development",
-  "version": "0.1.0",
+  "description": "An intelligent planning, orchestration, and tracking layer for AI-assisted software development — orchestrates AI coding agents via MCP, SQLite, and local LLMs",
+  "version": "1.0.0",
   "publisher": "coe-dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coe-dev/copilot-orchestration-extension"
+  },
+  "icon": "resources/coe-icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai",
+    "copilot",
+    "orchestration",
+    "mcp",
+    "planning",
+    "task management",
+    "agents",
+    "code generation",
+    "verification",
+    "lm studio"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other",
-    "AI"
+    "AI",
+    "Machine Learning"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -215,6 +238,14 @@
         "command": "coe.refreshStatus",
         "title": "COE: Refresh Status",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "coe.openPlanBuilder",
+        "title": "COE: Open Visual Plan Builder"
+      },
+      {
+        "command": "coe.exportPlanAsMarkdown",
+        "title": "COE: Export Plan as Markdown"
       }
     ],
     "viewsWelcome": [
@@ -276,6 +307,31 @@
           "type": "number",
           "default": 500,
           "description": "File watcher debounce in milliseconds"
+        },
+        "coe.github.token": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub personal access token for issue sync"
+        },
+        "coe.github.owner": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repository owner"
+        },
+        "coe.github.repo": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repository name"
+        },
+        "coe.github.syncIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "description": "How often to auto-sync GitHub issues (minutes)"
+        },
+        "coe.github.autoImport": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically import new GitHub issues as tasks"
         }
       }
     }

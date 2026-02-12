@@ -12,7 +12,8 @@ export enum TaskStatus {
     PendingVerification = 'pending_verification',
     Verified = 'verified',
     NeedsReCheck = 'needs_recheck',
-    Failed = 'failed'
+    Failed = 'failed',
+    Decomposed = 'decomposed'
 }
 
 export enum TaskPriority {
@@ -86,6 +87,7 @@ export interface Task {
     acceptance_criteria: string;
     plan_id: string | null;
     parent_task_id: string | null;
+    sort_order: number;
     estimated_minutes: number;
     files_modified: string[];
     context_bundle: string | null; // JSON string of context for coding AI
@@ -173,6 +175,27 @@ export interface EvolutionLogEntry {
     applied_at: string | null;
     result: string | null;
     created_at: string;
+}
+
+// --- GitHub Types ---
+
+export interface GitHubIssue {
+    id: string;
+    github_id: number;
+    number: number;
+    title: string;
+    body: string;
+    state: 'open' | 'closed';
+    labels: string[];
+    assignees: string[];
+    repo_owner: string;
+    repo_name: string;
+    task_id: string | null;
+    local_checksum: string;
+    remote_checksum: string;
+    synced_at: string;
+    created_at: string;
+    updated_at: string;
 }
 
 // --- LLM Types ---
@@ -291,6 +314,13 @@ export interface COEConfig {
             enabled: boolean;
         };
     };
+    github?: {
+        token: string;
+        owner: string;
+        repo: string;
+        syncIntervalMinutes: number;
+        autoImport: boolean;
+    };
 }
 
 // --- Agent Framework Types ---
@@ -314,6 +344,113 @@ export interface AgentResponse {
 export interface AgentAction {
     type: 'create_task' | 'create_ticket' | 'update_task' | 'escalate' | 'log';
     payload: Record<string, unknown>;
+}
+
+// --- Design Component Types ---
+
+export interface DesignComponent {
+    id: string;
+    plan_id: string;
+    page_id: string | null;
+    type: 'container' | 'text' | 'button' | 'input' | 'image' | 'card' | 'nav' | 'modal' | 'sidebar' | 'header' | 'footer' | 'list' | 'table' | 'form' | 'divider' | 'icon' | 'custom';
+    name: string;
+    parent_id: string | null;
+    sort_order: number;
+    // Position & sizing
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    // Style properties
+    styles: ComponentStyles;
+    // Content
+    content: string;
+    props: Record<string, unknown>;
+    // Responsive overrides
+    responsive: {
+        tablet?: Partial<ComponentStyles & { x: number; y: number; width: number; height: number; visible: boolean }>;
+        mobile?: Partial<ComponentStyles & { x: number; y: number; width: number; height: number; visible: boolean }>;
+    };
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ComponentStyles {
+    backgroundColor?: string;
+    color?: string;
+    fontSize?: string;
+    fontWeight?: string;
+    fontFamily?: string;
+    padding?: string;
+    margin?: string;
+    borderRadius?: string;
+    border?: string;
+    boxShadow?: string;
+    opacity?: number;
+    display?: string;
+    flexDirection?: string;
+    justifyContent?: string;
+    alignItems?: string;
+    gap?: string;
+    overflow?: string;
+    position?: string;
+    zIndex?: number;
+    textAlign?: string;
+    lineHeight?: string;
+    letterSpacing?: string;
+    cursor?: string;
+}
+
+export interface DesignPage {
+    id: string;
+    plan_id: string;
+    name: string;
+    route: string;
+    sort_order: number;
+    width: number;
+    height: number;
+    background: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface DesignToken {
+    id: string;
+    plan_id: string;
+    category: 'color' | 'spacing' | 'typography' | 'border' | 'shadow' | 'breakpoint';
+    name: string;
+    value: string;
+    description: string;
+    created_at: string;
+}
+
+export interface PageFlow {
+    id: string;
+    plan_id: string;
+    from_page_id: string;
+    to_page_id: string;
+    trigger: string;
+    label: string;
+    created_at: string;
+}
+
+export interface CodingMessage {
+    id: string;
+    session_id: string;
+    role: 'user' | 'agent' | 'system';
+    content: string;
+    tool_calls: string;
+    task_id: string | null;
+    created_at: string;
+}
+
+export interface CodingSession {
+    id: string;
+    plan_id: string | null;
+    name: string;
+    status: 'active' | 'completed' | 'paused';
+    created_at: string;
+    updated_at: string;
 }
 
 // --- Custom Agent Types ---

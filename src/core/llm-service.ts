@@ -7,10 +7,24 @@ interface QueuedRequest {
     reject: (reason: Error) => void;
 }
 
+interface CacheEntry {
+    response: LLMResponse;
+    timestamp: number;
+}
+
 export class LLMService {
     private queue: QueuedRequest[] = [];
     private processing = false;
     private maxQueueSize = 5;
+
+    // Response cache: keyed by hash of messages+options, 5-min TTL, max 100 entries
+    private cache = new Map<string, CacheEntry>();
+    private readonly cacheTTLMs = 5 * 60 * 1000;
+    private readonly cacheMaxSize = 100;
+
+    // Health monitoring
+    private lastHealthCheck: { healthy: boolean; timestamp: number } | null = null;
+    private readonly healthCheckCooldownMs = 60_000;
 
     constructor(
         private config: LLMConfig,
@@ -22,6 +36,14 @@ export class LLMService {
     }
 
     async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean }): Promise<LLMResponse> {
+        // Check cache first (only for non-streaming, deterministic requests)
+        const cacheKey = this.computeCacheKey(messages, options);
+        const cached = this.getCachedResponse(cacheKey);
+        if (cached) {
+            this.outputChannel.appendLine('LLM cache hit');
+            return cached;
+        }
+
         const request: LLMRequest = {
             messages,
             max_tokens: options?.maxTokens ?? this.config.maxTokens,
@@ -34,7 +56,17 @@ export class LLMService {
                 reject(new Error(`LLM queue full (${this.maxQueueSize} requests pending). Try again later.`));
                 return;
             }
-            this.queue.push({ request, resolve, reject });
+            this.queue.push({
+                request,
+                resolve: (response) => {
+                    // Cache the response for non-streaming requests with low temperature
+                    if (!request.stream && (request.temperature ?? 0.7) <= 0.3) {
+                        this.setCachedResponse(cacheKey, response);
+                    }
+                    resolve(response);
+                },
+                reject,
+            });
             this.processQueue();
         });
     }
@@ -316,5 +348,106 @@ export class LLMService {
                 message: `Connection failed: ${error instanceof Error ? error.message : String(error)}`,
             };
         }
+    }
+
+    // ==================== BATCH CLASSIFICATION ====================
+
+    async batchClassify(messages: string[], categories: string[]): Promise<string[]> {
+        const systemPrompt = `You are a batch classifier. For each numbered message below, classify it into exactly one of these categories: ${categories.join(', ')}. Respond with ONLY the category names, one per line, in the same order as the messages. No numbering, no explanation.`;
+
+        const numberedMessages = messages.map((m, i) => `${i + 1}. ${m}`).join('\n');
+
+        try {
+            const response = await this.chat([
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: numberedMessages }
+            ], { maxTokens: messages.length * 20, temperature: 0.1, stream: false });
+
+            const results = response.content.trim().split('\n').map(line => {
+                const cleaned = line.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+                return categories.find(c => cleaned.includes(c.toLowerCase())) || categories[0];
+            });
+
+            // Pad or trim to match input length
+            while (results.length < messages.length) results.push(categories[0]);
+            return results.slice(0, messages.length);
+        } catch {
+            // Fallback: classify individually
+            this.outputChannel.appendLine('Batch classification failed, falling back to individual calls');
+            const results: string[] = [];
+            for (const msg of messages) {
+                try {
+                    results.push(await this.classify(msg, categories));
+                } catch {
+                    results.push(categories[0]);
+                }
+            }
+            return results;
+        }
+    }
+
+    // ==================== HEALTH MONITORING ====================
+
+    async healthCheck(): Promise<boolean> {
+        // Rate-limit: max 1 call per 60 seconds
+        if (this.lastHealthCheck &&
+            Date.now() - this.lastHealthCheck.timestamp < this.healthCheckCooldownMs) {
+            return this.lastHealthCheck.healthy;
+        }
+
+        try {
+            const result = await this.testConnection();
+            this.lastHealthCheck = { healthy: result.success, timestamp: Date.now() };
+            return result.success;
+        } catch {
+            this.lastHealthCheck = { healthy: false, timestamp: Date.now() };
+            return false;
+        }
+    }
+
+    isHealthy(): boolean {
+        return this.lastHealthCheck?.healthy ?? true; // optimistic default
+    }
+
+    // ==================== CACHE ====================
+
+    private computeCacheKey(messages: LLMMessage[], options?: Record<string, unknown>): string {
+        const payload = JSON.stringify({ messages, options });
+        // Simple hash: sum of char codes mod a large prime
+        let hash = 0;
+        for (let i = 0; i < payload.length; i++) {
+            hash = ((hash << 5) - hash + payload.charCodeAt(i)) | 0;
+        }
+        return `llm_cache_${hash}`;
+    }
+
+    private getCachedResponse(key: string): LLMResponse | null {
+        const entry = this.cache.get(key);
+        if (!entry) return null;
+        if (Date.now() - entry.timestamp > this.cacheTTLMs) {
+            this.cache.delete(key);
+            return null;
+        }
+        return entry.response;
+    }
+
+    private setCachedResponse(key: string, response: LLMResponse): void {
+        // Evict oldest entries if cache is full
+        if (this.cache.size >= this.cacheMaxSize) {
+            let oldestKey = '';
+            let oldestTime = Infinity;
+            for (const [k, v] of this.cache) {
+                if (v.timestamp < oldestTime) {
+                    oldestTime = v.timestamp;
+                    oldestKey = k;
+                }
+            }
+            if (oldestKey) this.cache.delete(oldestKey);
+        }
+        this.cache.set(key, { response, timestamp: Date.now() });
+    }
+
+    clearCache(): void {
+        this.cache.clear();
     }
 }

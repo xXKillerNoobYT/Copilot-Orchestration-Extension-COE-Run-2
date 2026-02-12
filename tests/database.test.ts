@@ -329,4 +329,176 @@ describe('Database', () => {
             expect(byAgent.length).toBe(2);
         });
     });
+
+    // ===================== GITHUB ISSUES =====================
+
+    describe('GitHub Issues', () => {
+        test('upsert and retrieve a GitHub issue', () => {
+            const issue = db.upsertGitHubIssue({
+                github_id: 12345,
+                number: 42,
+                title: 'Fix login bug',
+                body: 'Users cannot log in after password reset',
+                state: 'open',
+                labels: ['bug', 'P1'],
+                assignees: ['dev1'],
+                repo_owner: 'testorg',
+                repo_name: 'testrepo',
+                task_id: null,
+                local_checksum: 'abc123',
+                remote_checksum: 'abc123',
+            });
+
+            expect(issue.id).toBeTruthy();
+            expect(issue.title).toBe('Fix login bug');
+            expect(issue.labels).toEqual(['bug', 'P1']);
+
+            const retrieved = db.getGitHubIssue(issue.id);
+            expect(retrieved).not.toBeNull();
+            expect(retrieved!.number).toBe(42);
+        });
+
+        test('upsert updates existing issue by github_id', () => {
+            db.upsertGitHubIssue({
+                github_id: 99,
+                number: 10,
+                title: 'Original title',
+                body: 'Original body',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'org',
+                repo_name: 'repo',
+                task_id: null,
+                local_checksum: 'a',
+                remote_checksum: 'a',
+            });
+
+            const updated = db.upsertGitHubIssue({
+                github_id: 99,
+                number: 10,
+                title: 'Updated title',
+                body: 'Updated body',
+                state: 'closed',
+                labels: ['done'],
+                assignees: ['dev2'],
+                repo_owner: 'org',
+                repo_name: 'repo',
+                task_id: null,
+                local_checksum: 'a',
+                remote_checksum: 'b',
+            });
+
+            expect(updated.title).toBe('Updated title');
+            expect(updated.state).toBe('closed');
+
+            const all = db.getAllGitHubIssues();
+            expect(all.length).toBe(1);
+        });
+
+        test('getGitHubIssueByNumber finds correct issue', () => {
+            db.upsertGitHubIssue({
+                github_id: 200,
+                number: 55,
+                title: 'Issue 55',
+                body: '',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'myorg',
+                repo_name: 'myrepo',
+                task_id: null,
+                local_checksum: '',
+                remote_checksum: '',
+            });
+
+            const found = db.getGitHubIssueByNumber(55, 'myorg', 'myrepo');
+            expect(found).not.toBeNull();
+            expect(found!.title).toBe('Issue 55');
+
+            const notFound = db.getGitHubIssueByNumber(55, 'otherorg', 'myrepo');
+            expect(notFound).toBeNull();
+        });
+
+        test('getUnsyncedGitHubIssues returns issues with mismatched checksums', () => {
+            db.upsertGitHubIssue({
+                github_id: 300,
+                number: 1,
+                title: 'Synced',
+                body: '',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'o',
+                repo_name: 'r',
+                task_id: null,
+                local_checksum: 'same',
+                remote_checksum: 'same',
+            });
+            db.upsertGitHubIssue({
+                github_id: 301,
+                number: 2,
+                title: 'Unsynced',
+                body: '',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'o',
+                repo_name: 'r',
+                task_id: null,
+                local_checksum: 'local1',
+                remote_checksum: 'remote1',
+            });
+
+            const unsynced = db.getUnsyncedGitHubIssues();
+            expect(unsynced.length).toBe(1);
+            expect(unsynced[0].title).toBe('Unsynced');
+        });
+
+        test('linkGitHubIssueToTask links issue to task', () => {
+            const task = db.createTask({ title: 'Linked task' });
+            const issue = db.upsertGitHubIssue({
+                github_id: 400,
+                number: 99,
+                title: 'To link',
+                body: '',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'o',
+                repo_name: 'r',
+                task_id: null,
+                local_checksum: '',
+                remote_checksum: '',
+            });
+
+            db.linkGitHubIssueToTask(issue.id, task.id);
+
+            const updated = db.getGitHubIssue(issue.id);
+            expect(updated!.task_id).toBe(task.id);
+        });
+
+        test('updateGitHubIssueChecksum updates both checksums', () => {
+            const issue = db.upsertGitHubIssue({
+                github_id: 500,
+                number: 77,
+                title: 'Checksum test',
+                body: '',
+                state: 'open',
+                labels: [],
+                assignees: [],
+                repo_owner: 'o',
+                repo_name: 'r',
+                task_id: null,
+                local_checksum: 'old_local',
+                remote_checksum: 'old_remote',
+            });
+
+            db.updateGitHubIssueChecksum(issue.id, 'new_local', 'new_remote');
+
+            const updated = db.getGitHubIssue(issue.id);
+            expect(updated!.local_checksum).toBe('new_local');
+            expect(updated!.remote_checksum).toBe('new_remote');
+        });
+    });
 });

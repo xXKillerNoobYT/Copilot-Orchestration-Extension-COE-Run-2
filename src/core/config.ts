@@ -4,7 +4,7 @@ import * as path from 'path';
 import { COEConfig, LLMConfig } from '../types';
 
 const DEFAULT_CONFIG: COEConfig = {
-    version: '0.1.0',
+    version: '1.0.0',
     llm: {
         endpoint: 'http://192.168.1.205:1234/v1',
         model: 'mistralai/ministral-3-14b-reasoning',
@@ -97,6 +97,7 @@ export class ConfigManager {
             verification: { ...DEFAULT_CONFIG.verification, ...loaded.verification },
             watcher: { ...DEFAULT_CONFIG.watcher, ...loaded.watcher },
             agents: { ...DEFAULT_CONFIG.agents, ...loaded.agents },
+            github: loaded.github,
         };
     }
 

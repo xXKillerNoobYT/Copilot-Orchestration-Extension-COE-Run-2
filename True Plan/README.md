@@ -11,6 +11,14 @@ This is the **clean, definitive plan** for the Copilot Orchestration Extension (
 
 Use this folder as the single source of truth for understanding the project's goals, design, and behavior.
 
+
+The goal of this project is to. Guide powerful coding agents. Like copilot. To be more reliable. To be more helpful. To be more intelligent. To be more autonomous. To be more self-improving. To be more context-aware. To be more aligned with user intent.
+
+To make a plan insert updates. Umm have improvements? Ask intelligent questions. Get an intelligent. Fully scoped breakdown of the end goal. Into a structured plan. With prioritized tasks. With clear instructions. With clear inputs and outputs. With clear success criteria. With clear edge cases.
+
+easy design principles. Simple architecture. Clear operating principles. Continuous self-improvement. Pragmatic reliability.
+
+And then guiding the coding agent to actually. Program. The exact plan? That was planned for the project being developed. Not just writing code. But writing the code that. Follows the plan. That achieves the goals. That meets the success criteria. That handles the edge cases. This is to take AI coding projects to the next level. To make them more reliable. More intelligent. More autonomous. More aligned with user intent.
 ---
 
 ## Document Index
@@ -26,6 +34,7 @@ Use this folder as the single source of truth for understanding the project's go
 | 07 | [Program Lifecycle & Evolution](07-Program-Lifecycle-and-Evolution.md) | The four overlapping lifecycle phases (Birth → Growth → Evolution → Refinement), how the system learns, and **smart improvement systems** that drive continuous self-tuning |
 | 08 | [Context Management & Safety](08-Context-Management-and-Safety.md) | Token management, error recovery, offline support, loop detection, **custom agent safety loop & hardlock protections**, **smart improvement systems**, security, input validation, and performance guardrails |
 | 09 | [Features & Capabilities](09-Features-and-Capabilities.md) | Complete list of 35 features across 7 categories, success metrics, and risk management |
+| 10 | [AI Funshin Baseline Gole](10-AI-Funshin-Basline-Gole.md) | The core operating principles for how the AI agents should function, including the 3-layer architecture, orchestration principles, and self-annealing process |
 
 ---
 

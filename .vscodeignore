@@ -1,0 +1,37 @@
+# Source files (bundled by esbuild)
+src/**
+tests/**
+.tmp/**
+
+# Dev config
+.claude/**
+.coverage/**
+tsconfig.json
+jest.config.js
+esbuild.config.js
+.eslintrc*
+.prettierrc*
+
+# Documentation (not needed in extension)
+True Plan/**
+directives/**
+CLAUDE.md
+copilot-instructions.md
+AGENTS.md
+GEMINI.md
+
+# Git
+.git/**
+.gitignore
+
+# IDE
+.vscode/**
+
+# Dependencies (bundled)
+node_modules/**
+
+# Misc
+*.map
+**/*.test.ts
+**/*.test.js
+**/.DS_Store

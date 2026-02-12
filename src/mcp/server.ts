@@ -401,6 +401,138 @@ export class MCPServer {
                 return;
             }
 
+            // POST /mcp — JSON-RPC 2.0 envelope (MCP protocol compliant)
+            if (req.method === 'POST' && url.pathname === '/mcp') {
+                let body = '';
+                req.on('data', chunk => { body += chunk; });
+                req.on('end', async () => {
+                    try {
+                        const rpc = JSON.parse(body) as {
+                            jsonrpc: string;
+                            id: number | string;
+                            method: string;
+                            params?: Record<string, unknown>;
+                        };
+
+                        if (rpc.jsonrpc !== '2.0') {
+                            res.writeHead(400, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: rpc.id ?? null,
+                                error: { code: -32600, message: 'Invalid Request: jsonrpc must be "2.0"' },
+                            }));
+                            return;
+                        }
+
+                        // Handle MCP protocol methods
+                        if (rpc.method === 'initialize') {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: rpc.id,
+                                result: {
+                                    protocolVersion: '2024-11-05',
+                                    capabilities: {
+                                        tools: { listChanged: false },
+                                    },
+                                    serverInfo: {
+                                        name: 'coe-mcp-server',
+                                        version: '1.0.0',
+                                    },
+                                },
+                            }));
+                            return;
+                        }
+
+                        if (rpc.method === 'tools/list') {
+                            const tools = Array.from(this.tools.values()).map(t => ({
+                                name: t.name,
+                                description: t.description,
+                                inputSchema: t.inputSchema,
+                            }));
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: rpc.id,
+                                result: { tools },
+                            }));
+                            return;
+                        }
+
+                        if (rpc.method === 'tools/call') {
+                            const toolName = rpc.params?.name as string;
+                            const toolArgs = (rpc.params?.arguments as Record<string, unknown>) || {};
+                            const handler = this.handlers.get(toolName);
+
+                            if (!handler) {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({
+                                    jsonrpc: '2.0',
+                                    id: rpc.id,
+                                    error: { code: -32602, message: `Tool not found: ${toolName}` },
+                                }));
+                                return;
+                            }
+
+                            this.outputChannel.appendLine(`MCP JSON-RPC call: ${toolName}(${JSON.stringify(toolArgs).substring(0, 200)})`);
+                            const result = await handler(toolArgs);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: rpc.id,
+                                result: {
+                                    content: [{ type: 'text', text: JSON.stringify(result) }],
+                                },
+                            }));
+                            return;
+                        }
+
+                        // Unknown method
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: rpc.id,
+                            error: { code: -32601, message: `Method not found: ${rpc.method}` },
+                        }));
+
+                    } catch (error) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: null,
+                            error: {
+                                code: -32700,
+                                message: `Parse error: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        }));
+                    }
+                });
+                return;
+            }
+
+            // GET /mcp/sse — Server-Sent Events for MCP discovery
+            if (req.method === 'GET' && url.pathname === '/mcp/sse') {
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                });
+
+                // Send endpoint event pointing to the JSON-RPC endpoint
+                const endpointUrl = `http://localhost:${this.port}/mcp`;
+                res.write(`event: endpoint\ndata: ${endpointUrl}\n\n`);
+
+                // Keep connection alive with periodic pings
+                const pingInterval = setInterval(() => {
+                    try { res.write(': ping\n\n'); } catch { clearInterval(pingInterval); }
+                }, 30000);
+
+                req.on('close', () => {
+                    clearInterval(pingInterval);
+                });
+                return;
+            }
+
             // GET /health
             if (req.method === 'GET' && url.pathname === '/health') {
                 const stats = this.database.getStats();
@@ -431,9 +563,11 @@ export class MCPServer {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     name: 'COE MCP Server',
-                    version: '0.1.0',
+                    version: '1.0.0',
                     tools: Array.from(this.tools.keys()),
                     webapp: `http://localhost:${this.port}/app`,
+                    mcp_endpoint: `http://localhost:${this.port}/mcp`,
+                    mcp_sse: `http://localhost:${this.port}/mcp/sse`,
                     description: 'Copilot Orchestration Extension — MCP bridge for AI coding agents',
                 }));
                 return;

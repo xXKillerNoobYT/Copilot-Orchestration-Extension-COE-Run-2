@@ -86,10 +86,25 @@ export async function handleApiRequest(
                 estimated_minutes: (body.estimated_minutes as number) || 30,
                 acceptance_criteria: (body.acceptance_criteria as string) || '',
                 plan_id: (body.plan_id as string) || undefined,
+                parent_task_id: (body.parent_task_id as string) || undefined,
+                sort_order: (body.sort_order as number) || 0,
                 dependencies: (body.dependencies as string[]) || [],
             });
             database.addAuditLog('webapp', 'task_created', `Task "${task.title}" created via web app`);
             json(res, task, 201);
+            return true;
+        }
+
+        if (route === 'tasks/reorder' && method === 'POST') {
+            const body = await parseBody(req);
+            const orders = body.orders as Array<{ id: string; sort_order: number; parent_task_id?: string | null }>;
+            if (!Array.isArray(orders)) {
+                json(res, { error: 'orders must be an array' }, 400);
+                return true;
+            }
+            database.reorderTasks(orders);
+            database.addAuditLog('webapp', 'tasks_reordered', `${orders.length} tasks reordered via drag & drop`);
+            json(res, { success: true });
             return true;
         }
 
@@ -191,6 +206,7 @@ export async function handleApiRequest(
             const scale = (body.scale as string) || 'MVP';
             const focus = (body.focus as string) || 'Full Stack';
             const priorities = (body.priorities as string[]) || ['Core business logic'];
+            const design = (body.design as Record<string, string>) || {};
 
             const prompt = [
                 `Create a structured development plan called "${name}".`,
@@ -218,10 +234,11 @@ export async function handleApiRequest(
                 if (jsonMatch) {
                     const parsed = JSON.parse(jsonMatch[0]);
                     if (parsed.tasks && Array.isArray(parsed.tasks)) {
-                        const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities }));
+                        const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities, design }));
                         database.updatePlan(plan.id, { status: PlanStatus.Active });
 
                         const titleToId: Record<string, string> = {};
+                        let sortIdx = 0;
                         for (const t of parsed.tasks) {
                             const deps = (t.depends_on_titles || [])
                                 .map((title: string) => titleToId[title])
@@ -234,8 +251,10 @@ export async function handleApiRequest(
                                 acceptance_criteria: t.acceptance_criteria || '',
                                 plan_id: plan.id,
                                 dependencies: deps,
+                                sort_order: sortIdx * 10,
                             });
                             titleToId[t.title] = task.id;
+                            sortIdx++;
                         }
 
                         database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
@@ -322,9 +341,301 @@ export async function handleApiRequest(
             return true;
         }
 
+        // ==================== GITHUB ISSUES ====================
+        if (route === 'github/issues' && method === 'GET') {
+            json(res, database.getAllGitHubIssues());
+            return true;
+        }
+
+        const ghIssueId = extractParam(route, 'github/issues/:id');
+        if (ghIssueId && method === 'GET') {
+            const issue = database.getGitHubIssue(ghIssueId);
+            if (!issue) { json(res, { error: 'GitHub issue not found' }, 404); return true; }
+            json(res, issue);
+            return true;
+        }
+
+        if (ghIssueId && method === 'POST' && route.endsWith('/convert')) {
+            // Convert GitHub issue to local task
+            const convertId = extractParam(route, 'github/issues/:id/convert');
+            if (convertId) {
+                // Need to import the sync service inline
+                const { GitHubClient } = await import('../core/github-client');
+                const { GitHubSyncService } = await import('../core/github-sync');
+                const ghConfig = config.getConfig().github;
+                if (!ghConfig?.token) {
+                    json(res, { error: 'GitHub not configured' }, 400);
+                    return true;
+                }
+                const client = new GitHubClient(ghConfig.token, { appendLine: () => {} } as any);
+                const syncService = new GitHubSyncService(client, database, config, { appendLine: () => {} } as any);
+                const taskId = syncService.convertIssueToTask(convertId);
+                if (taskId) {
+                    json(res, { success: true, task_id: taskId });
+                } else {
+                    json(res, { error: 'Failed to convert issue' }, 400);
+                }
+                return true;
+            }
+        }
+
         // ==================== CONFIG ====================
         if (route === 'config' && method === 'GET') {
             json(res, config.getConfig());
+            return true;
+        }
+
+        if (route === 'config' && method === 'PUT') {
+            const body = await parseBody(req);
+            // Update specific config sections
+            const currentConfig = config.getConfig();
+            const merged = { ...currentConfig, ...body };
+            config.updateConfig(merged as any);
+            database.addAuditLog('webapp', 'config_updated', 'Configuration updated via Settings tab');
+            json(res, config.getConfig());
+            return true;
+        }
+
+        // ==================== DESIGN PAGES ====================
+        if (route === 'design/pages' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            json(res, database.getDesignPagesByPlan(planId));
+            return true;
+        }
+
+        if (route === 'design/pages' && method === 'POST') {
+            const body = await parseBody(req);
+            const page = database.createDesignPage({
+                plan_id: body.plan_id as string,
+                name: (body.name as string) || 'Untitled Page',
+                route: (body.route as string) || '/',
+                sort_order: (body.sort_order as number) || 0,
+                width: (body.width as number) || 1440,
+                height: (body.height as number) || 900,
+                background: (body.background as string) || '#1e1e2e',
+            });
+            database.addAuditLog('webapp', 'design_page_created', `Page "${page.name}" created`);
+            json(res, page, 201);
+            return true;
+        }
+
+        const designPageId = extractParam(route, 'design/pages/:id');
+        if (designPageId && method === 'PUT') {
+            const body = await parseBody(req);
+            const updated = database.updateDesignPage(designPageId, body as any);
+            json(res, updated);
+            return true;
+        }
+        if (designPageId && method === 'DELETE') {
+            database.deleteDesignPage(designPageId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== DESIGN COMPONENTS ====================
+        if (route === 'design/components' && method === 'GET') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const pageId = url.searchParams.get('page_id');
+            const planId = url.searchParams.get('plan_id');
+            if (pageId) {
+                json(res, database.getDesignComponentsByPage(pageId));
+            } else if (planId) {
+                json(res, database.getDesignComponentsByPlan(planId));
+            } else {
+                json(res, { error: 'page_id or plan_id required' }, 400);
+            }
+            return true;
+        }
+
+        if (route === 'design/components' && method === 'POST') {
+            const body = await parseBody(req);
+            const comp = database.createDesignComponent({
+                plan_id: body.plan_id as string,
+                page_id: (body.page_id as string) || undefined,
+                type: (body.type as string) || 'container',
+                name: (body.name as string) || 'Component',
+                parent_id: (body.parent_id as string) || undefined,
+                sort_order: (body.sort_order as number) || 0,
+                x: (body.x as number) || 0,
+                y: (body.y as number) || 0,
+                width: (body.width as number) || 200,
+                height: (body.height as number) || 100,
+                styles: (body.styles as Record<string, unknown>) || {},
+                content: (body.content as string) || '',
+                props: (body.props as Record<string, unknown>) || {},
+            } as any);
+            json(res, comp, 201);
+            return true;
+        }
+
+        if (route === 'design/components/batch' && method === 'PUT') {
+            const body = await parseBody(req);
+            const updates = body.updates as Array<{ id: string; x?: number; y?: number; width?: number; height?: number; sort_order?: number; parent_id?: string | null }>;
+            if (!Array.isArray(updates)) { json(res, { error: 'updates must be an array' }, 400); return true; }
+            database.batchUpdateComponents(updates);
+            json(res, { success: true });
+            return true;
+        }
+
+        const compId = extractParam(route, 'design/components/:id');
+        if (compId && method === 'GET') {
+            const comp = database.getDesignComponent(compId);
+            if (!comp) { json(res, { error: 'Component not found' }, 404); return true; }
+            json(res, comp);
+            return true;
+        }
+        if (compId && method === 'PUT') {
+            const body = await parseBody(req);
+            const updated = database.updateDesignComponent(compId, body as Record<string, unknown>);
+            json(res, updated);
+            return true;
+        }
+        if (compId && method === 'DELETE') {
+            database.deleteDesignComponent(compId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== DESIGN TOKENS ====================
+        if (route === 'design/tokens' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            json(res, database.getDesignTokensByPlan(planId));
+            return true;
+        }
+
+        if (route === 'design/tokens' && method === 'POST') {
+            const body = await parseBody(req);
+            const token = database.createDesignToken({
+                plan_id: body.plan_id as string,
+                category: (body.category as string) as any || 'color',
+                name: body.name as string,
+                value: body.value as string,
+                description: (body.description as string) || '',
+            });
+            json(res, token, 201);
+            return true;
+        }
+
+        const tokenId = extractParam(route, 'design/tokens/:id');
+        if (tokenId && method === 'PUT') {
+            const body = await parseBody(req);
+            database.updateDesignToken(tokenId, body as any);
+            json(res, { success: true });
+            return true;
+        }
+        if (tokenId && method === 'DELETE') {
+            database.deleteDesignToken(tokenId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== PAGE FLOWS ====================
+        if (route === 'design/flows' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            json(res, database.getPageFlowsByPlan(planId));
+            return true;
+        }
+
+        if (route === 'design/flows' && method === 'POST') {
+            const body = await parseBody(req);
+            const flow = database.createPageFlow({
+                plan_id: body.plan_id as string,
+                from_page_id: body.from_page_id as string,
+                to_page_id: body.to_page_id as string,
+                trigger: (body.trigger as string) || 'click',
+                label: (body.label as string) || '',
+            });
+            json(res, flow, 201);
+            return true;
+        }
+
+        const flowId = extractParam(route, 'design/flows/:id');
+        if (flowId && method === 'DELETE') {
+            database.deletePageFlow(flowId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== CODING SESSIONS ====================
+        if (route === 'coding/sessions' && method === 'GET') {
+            json(res, database.getAllCodingSessions());
+            return true;
+        }
+
+        if (route === 'coding/sessions' && method === 'POST') {
+            const body = await parseBody(req);
+            const session = database.createCodingSession({
+                plan_id: (body.plan_id as string) || undefined,
+                name: (body.name as string) || 'Coding Session',
+            });
+            database.addAuditLog('webapp', 'coding_session_created', `Session "${session.name}" created`);
+            json(res, session, 201);
+            return true;
+        }
+
+        const sessionId = extractParam(route, 'coding/sessions/:id');
+        if (sessionId && method === 'GET') {
+            const session = database.getCodingSession(sessionId);
+            if (!session) { json(res, { error: 'Session not found' }, 404); return true; }
+            const messages = database.getCodingMessages(sessionId);
+            json(res, { ...session, messages });
+            return true;
+        }
+        if (sessionId && method === 'PUT') {
+            const body = await parseBody(req);
+            database.updateCodingSession(sessionId, body as any);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== CODING MESSAGES ====================
+        const msgSessionId = extractParam(route, 'coding/messages/:id');
+        if (route === 'coding/messages' && method === 'POST') {
+            const body = await parseBody(req);
+            const msg = database.addCodingMessage({
+                session_id: body.session_id as string,
+                role: (body.role as string) || 'user',
+                content: body.content as string,
+                tool_calls: (body.tool_calls as string) || undefined,
+                task_id: (body.task_id as string) || undefined,
+            });
+            json(res, msg, 201);
+            return true;
+        }
+
+        if (msgSessionId && method === 'GET') {
+            const messages = database.getCodingMessages(msgSessionId);
+            json(res, messages);
+            return true;
+        }
+
+        // ==================== DESIGN SPEC EXPORT ====================
+        if (route === 'design/export' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const plan = database.getPlan(planId);
+            const pages = database.getDesignPagesByPlan(planId);
+            const tokens = database.getDesignTokensByPlan(planId);
+            const flows = database.getPageFlowsByPlan(planId);
+            const allComponents: Record<string, unknown[]> = {};
+            for (const page of pages) {
+                allComponents[page.id] = database.getDesignComponentsByPage(page.id);
+            }
+            const spec = {
+                plan: plan,
+                pages: pages.map(p => ({
+                    ...p,
+                    components: allComponents[p.id] || [],
+                })),
+                tokens,
+                flows,
+                generated_at: new Date().toISOString(),
+            };
+            json(res, spec);
             return true;
         }
 

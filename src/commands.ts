@@ -6,6 +6,9 @@ import { Orchestrator } from './agents/orchestrator';
 import { MCPServer } from './mcp/server';
 import { StatusViewProvider } from './views/status-view';
 import { AgentContext, TicketPriority, TaskPriority } from './types';
+import { GitHubClient } from './core/github-client';
+import { GitHubSyncService } from './core/github-sync';
+import { PlanBuilderPanel } from './views/plan-builder';
 
 export interface CommandDeps {
     database: Database;
@@ -270,8 +273,37 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
             refreshAll();
         }),
 
-        vscode.commands.registerCommand('coe.reorderTasks', () => {
-            vscode.window.showInformationMessage('Task queue reordered by priority.');
+        vscode.commands.registerCommand('coe.reorderTasks', async () => {
+            const tasks = database.getAllTasks().filter(t =>
+                t.status === 'not_started' || t.status === 'blocked'
+            );
+            if (tasks.length === 0) {
+                vscode.window.showInformationMessage('No pending tasks to reorder.');
+                return;
+            }
+
+            const selected = await vscode.window.showQuickPick(
+                tasks.map(t => ({
+                    label: `[${t.priority}] ${t.title}`,
+                    taskId: t.id,
+                    picked: false,
+                })),
+                { canPickMany: true, placeHolder: 'Select tasks to change priority' }
+            );
+            if (!selected || selected.length === 0) return;
+
+            const newPriority = await vscode.window.showQuickPick(
+                ['P1', 'P2', 'P3'],
+                { placeHolder: 'New priority for selected tasks' }
+            );
+            if (!newPriority) return;
+
+            for (const item of selected) {
+                database.updateTask(item.taskId, { priority: newPriority as TaskPriority });
+            }
+            vscode.window.showInformationMessage(
+                `${selected.length} task(s) updated to ${newPriority}.`
+            );
             refreshAll();
         }),
     );
@@ -477,29 +509,123 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
             refreshAll();
         }),
 
-        vscode.commands.registerCommand('coe.checkpointCommit', () => {
-            vscode.window.showInformationMessage('Checkpoint commit — use your git client to commit.');
+        vscode.commands.registerCommand('coe.checkpointCommit', async () => {
+            const verifiedTasks = database.getTasksByStatus('verified');
+            const lastCheckpoint = database.getAuditLog(100, 'system')
+                .find(e => e.action === 'checkpoint_commit');
+            const newlyVerified = lastCheckpoint
+                ? verifiedTasks.filter(t => t.updated_at > lastCheckpoint.created_at)
+                : verifiedTasks;
+
+            if (newlyVerified.length === 0) {
+                vscode.window.showInformationMessage('No newly verified tasks since last checkpoint.');
+                return;
+            }
+
+            const confirm = await vscode.window.showInformationMessage(
+                `${newlyVerified.length} task(s) verified since last checkpoint. Create a checkpoint commit?`,
+                'Open Git', 'Cancel'
+            );
+            if (confirm !== 'Open Git') return;
+
+            database.addAuditLog('system', 'checkpoint_commit',
+                `Checkpoint: ${newlyVerified.length} tasks verified — ${newlyVerified.map(t => t.title).join(', ')}`
+            );
+            // Open the VS Code source control view so user can commit
+            vscode.commands.executeCommand('workbench.view.scm');
         }),
 
         vscode.commands.registerCommand('coe.tagRelease', () => {
             vscode.window.showInformationMessage('Tag release — use your git client to tag.');
         }),
 
-        vscode.commands.registerCommand('coe.importGitHubIssues', () => {
-            vscode.window.showInformationMessage('GitHub issue import — configure GITHUB_TOKEN in .env first.');
+        vscode.commands.registerCommand('coe.importGitHubIssues', async () => {
+            const github = configManager.getConfig().github;
+            if (!github?.token || !github.owner || !github.repo) {
+                vscode.window.showWarningMessage(
+                    'GitHub not configured. Add github.token, github.owner, and github.repo to .coe/config.json'
+                );
+                return;
+            }
+
+            const client = new GitHubClient(github.token, outputChannel);
+            const syncService = new GitHubSyncService(client, database, configManager, outputChannel);
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Importing GitHub issues...',
+                cancellable: false,
+            }, async () => {
+                const result = await syncService.importIssues();
+                vscode.window.showInformationMessage(
+                    `GitHub import: ${result.imported} new, ${result.updated} updated, ${result.errors} errors.`
+                );
+                refreshAll();
+            });
         }),
 
-        vscode.commands.registerCommand('coe.syncGitHubIssues', () => {
-            vscode.window.showInformationMessage('GitHub sync — configure GITHUB_TOKEN in .env first.');
+        vscode.commands.registerCommand('coe.syncGitHubIssues', async () => {
+            const github = configManager.getConfig().github;
+            if (!github?.token || !github.owner || !github.repo) {
+                vscode.window.showWarningMessage(
+                    'GitHub not configured. Add github.token, github.owner, and github.repo to .coe/config.json'
+                );
+                return;
+            }
+
+            const client = new GitHubClient(github.token, outputChannel);
+            const syncService = new GitHubSyncService(client, database, configManager, outputChannel);
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Syncing GitHub issues (bidirectional)...',
+                cancellable: false,
+            }, async () => {
+                const result = await syncService.syncBidirectional();
+                vscode.window.showInformationMessage(
+                    `GitHub sync: ${result.pulled} pulled, ${result.pushed} pushed, ${result.errors} errors.`
+                );
+                refreshAll();
+            });
+        }),
+
+        // --- Plan Builder ---
+        vscode.commands.registerCommand('coe.openPlanBuilder', () => {
+            const builder = new PlanBuilderPanel(database, deps.extensionUri);
+            builder.open();
+        }),
+
+        vscode.commands.registerCommand('coe.exportPlanAsMarkdown', async () => {
+            const plan = database.getActivePlan();
+            if (!plan) {
+                vscode.window.showInformationMessage('No active plan to export.');
+                return;
+            }
+            const builder = new PlanBuilderPanel(database, deps.extensionUri);
+            await builder.exportPlanAsMarkdown(plan.id);
         }),
 
         vscode.commands.registerCommand('coe.triggerEvolution', async () => {
-            vscode.window.withProgress({
+            await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: 'Running system health check...',
+                title: 'Running evolution analysis...',
+                cancellable: false,
             }, async () => {
-                const result = await orchestrator.getBossAgent().checkSystemHealth();
-                vscode.window.showInformationMessage(result.content.substring(0, 500));
+                // Run boss health check
+                const healthResult = await orchestrator.getBossAgent().checkSystemHealth();
+
+                // Run explicit pattern detection if evolution service is wired
+                const evolutionService = orchestrator.getEvolutionService?.();
+                let patternsFound = 0;
+                if (evolutionService) {
+                    const patterns = await evolutionService.detectPatterns();
+                    patternsFound = patterns.length;
+                }
+
+                vscode.window.showInformationMessage(
+                    `Evolution: ${patternsFound} pattern(s) detected. Health: ${healthResult.content.substring(0, 300)}`
+                );
+                refreshAll();
             });
         }),
     );
