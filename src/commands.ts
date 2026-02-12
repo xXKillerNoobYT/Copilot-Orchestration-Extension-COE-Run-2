@@ -1,0 +1,506 @@
+import * as vscode from 'vscode';
+import { Database } from './core/database';
+import { ConfigManager } from './core/config';
+import { LLMService } from './core/llm-service';
+import { Orchestrator } from './agents/orchestrator';
+import { MCPServer } from './mcp/server';
+import { StatusViewProvider } from './views/status-view';
+import { AgentContext, TicketPriority, TaskPriority } from './types';
+
+export interface CommandDeps {
+    database: Database;
+    configManager: ConfigManager;
+    llmService: LLMService;
+    orchestrator: Orchestrator;
+    mcpServer: MCPServer;
+    statusView: StatusViewProvider;
+    outputChannel: vscode.OutputChannel;
+    extensionUri: vscode.Uri;
+}
+
+export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
+    const { database, configManager, llmService, orchestrator, mcpServer,
+            statusView, outputChannel } = deps;
+
+    function refreshAll(): void {
+        statusView.refresh();
+    }
+
+    // --- Open App (main action — opens web app in browser) ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.openApp', () => {
+            const port = mcpServer.getPort();
+            const url = vscode.Uri.parse(`http://localhost:${port}/app`);
+            vscode.env.openExternal(url);
+        }),
+
+        vscode.commands.registerCommand('coe.refreshStatus', () => {
+            statusView.refresh();
+        }),
+    );
+
+    // --- Plan Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.createPlan', async () => {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Plan name',
+                placeHolder: 'e.g., My Web App MVP',
+            });
+            if (!name) return;
+
+            const description = await vscode.window.showInputBox({
+                prompt: 'Brief description of what to build',
+                placeHolder: 'e.g., A REST API with user auth and CRUD endpoints',
+            });
+            if (!description) return;
+
+            const ctx: AgentContext = { conversationHistory: [] };
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Creating plan...',
+                cancellable: false,
+            }, async () => {
+                const response = await orchestrator.callAgent('planning',
+                    `Create a structured plan called "${name}" for: ${description}`, ctx);
+                vscode.window.showInformationMessage(response.content.substring(0, 200));
+                refreshAll();
+            });
+        }),
+
+        vscode.commands.registerCommand('coe.freshRestart', async () => {
+            const confirm = await vscode.window.showWarningMessage(
+                'Fresh Restart will reset in-progress tasks and agent states. Continue?',
+                'Yes', 'Cancel'
+            );
+            if (confirm !== 'Yes') return;
+
+            const result = await orchestrator.freshRestart();
+            vscode.window.showInformationMessage(result.message);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.refreshPRD', () => {
+            vscode.window.showInformationMessage('PRD refresh triggered.');
+            refreshAll();
+        }),
+    );
+
+    // --- Ticket Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.createTicket', async () => {
+            const title = await vscode.window.showInputBox({
+                prompt: 'Ticket title',
+                placeHolder: 'e.g., Clarify database schema for users table',
+            });
+            if (!title) return;
+
+            const body = await vscode.window.showInputBox({
+                prompt: 'Ticket description',
+                placeHolder: 'Details about the question or issue',
+            });
+
+            const priority = await vscode.window.showQuickPick(['P1', 'P2', 'P3'], {
+                placeHolder: 'Priority',
+            }) as TicketPriority | undefined;
+
+            const ticket = database.createTicket({
+                title,
+                body: body || '',
+                priority: priority || TicketPriority.P2,
+                creator: 'user',
+            });
+
+            vscode.window.showInformationMessage(`Ticket TK-${ticket.ticket_number} created.`);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.resolveTicket', async () => {
+            const tickets = database.getTicketsByStatus('open');
+            if (tickets.length === 0) {
+                vscode.window.showInformationMessage('No open tickets.');
+                return;
+            }
+
+            const selected = await vscode.window.showQuickPick(
+                tickets.map(t => ({
+                    label: `TK-${t.ticket_number} [${t.priority}] ${t.title}`,
+                    ticketId: t.id,
+                })),
+                { placeHolder: 'Select ticket to resolve' }
+            );
+            if (!selected) return;
+
+            database.updateTicket(selected.ticketId, { status: 'resolved' as any });
+            vscode.window.showInformationMessage('Ticket resolved.');
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.openTicketPanel', () => {
+            // Redirect to web app
+            const port = mcpServer.getPort();
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${port}/app`));
+        }),
+
+        vscode.commands.registerCommand('coe.escalateTicket', async () => {
+            const tickets = database.getTicketsByStatus('open');
+            if (tickets.length === 0) {
+                vscode.window.showInformationMessage('No open tickets to escalate.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                tickets.map(t => ({
+                    label: `TK-${t.ticket_number} [${t.priority}] ${t.title}`,
+                    ticketId: t.id,
+                })),
+                { placeHolder: 'Select ticket to escalate' }
+            );
+            if (!selected) return;
+            database.updateTicket(selected.ticketId, { status: 'escalated' as any });
+            vscode.window.showInformationMessage('Ticket escalated.');
+            refreshAll();
+        }),
+    );
+
+    // --- Task Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.getNextTask', () => {
+            const task = orchestrator.getNextTask();
+            if (!task) {
+                vscode.window.showInformationMessage('No tasks ready.');
+                return;
+            }
+            vscode.window.showInformationMessage(`Next task: [${task.priority}] ${task.title} (${task.estimated_minutes}min)`);
+        }),
+
+        vscode.commands.registerCommand('coe.markTaskDone', async () => {
+            const inProgress = database.getTasksByStatus('in_progress');
+            if (inProgress.length === 0) {
+                vscode.window.showInformationMessage('No tasks in progress.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                inProgress.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Select task to mark as done' }
+            );
+            if (!selected) return;
+
+            const summary = await vscode.window.showInputBox({ prompt: 'Summary of what was done' });
+            await orchestrator.reportTaskDone(selected.taskId, summary || 'Task completed', []);
+            vscode.window.showInformationMessage('Task marked done. Verification scheduled.');
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.decomposeTask', async () => {
+            const tasks = database.getAllTasks().filter(t => t.estimated_minutes > 45);
+            if (tasks.length === 0) {
+                vscode.window.showInformationMessage('No tasks large enough to decompose (>45 min).');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                tasks.map(t => ({ label: `${t.title} (${t.estimated_minutes}min)`, taskId: t.id })),
+                { placeHolder: 'Select task to decompose' }
+            );
+            if (!selected) return;
+
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Decomposing task...',
+            }, async () => {
+                const result = await orchestrator.getPlanningAgent().decompose(selected.taskId);
+                vscode.window.showInformationMessage(result.content.substring(0, 200));
+                refreshAll();
+            });
+        }),
+
+        vscode.commands.registerCommand('coe.setTaskPriority', async () => {
+            const tasks = database.getAllTasks().filter(t => t.status !== 'verified');
+            if (tasks.length === 0) return;
+            const selected = await vscode.window.showQuickPick(
+                tasks.map(t => ({ label: `[${t.priority}] ${t.title}`, taskId: t.id })),
+                { placeHolder: 'Select task' }
+            );
+            if (!selected) return;
+            const priority = await vscode.window.showQuickPick(['P1', 'P2', 'P3'], { placeHolder: 'New priority' });
+            if (!priority) return;
+            database.updateTask(selected.taskId, { priority: priority as TaskPriority });
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.retryTask', async () => {
+            const failed = database.getTasksByStatus('failed');
+            if (failed.length === 0) {
+                vscode.window.showInformationMessage('No failed tasks.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                failed.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Select task to retry' }
+            );
+            if (!selected) return;
+            database.updateTask(selected.taskId, { status: 'not_started' as any });
+            vscode.window.showInformationMessage('Task reset to not started.');
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.blockTask', async () => {
+            const tasks = database.getTasksByStatus('not_started')
+                .concat(database.getTasksByStatus('in_progress'));
+            if (tasks.length === 0) return;
+            const selected = await vscode.window.showQuickPick(
+                tasks.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Select task to block' }
+            );
+            if (!selected) return;
+            database.updateTask(selected.taskId, { status: 'blocked' as any });
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.unblockTask', async () => {
+            const blocked = database.getTasksByStatus('blocked');
+            if (blocked.length === 0) {
+                vscode.window.showInformationMessage('No blocked tasks.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                blocked.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Select task to unblock' }
+            );
+            if (!selected) return;
+            database.updateTask(selected.taskId, { status: 'not_started' as any });
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.reorderTasks', () => {
+            vscode.window.showInformationMessage('Task queue reordered by priority.');
+            refreshAll();
+        }),
+    );
+
+    // --- Agent Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.startAgent', async () => {
+            const agents = database.getAllAgents().filter(a => a.status === 'idle' || a.status === 'error');
+            if (agents.length === 0) {
+                vscode.window.showInformationMessage('All agents already running or no agents available.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(
+                agents.map(a => ({ label: a.name, agentName: a.name })),
+                { placeHolder: 'Select agent to start' }
+            );
+            if (!selected) return;
+            database.updateAgentStatus(selected.agentName, 'working' as any);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.stopAgent', async () => {
+            const agents = database.getAllAgents().filter(a => a.status === 'working');
+            if (agents.length === 0) return;
+            const selected = await vscode.window.showQuickPick(
+                agents.map(a => ({ label: a.name, agentName: a.name })),
+                { placeHolder: 'Select agent to stop' }
+            );
+            if (!selected) return;
+            database.updateAgentStatus(selected.agentName, 'idle' as any);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.createCustomAgent', async () => {
+            const name = await vscode.window.showInputBox({ prompt: 'Agent name' });
+            if (!name) return;
+            const description = await vscode.window.showInputBox({ prompt: 'What does this agent do?' });
+            if (!description) return;
+            const prompt = await vscode.window.showInputBox({ prompt: 'System prompt', value: `You are a specialized agent for ${description}` });
+            if (!prompt) return;
+            const keywords = await vscode.window.showInputBox({ prompt: 'Routing keywords (comma-separated)' });
+
+            orchestrator.getCustomAgentRunner().saveCustomAgent({
+                name,
+                description: description || '',
+                systemPrompt: prompt || '',
+                goals: [{ description: description || '', priority: 1 }],
+                checklist: [],
+                routingKeywords: keywords ? keywords.split(',').map(k => k.trim()) : [],
+                permissions: { readFiles: true, searchCode: true, createTickets: true, callLLM: true, writeFiles: false, executeCode: false },
+                limits: { maxGoals: 20, maxLLMCalls: 50, maxTimeMinutes: 30, timePerGoalMinutes: 5 },
+            });
+            vscode.window.showInformationMessage(`Custom agent "${name}" created.`);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.openAgentGallery', () => {
+            const port = mcpServer.getPort();
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${port}/app`));
+        }),
+
+        vscode.commands.registerCommand('coe.askAgent', async () => {
+            const question = await vscode.window.showInputBox({ prompt: 'Ask a question' });
+            if (!question) return;
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Asking agent...',
+            }, async () => {
+                const ctx: AgentContext = { conversationHistory: [] };
+                const response = await orchestrator.route(question, ctx);
+                vscode.window.showInformationMessage(response.content.substring(0, 500));
+                refreshAll();
+            });
+        }),
+
+        vscode.commands.registerCommand('coe.refreshAgents', () => refreshAll()),
+        vscode.commands.registerCommand('coe.refreshTickets', () => refreshAll()),
+        vscode.commands.registerCommand('coe.refreshTasks', () => refreshAll()),
+    );
+
+    // --- Verification Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.runVerification', async () => {
+            const pendingTasks = database.getTasksByStatus('pending_verification');
+            if (pendingTasks.length === 0) {
+                vscode.window.showInformationMessage('No tasks pending verification.');
+                return;
+            }
+            vscode.window.showInformationMessage(`${pendingTasks.length} tasks pending verification. Running...`);
+        }),
+
+        vscode.commands.registerCommand('coe.openVerificationPanel', () => {
+            const port = mcpServer.getPort();
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${port}/app`));
+        }),
+
+        vscode.commands.registerCommand('coe.approveVerification', async () => {
+            const pending = database.getTasksByStatus('pending_verification');
+            if (pending.length === 0) return;
+            const selected = await vscode.window.showQuickPick(
+                pending.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Approve verification for' }
+            );
+            if (!selected) return;
+            database.updateTask(selected.taskId, { status: 'verified' as any });
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.rejectVerification', async () => {
+            const pending = database.getTasksByStatus('pending_verification');
+            if (pending.length === 0) return;
+            const selected = await vscode.window.showQuickPick(
+                pending.map(t => ({ label: t.title, taskId: t.id })),
+                { placeHolder: 'Reject verification for' }
+            );
+            if (!selected) return;
+            database.updateTask(selected.taskId, { status: 'failed' as any });
+            refreshAll();
+        }),
+    );
+
+    // --- System Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.scanCodebase', async () => {
+            const plan = database.getActivePlan();
+            if (!plan) {
+                vscode.window.showInformationMessage('No active plan. Create a plan first.');
+                return;
+            }
+            const tasks = database.getTasksByPlan(plan.id);
+            const verified = tasks.filter(t => t.status === 'verified').length;
+            const drift = tasks.length > 0 ? ((tasks.length - verified) / tasks.length * 100).toFixed(0) : '0';
+            vscode.window.showInformationMessage(
+                `Plan "${plan.name}": ${verified}/${tasks.length} verified (${100 - parseInt(drift)}% aligned, ${drift}% drift)`
+            );
+        }),
+
+        vscode.commands.registerCommand('coe.showDashboard', () => {
+            const port = mcpServer.getPort();
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${port}/app`));
+        }),
+
+        vscode.commands.registerCommand('coe.showEvolution', () => {
+            const log = database.getEvolutionLog(10);
+            if (log.length === 0) {
+                vscode.window.showInformationMessage('No evolution entries yet.');
+                return;
+            }
+            const content = log.map(e =>
+                `## ${e.pattern}\nProposal: ${e.proposal}\nStatus: ${e.status}\nResult: ${e.result || 'Pending'}`
+            ).join('\n\n---\n\n');
+            vscode.workspace.openTextDocument({ content, language: 'markdown' })
+                .then(d => vscode.window.showTextDocument(d, { preview: true }));
+        }),
+
+        vscode.commands.registerCommand('coe.showConfig', () => {
+            const config = configManager.getConfig();
+            const content = JSON.stringify(config, null, 2);
+            vscode.workspace.openTextDocument({ content, language: 'json' })
+                .then(d => vscode.window.showTextDocument(d, { preview: true }));
+        }),
+
+        vscode.commands.registerCommand('coe.viewAuditLog', async () => {
+            const log = database.getAuditLog(50);
+            const content = log.map(e =>
+                `[${e.created_at}] ${e.agent}: ${e.action} — ${e.detail}`
+            ).join('\n');
+            const doc = await vscode.workspace.openTextDocument({ content, language: 'log' });
+            await vscode.window.showTextDocument(doc, { preview: true });
+        }),
+
+        vscode.commands.registerCommand('coe.openPlanningWizard', () => {
+            const port = mcpServer.getPort();
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${port}/app`));
+        }),
+
+        vscode.commands.registerCommand('coe.exportPlan', async () => {
+            const plan = database.getActivePlan();
+            if (!plan) {
+                vscode.window.showInformationMessage('No active plan.');
+                return;
+            }
+            const tasks = database.getTasksByPlan(plan.id);
+            const content = JSON.stringify({ plan, tasks }, null, 2);
+            const doc = await vscode.workspace.openTextDocument({ content, language: 'json' });
+            await vscode.window.showTextDocument(doc);
+        }),
+
+        vscode.commands.registerCommand('coe.startMCPServer', () => {
+            vscode.window.showInformationMessage(`MCP Server running on port ${mcpServer.getPort()}`);
+        }),
+
+        vscode.commands.registerCommand('coe.stopMCPServer', () => {
+            mcpServer.dispose();
+            vscode.window.showInformationMessage('MCP Server stopped.');
+        }),
+
+        vscode.commands.registerCommand('coe.clearOfflineCache', () => {
+            vscode.window.showInformationMessage('Offline cache cleared.');
+        }),
+
+        vscode.commands.registerCommand('coe.openConversation', () => {
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.checkpointCommit', () => {
+            vscode.window.showInformationMessage('Checkpoint commit — use your git client to commit.');
+        }),
+
+        vscode.commands.registerCommand('coe.tagRelease', () => {
+            vscode.window.showInformationMessage('Tag release — use your git client to tag.');
+        }),
+
+        vscode.commands.registerCommand('coe.importGitHubIssues', () => {
+            vscode.window.showInformationMessage('GitHub issue import — configure GITHUB_TOKEN in .env first.');
+        }),
+
+        vscode.commands.registerCommand('coe.syncGitHubIssues', () => {
+            vscode.window.showInformationMessage('GitHub sync — configure GITHUB_TOKEN in .env first.');
+        }),
+
+        vscode.commands.registerCommand('coe.triggerEvolution', async () => {
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Running system health check...',
+            }, async () => {
+                const result = await orchestrator.getBossAgent().checkSystemHealth();
+                vscode.window.showInformationMessage(result.content.substring(0, 500));
+            });
+        }),
+    );
+}

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.tmp/
+*.vsix
+.env
+.coe/tickets.db
+.coe/offline-cache/
+credentials.json
+token.json
+*.js.map
+coverage/

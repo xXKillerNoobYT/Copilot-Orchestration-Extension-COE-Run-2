@@ -1,0 +1,36 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "npm",
+            "script": "watch",
+            "label": "npm: watch",
+            "isBackground": true,
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": {
+                "owner": "esbuild",
+                "source": "esbuild",
+                "fileLocation": "absolute",
+                "pattern": {
+                    "regexp": "^✘ \\[ERROR\\] (.+)$",
+                    "message": 1
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^\\[watch\\] build started",
+                    "endsPattern": "^\\[watch\\] build finished"
+                }
+            }
+        },
+        {
+            "type": "npm",
+            "script": "build",
+            "label": "npm: build",
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

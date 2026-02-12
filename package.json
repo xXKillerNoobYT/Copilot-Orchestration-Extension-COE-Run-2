@@ -1,0 +1,307 @@
+{
+  "name": "copilot-orchestration-extension",
+  "displayName": "Copilot Orchestration Extension (COE)",
+  "description": "An intelligent planning, orchestration, and tracking layer for AI-assisted software development",
+  "version": "0.1.0",
+  "publisher": "coe-dev",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "coe-sidebar",
+          "title": "Copilot Orchestration",
+          "icon": "resources/coe-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "coe-sidebar": [
+        {
+          "id": "coe-status",
+          "name": "Status"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "coe.createPlan",
+        "title": "COE: Create New Plan"
+      },
+      {
+        "command": "coe.freshRestart",
+        "title": "COE: Fresh Restart"
+      },
+      {
+        "command": "coe.refreshPRD",
+        "title": "COE: Refresh PRD"
+      },
+      {
+        "command": "coe.createTicket",
+        "title": "COE: Create Ticket"
+      },
+      {
+        "command": "coe.resolveTicket",
+        "title": "COE: Resolve Ticket"
+      },
+      {
+        "command": "coe.openTicketPanel",
+        "title": "COE: Open Ticket Detail"
+      },
+      {
+        "command": "coe.getNextTask",
+        "title": "COE: Get Next Task"
+      },
+      {
+        "command": "coe.markTaskDone",
+        "title": "COE: Mark Task Done"
+      },
+      {
+        "command": "coe.decomposeTask",
+        "title": "COE: Decompose Task"
+      },
+      {
+        "command": "coe.startAgent",
+        "title": "COE: Start Agent"
+      },
+      {
+        "command": "coe.stopAgent",
+        "title": "COE: Stop Agent"
+      },
+      {
+        "command": "coe.createCustomAgent",
+        "title": "COE: Create Custom Agent"
+      },
+      {
+        "command": "coe.openAgentGallery",
+        "title": "COE: Open Agent Gallery"
+      },
+      {
+        "command": "coe.runVerification",
+        "title": "COE: Run Verification"
+      },
+      {
+        "command": "coe.openVerificationPanel",
+        "title": "COE: Open Verification Panel"
+      },
+      {
+        "command": "coe.openPlanningWizard",
+        "title": "COE: Open Planning Wizard"
+      },
+      {
+        "command": "coe.scanCodebase",
+        "title": "COE: Scan Codebase for Drift"
+      },
+      {
+        "command": "coe.showDashboard",
+        "title": "COE: Show Dashboard"
+      },
+      {
+        "command": "coe.showEvolution",
+        "title": "COE: Show Evolution Dashboard"
+      },
+      {
+        "command": "coe.exportPlan",
+        "title": "COE: Export Plan"
+      },
+      {
+        "command": "coe.importGitHubIssues",
+        "title": "COE: Import GitHub Issues"
+      },
+      {
+        "command": "coe.syncGitHubIssues",
+        "title": "COE: Sync GitHub Issues"
+      },
+      {
+        "command": "coe.setTaskPriority",
+        "title": "COE: Set Task Priority"
+      },
+      {
+        "command": "coe.reorderTasks",
+        "title": "COE: Reorder Task Queue"
+      },
+      {
+        "command": "coe.viewAuditLog",
+        "title": "COE: View Audit Log"
+      },
+      {
+        "command": "coe.clearOfflineCache",
+        "title": "COE: Clear Offline Cache"
+      },
+      {
+        "command": "coe.showConfig",
+        "title": "COE: Show Configuration"
+      },
+      {
+        "command": "coe.askAgent",
+        "title": "COE: Ask Agent a Question"
+      },
+      {
+        "command": "coe.retryTask",
+        "title": "COE: Retry Failed Task"
+      },
+      {
+        "command": "coe.blockTask",
+        "title": "COE: Block Task"
+      },
+      {
+        "command": "coe.unblockTask",
+        "title": "COE: Unblock Task"
+      },
+      {
+        "command": "coe.openConversation",
+        "title": "COE: Open Conversation"
+      },
+      {
+        "command": "coe.startMCPServer",
+        "title": "COE: Start MCP Server"
+      },
+      {
+        "command": "coe.stopMCPServer",
+        "title": "COE: Stop MCP Server"
+      },
+      {
+        "command": "coe.checkpointCommit",
+        "title": "COE: Checkpoint Commit"
+      },
+      {
+        "command": "coe.tagRelease",
+        "title": "COE: Tag Release"
+      },
+      {
+        "command": "coe.refreshAgents",
+        "title": "COE: Refresh Agents"
+      },
+      {
+        "command": "coe.refreshTickets",
+        "title": "COE: Refresh Tickets"
+      },
+      {
+        "command": "coe.refreshTasks",
+        "title": "COE: Refresh Tasks"
+      },
+      {
+        "command": "coe.escalateTicket",
+        "title": "COE: Escalate Ticket"
+      },
+      {
+        "command": "coe.approveVerification",
+        "title": "COE: Approve Verification"
+      },
+      {
+        "command": "coe.rejectVerification",
+        "title": "COE: Reject Verification"
+      },
+      {
+        "command": "coe.triggerEvolution",
+        "title": "COE: Trigger Manual Evolution"
+      },
+      {
+        "command": "coe.openApp",
+        "title": "COE: Open App",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "coe.refreshStatus",
+        "title": "COE: Refresh Status",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "coe-status",
+        "contents": "COE is starting up...\n[Open COE App](command:coe.openApp)\nOpen the full management interface in your browser."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "coe.openApp", "when": "view == coe-status", "group": "navigation" },
+        { "command": "coe.refreshStatus", "when": "view == coe-status", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "Copilot Orchestration Extension",
+      "properties": {
+        "coe.llm.endpoint": {
+          "type": "string",
+          "default": "http://192.168.1.205:1234/v1",
+          "description": "LLM API endpoint (OpenAI-compatible)"
+        },
+        "coe.llm.model": {
+          "type": "string",
+          "default": "mistralai/ministral-3-14b-reasoning",
+          "description": "Model identifier for the LLM"
+        },
+        "coe.llm.timeoutSeconds": {
+          "type": "number",
+          "default": 1800,
+          "description": "Total wall-clock timeout for LLM requests in seconds (30 min default for local models)"
+        },
+        "coe.llm.startupTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "Timeout waiting for first token from LLM"
+        },
+        "coe.llm.maxTokens": {
+          "type": "number",
+          "default": 4000,
+          "description": "Maximum tokens per LLM response"
+        },
+        "coe.llm.streamStallTimeoutSeconds": {
+          "type": "number",
+          "default": 60,
+          "description": "Liveness check interval in seconds — aborts only if zero new tokens in this period"
+        },
+        "coe.taskQueue.maxPending": {
+          "type": "number",
+          "default": 20,
+          "description": "Maximum pending tasks in queue"
+        },
+        "coe.verification.delaySeconds": {
+          "type": "number",
+          "default": 60,
+          "description": "Seconds to wait after task completion before verification"
+        },
+        "coe.watcher.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "description": "File watcher debounce in milliseconds"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.js --production",
+    "watch": "node esbuild.config.js --watch",
+    "lint": "eslint src --ext ts",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "esbuild": "^0.19.12",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "js-yaml": "^4.1.0"
+  }
+}

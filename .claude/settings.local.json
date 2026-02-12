@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx jest:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(npx @electron/rebuild:*)",
+      "Bash(node -e:*)",
+      "Bash(find:*)"
+    ]
+  }
+}
