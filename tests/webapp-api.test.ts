@@ -745,4 +745,128 @@ describe('Webapp API Handlers', () => {
             expect(followUp!.description).toContain('Rejected via web app');
         });
     });
+
+    // ==================== CODING AGENT PROCESSING ====================
+    describe('Coding Agent Processing (POST /api/coding/process)', () => {
+        const mockCodingAgent = {
+            processCommand: jest.fn().mockResolvedValue({
+                id: 'resp-1',
+                request_id: 'req-1',
+                code: 'console.log("hello");',
+                language: 'typescript',
+                explanation: 'Generated hello world',
+                files: [{ name: 'hello.ts', content: 'console.log("hello");', language: 'typescript' }],
+                confidence: 85,
+                warnings: [],
+                requires_approval: false,
+                diff: null,
+                tokens_used: 42,
+                duration_ms: 1500,
+                created_at: new Date().toISOString(),
+            }),
+        } as any;
+
+        beforeEach(() => {
+            mockCodingAgent.processCommand.mockClear();
+        });
+
+        test('returns 503 when no coding agent service', async () => {
+            const session = db.createCodingSession({ name: 'Test' });
+            const req = mockReq('POST', { session_id: session.id, content: 'build a button' });
+            const res = mockRes();
+            // Call without codingAgentService (7th arg omitted)
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config);
+            expect(res.writeHead).toHaveBeenCalledWith(503, expect.anything());
+        });
+
+        test('validates required fields', async () => {
+            const req = mockReq('POST', { session_id: '', content: '' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, mockCodingAgent);
+            expect(res.writeHead).toHaveBeenCalledWith(400, expect.anything());
+            const body = getJsonResponse(res);
+            expect(body.error).toContain('required');
+        });
+
+        test('stores user and agent messages', async () => {
+            const session = db.createCodingSession({ name: 'Test' });
+            const req = mockReq('POST', { session_id: session.id, content: 'build a button' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, mockCodingAgent);
+            expect(res.writeHead).toHaveBeenCalledWith(201, expect.anything());
+            const body = getJsonResponse(res);
+            expect(body.user_message.role).toBe('user');
+            expect(body.user_message.content).toBe('build a button');
+            expect(body.agent_message.role).toBe('agent');
+            expect(body.agent_message.content).toContain('Generated hello world');
+            expect(body.agent_response.confidence).toBe(85);
+
+            // Verify both messages are in the database
+            const messages = db.getCodingMessages(session.id);
+            expect(messages).toHaveLength(2);
+            expect(messages[0].role).toBe('user');
+            expect(messages[1].role).toBe('agent');
+        });
+
+        test('passes session plan_id as context', async () => {
+            const plan = db.createPlan('TestPlan', '{}');
+            const session = db.createCodingSession({ plan_id: plan.id, name: 'Test' });
+            const req = mockReq('POST', { session_id: session.id, content: 'explain this' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, mockCodingAgent);
+            expect(mockCodingAgent.processCommand).toHaveBeenCalledWith(
+                'explain this',
+                expect.objectContaining({ plan_id: plan.id, session_id: session.id })
+            );
+        });
+
+        test('handles agent errors gracefully', async () => {
+            const failingAgent = {
+                processCommand: jest.fn().mockRejectedValue(new Error('LLM timeout')),
+            } as any;
+            const session = db.createCodingSession({ name: 'Test' });
+            const req = mockReq('POST', { session_id: session.id, content: 'build a button' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, failingAgent);
+            expect(res.writeHead).toHaveBeenCalledWith(500, expect.anything());
+            const body = getJsonResponse(res);
+            expect(body.error).toContain('LLM timeout');
+            expect(body.error_message.role).toBe('system');
+            expect(body.user_message.role).toBe('user');
+
+            // User message should still be saved
+            const messages = db.getCodingMessages(session.id);
+            expect(messages.length).toBeGreaterThanOrEqual(2);
+            expect(messages[0].role).toBe('user');
+        });
+
+        test('stores metadata in tool_calls JSON', async () => {
+            const session = db.createCodingSession({ name: 'Test' });
+            const req = mockReq('POST', { session_id: session.id, content: 'create a form' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, mockCodingAgent);
+            const body = getJsonResponse(res);
+            const toolCalls = JSON.parse(body.agent_message.tool_calls);
+            expect(toolCalls.confidence).toBe(85);
+            expect(toolCalls.duration_ms).toBe(1500);
+            expect(toolCalls.tokens_used).toBe(42);
+            expect(toolCalls.files).toEqual(['hello.ts']);
+            expect(toolCalls.requires_approval).toBe(false);
+        });
+
+        test('includes conversation history in context', async () => {
+            const session = db.createCodingSession({ name: 'Test' });
+            // Add some prior messages
+            db.addCodingMessage({ session_id: session.id, role: 'user', content: 'hello' });
+            db.addCodingMessage({ session_id: session.id, role: 'agent', content: 'hi there' });
+
+            const req = mockReq('POST', { session_id: session.id, content: 'now build a button' });
+            const res = mockRes();
+            await handleApiRequest(req, res, '/api/coding/process', db, orchestrator, config, mockCodingAgent);
+
+            const callArgs = mockCodingAgent.processCommand.mock.calls[0];
+            expect(callArgs[1].constraints.conversation_history).toContain('[user]: hello');
+            expect(callArgs[1].constraints.conversation_history).toContain('[agent]: hi there');
+        });
+    });
 });

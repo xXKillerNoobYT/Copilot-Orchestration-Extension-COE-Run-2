@@ -1,5 +1,5 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse } from '../types';
+import { AgentType, AgentContext, AgentResponse, TicketPriority } from '../types';
 
 export class ResearchAgent extends BaseAgent {
     readonly name = 'Research Agent';
@@ -40,7 +40,7 @@ RECOMMENDATION: Keep SQLite because COE is single-user and current write volume 
 SOURCES: src/core/database.ts:25, SQLite WAL documentation, Plan: System Architecture
 CONFIDENCE: 88`;
 
-    protected async parseResponse(content: string, _context: AgentContext): Promise<AgentResponse> {
+    protected async parseResponse(content: string, context: AgentContext): Promise<AgentResponse> {
         let confidence = 75;
         const sources: string[] = [];
 
@@ -52,6 +52,27 @@ CONFIDENCE: 88`;
         const sourcesMatch = content.match(/SOURCES:\s*(.*?)(?:\n|CONFIDENCE|$)/is);
         if (sourcesMatch) {
             sources.push(...sourcesMatch[1].split(',').map(s => s.trim()).filter(Boolean));
+        }
+
+        // Check ESCALATE field or auto-escalate when confidence <60
+        const escalateMatch = content.match(/ESCALATE:\s*(true|false)/i);
+        const shouldEscalate = escalateMatch
+            ? escalateMatch[1].toLowerCase() === 'true'
+            : confidence < 60;
+
+        if (shouldEscalate) {
+            const taskId = context.task?.id || 'unknown';
+            this.database.createTicket({
+                title: `Research escalation: low confidence (${confidence}%) on task ${taskId}`,
+                body: `Research Agent returned confidence of ${confidence}%, below the 60% threshold.\n\nSources checked: ${sources.join(', ') || 'none'}\n\n---\n${content.slice(0, 1000)}`,
+                priority: TicketPriority.P1,
+                creator: 'research_agent',
+            });
+            this.database.addAuditLog(
+                'research',
+                'escalated',
+                `Low confidence research (${confidence}%) auto-escalated to P1 ticket`
+            );
         }
 
         return {

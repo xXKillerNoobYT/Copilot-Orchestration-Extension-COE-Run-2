@@ -12,6 +12,19 @@ module.exports = {
         '^vscode$': '<rootDir>/tests/__mocks__/vscode.ts',
     },
     modulePathIgnorePatterns: ['<rootDir>/dist/'],
+    collectCoverageFrom: [
+        'src/**/*.ts',
+        '!src/types/**',
+        '!src/webapp/app.ts',
+    ],
+    coverageThreshold: {
+        global: {
+            branches: 100,
+            functions: 100,
+            lines: 100,
+            statements: 100,
+        },
+    },
     transform: {
         '^.+\\.tsx?$': ['ts-jest', {
             tsconfig: {

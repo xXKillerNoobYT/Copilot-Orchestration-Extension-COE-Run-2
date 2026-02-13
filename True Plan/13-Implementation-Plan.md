@@ -1,8 +1,8 @@
 # 13 - Developer Implementation Plan: Program Designer v2.0
 
-**Version:** 2.0
-**Date:** February 12, 2026
-**Status:** Specification
+**Version:** 2.1
+**Date:** February 13, 2026
+**Status:** Specification — v2.0 core services IMPLEMENTED, webapp integration COMPLETE
 **Scope:** API shapes, storage formats, sync protocols, component-to-code mappings, AI agent architecture
 
 ---
@@ -2572,3 +2572,63 @@ export type COEEventType =
 ---
 
 *This document is part of the True Plan series. Keep it in sync with implementation. Update section estimates as actual effort is measured. Update type definitions if the interfaces evolve during development.*
+
+---
+
+## Implementation Status (February 13, 2026)
+
+### Phase 1: Foundation — COMPLETE
+
+| Deliverable | File | Status |
+|-------------|------|--------|
+| Type definitions | `src/types/index.ts` | All v2.0 types added |
+| Database schema | `src/core/database.ts` | 27 tables, all v2.0 tables created |
+| Component schemas | `src/core/component-schema.ts` | 37 schemas, 5 categories |
+| Transparency logger | `src/core/transparency-logger.ts` | Append-only, 7 categories, JSON/CSV export |
+
+### Phase 2: Designer — IN PROGRESS
+
+| Deliverable | File | Status |
+|-------------|------|--------|
+| Design pages CRUD | `src/webapp/api.ts` | API complete |
+| Component CRUD | `src/webapp/api.ts` | API complete |
+| Design tokens | `src/webapp/api.ts` | API complete |
+| Page flows | `src/webapp/api.ts` | API complete |
+| Design export | `src/webapp/api.ts` | JSON export complete |
+| VS Code canvas webview | — | Not yet implemented (webapp designer page serves as interim) |
+
+### Phase 3: Agent — COMPLETE
+
+| Deliverable | File | Status |
+|-------------|------|--------|
+| CodingAgentService | `src/core/coding-agent.ts` | 6 intents, 2-stage classify, code gen, diffs |
+| EthicsEngine | `src/core/ethics-engine.ts` | 6 modules, 4 levels, absolute blocks |
+| Ethics gate integration | `src/core/coding-agent.ts:240` | Gate on every action |
+| Webapp coding chat | `src/webapp/api.ts` | `POST /api/coding/process` wired end-to-end |
+| Code preview | `src/webapp/app.ts` | Markdown + code block rendering |
+
+### Phase 4: Sync — COMPLETE
+
+| Deliverable | File | Status |
+|-------------|------|--------|
+| SyncService | `src/core/sync-service.ts` | 3 backends, vector clocks, advisory locks |
+| ConflictResolver | `src/core/conflict-resolver.ts` | SHA-256, field-level merge, 5 strategies |
+| Device management | `src/core/sync-service.ts` | Register/unregister, presence tracking |
+
+### Key Integration Points (Wired)
+
+| From | To | How | Status |
+|------|----|-----|--------|
+| extension.ts | MCPServer | Constructor injection | `codingAgentService` passed as 5th arg |
+| MCPServer | handleApiRequest | Parameter forwarding | `codingAgentService` forwarded to API handler |
+| Webapp chat | CodingAgentService | `POST /api/coding/process` | Stores user msg, calls processCommand, stores agent msg |
+| CodingAgent | EthicsEngine | `evaluateAction()` | Gate before every handler execution |
+| CodingAgent | ComponentSchemaService | `getCodeTemplate()` | Code generation from templates |
+| Orchestrator | All agents | `getAgentForIntent()` | Two-stage classification routing |
+| Boss Agent | Database | Health check queries | 7 thresholds monitored |
+| Research Agent | Tickets | Auto-escalation | Creates P1 ticket when confidence <60% |
+
+### Test Coverage
+
+- **40 test suites**, **1,520+ tests**, all passing
+- Coverage threshold: **100%** (enforced in `jest.config.js`)

@@ -256,8 +256,16 @@
     ],
     "menus": {
       "view/title": [
-        { "command": "coe.openApp", "when": "view == coe-status", "group": "navigation" },
-        { "command": "coe.refreshStatus", "when": "view == coe-status", "group": "navigation" }
+        {
+          "command": "coe.openApp",
+          "when": "view == coe-status",
+          "group": "navigation"
+        },
+        {
+          "command": "coe.refreshStatus",
+          "when": "view == coe-status",
+          "group": "navigation"
+        }
       ]
     },
     "configuration": {
@@ -341,9 +349,14 @@
     "build": "node esbuild.config.js --production",
     "watch": "node esbuild.config.js --watch",
     "lint": "eslint src --ext ts",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:e2e": "npx playwright test",
+    "test:e2e:ui": "npx playwright test --ui",
+    "test:e2e:headed": "npx playwright test --headed",
+    "test:e2e:report": "npx playwright show-report e2e/playwright-report"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.0",

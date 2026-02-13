@@ -167,7 +167,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         // Phase 3: Initialize MCP server
-        mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel);
+        mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel, codingAgentService);
         await mcpServer.initialize();
 
         // Phase 4: Initialize UI — single status view (full app opens in browser)

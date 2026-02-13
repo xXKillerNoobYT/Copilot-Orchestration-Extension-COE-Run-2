@@ -861,7 +861,8 @@ export class Database {
     }
 
     getAllAgents(): Agent[] {
-        return this.db.prepare('SELECT * FROM agents ORDER BY type ASC, name ASC').all() as Agent[];
+        const result = this.db.prepare('SELECT * FROM agents ORDER BY type ASC, name ASC').all();
+        return Array.isArray(result) ? result as Agent[] : [];
     }
 
     updateAgentStatus(name: string, status: AgentStatus, currentTask?: string): void {

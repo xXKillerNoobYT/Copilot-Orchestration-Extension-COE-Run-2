@@ -3,6 +3,7 @@ import * as http from 'http';
 import { Database } from '../core/database';
 import { ConfigManager } from '../core/config';
 import { Orchestrator } from '../agents/orchestrator';
+import { CodingAgentService } from '../core/coding-agent';
 import { AgentContext, TaskStatus } from '../types';
 import { handleApiRequest } from '../webapp/api';
 import { getAppHtml } from '../webapp/app';
@@ -28,7 +29,8 @@ export class MCPServer {
         private orchestrator: Orchestrator,
         private database: Database,
         private config: ConfigManager,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: vscode.OutputChannel,
+        private codingAgentService?: CodingAgentService
     ) {}
 
     async initialize(): Promise<void> {
@@ -554,7 +556,7 @@ export class MCPServer {
 
             // /api/* — REST API for web app
             if (url.pathname.startsWith('/api/')) {
-                const handled = await handleApiRequest(req, res, url.pathname, this.database, this.orchestrator, this.config);
+                const handled = await handleApiRequest(req, res, url.pathname, this.database, this.orchestrator, this.config, this.codingAgentService);
                 if (handled) return;
             }
 

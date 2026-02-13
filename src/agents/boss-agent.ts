@@ -66,18 +66,54 @@ ESCALATE: true`;
 
         const context: AgentContext = { conversationHistory: [] };
 
-        // Check thresholds
+        // Check thresholds (matches True Plan 03 thresholds)
         const issues: string[] = [];
+
+        // CRITICAL: Task overload (>20 pending)
         if (readyTasks.length > 20) {
-            issues.push(`Task overload: ${readyTasks.length} pending (limit: 20)`);
-        }
-        if (escalatedTickets.length > 0) {
-            issues.push(`${escalatedTickets.length} escalated tickets need attention`);
+            issues.push(`CRITICAL: Task overload — ${readyTasks.length} pending tasks (limit: 20)`);
         }
 
+        // CRITICAL: Agent failure (any agent in error state)
         const failedAgents = agents.filter(a => a.status === 'error');
         if (failedAgents.length > 0) {
-            issues.push(`Agents in error state: ${failedAgents.map(a => a.name).join(', ')}`);
+            issues.push(`CRITICAL: Agent failure — ${failedAgents.map(a => a.name).join(', ')} in error state`);
+        }
+
+        // CRITICAL: Plan drift (>20% verified tasks with issues)
+        const activePlan = this.database.getActivePlan();
+        if (activePlan) {
+            const planTasks = this.database.getTasksByPlan(activePlan.id);
+            const verifiedTasks = planTasks.filter(t => t.status === 'verified');
+            const failedTasks = planTasks.filter(t => t.status === 'failed' || t.status === 'needs_recheck');
+            if (planTasks.length > 0) {
+                const driftPercent = Math.round((failedTasks.length / planTasks.length) * 100);
+                if (driftPercent > 20) {
+                    issues.push(`CRITICAL: Plan drift — ${driftPercent}% of tasks failed/need recheck (${failedTasks.length}/${planTasks.length})`);
+                }
+            }
+        }
+
+        // WARNING: Escalation backlog (>5 escalated tickets)
+        if (escalatedTickets.length > 5) {
+            issues.push(`WARNING: Escalation backlog — ${escalatedTickets.length} escalated tickets unresolved (limit: 5)`);
+        }
+
+        // WARNING: Repeated failures (>3 in last 24h)
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const recentFailures = recentAudit.filter(
+            a => (a.action === 'verification_failed' || a.action === 'task_failed')
+                && a.created_at > oneDayAgo
+        );
+        if (recentFailures.length > 3) {
+            issues.push(`WARNING: Repeated failures — ${recentFailures.length} task failures in last 24 hours (limit: 3)`);
+        }
+
+        // WARNING: Stale tickets (open >48h with no reply)
+        const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        const staleTickets = openTickets.filter(t => t.created_at < twoDaysAgo);
+        if (staleTickets.length > 0) {
+            issues.push(`WARNING: Stale tickets — ${staleTickets.length} ticket(s) open for >48 hours with no reply`);
         }
 
         if (issues.length > 0) {

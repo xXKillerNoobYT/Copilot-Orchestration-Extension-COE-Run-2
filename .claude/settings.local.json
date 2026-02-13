@@ -10,7 +10,9 @@
       "Bash(find:*)",
       "Bash(for f in \"C:\\\\Users\\\\weird\\\\OneDrive\\\\Documents\\\\GitHub\\\\Copilot-Orchestration-Extension-COE-Run-2\\\\tests\"/*.test.ts)",
       "Bash(done)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(ls:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

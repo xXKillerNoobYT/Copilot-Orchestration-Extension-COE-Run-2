@@ -10,7 +10,7 @@ export class AgentsViewProvider implements vscode.TreeDataProvider<AgentTreeItem
     constructor(
         private orchestrator: Orchestrator,
         private database: Database
-    ) {}
+    ) { }
 
     refresh(): void {
         this._onDidChangeTreeData.fire(undefined);
@@ -21,7 +21,7 @@ export class AgentsViewProvider implements vscode.TreeDataProvider<AgentTreeItem
     }
 
     getChildren(): AgentTreeItem[] {
-        const agents = this.database.getAllAgents();
+        const agents = this.database.getAllAgents() || [];
         return agents.map(agent => new AgentTreeItem(agent));
     }
 }
@@ -34,8 +34,8 @@ class AgentTreeItem extends vscode.TreeItem {
         const statusText = agent.status === AgentStatus.Working && agent.current_task
             ? `Working: ${agent.current_task.substring(0, 20)}...`
             : agent.status === AgentStatus.Idle && agent.last_activity
-            ? `Last: ${this.timeAgo(agent.last_activity)}`
-            : agent.status;
+                ? `Last: ${this.timeAgo(agent.last_activity)}`
+                : agent.status;
 
         this.description = statusText;
         this.iconPath = new vscode.ThemeIcon(statusIcon);

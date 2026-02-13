@@ -283,9 +283,21 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .coding-msg.user .msg-bubble { background: var(--blue); color: var(--bg); border-bottom-right-radius: 4px; }
 .coding-msg.agent .msg-bubble { background: var(--bg3); color: var(--text); border-bottom-left-radius: 4px; }
 .coding-msg.system .msg-bubble { background: rgba(249,226,175,0.1); color: var(--yellow); border: 1px solid rgba(249,226,175,0.2); text-align: center; font-size: 0.8em; max-width: 100%; }
+.coding-msg .msg-role { font-size: 0.75em; font-weight: 600; margin-bottom: 3px; }
+.coding-msg.user .msg-role { color: var(--blue); text-align: right; }
+.coding-msg.agent .msg-role { color: var(--mauve); }
+.coding-msg.system .msg-role { color: var(--yellow); text-align: center; }
 .coding-msg .msg-meta { font-size: 0.75em; color: var(--overlay); margin-top: 4px; }
 .coding-msg .msg-tools { margin-top: 6px; font-size: 0.8em; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
 .coding-msg .msg-tools strong { color: var(--mauve); }
+.coding-msg.loading .msg-bubble { background: var(--bg3); color: var(--subtext); font-style: italic; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.coding-msg .msg-bubble pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0; overflow-x: auto; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85em; line-height: 1.4; white-space: pre; }
+.coding-msg .msg-bubble code { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.9em; }
+.msg-confidence { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 600; margin-left: 8px; }
+.confidence-high { background: rgba(166,227,161,0.15); color: var(--green); }
+.confidence-mid { background: rgba(249,226,175,0.15); color: var(--yellow); }
+.confidence-low { background: rgba(243,139,168,0.15); color: var(--red); }
 .coding-input { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; background: var(--bg2); }
 .coding-input textarea { flex: 1; min-height: 40px; max-height: 120px; resize: vertical; margin-top: 0; }
 .coding-input .btn { align-self: flex-end; }
@@ -412,8 +424,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
             <div class="wizard-left">
                 <!-- Step 0: Name & Description -->
                 <div class="wizard-step active" id="wstep0">
-                    <div class="form-group"><label>Plan Name</label><input type="text" id="wizName" placeholder="e.g., My Web App MVP"></div>
-                    <div class="form-group"><label>Description</label><textarea id="wizDesc" placeholder="Describe what you want to build..."></textarea></div>
+                    <div class="form-group"><label for="wizName">Plan Name</label><input type="text" id="wizName" placeholder="e.g., My Web App MVP"></div>
+                    <div class="form-group"><label for="wizDesc">Description</label><textarea id="wizDesc" placeholder="Describe what you want to build..."></textarea></div>
                     <div class="btn-row">
                         <button class="btn btn-primary" onclick="wizNext()">Next</button>
                         <button class="btn btn-secondary" onclick="wizQuick()">Quick Generate</button>
@@ -596,11 +608,11 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <div class="modal">
             <button class="modal-close" onclick="closeModal('pdEditModal')">&times;</button>
             <h2>Edit Task</h2>
-            <div class="form-group"><label>Title</label><input type="text" id="pdEditTitle"></div>
-            <div class="form-group"><label>Description</label><textarea id="pdEditDesc"></textarea></div>
-            <div class="form-group"><label>Priority</label><select id="pdEditPrio"><option value="P1">P1 - Critical</option><option value="P2" selected>P2 - Important</option><option value="P3">P3 - Nice to Have</option></select></div>
-            <div class="form-group"><label>Estimated Minutes</label><input type="number" id="pdEditEst" value="30" min="5" max="480"></div>
-            <div class="form-group"><label>Acceptance Criteria</label><textarea id="pdEditAC"></textarea></div>
+            <div class="form-group"><label for="pdEditTitle">Title</label><input type="text" id="pdEditTitle"></div>
+            <div class="form-group"><label for="pdEditDesc">Description</label><textarea id="pdEditDesc"></textarea></div>
+            <div class="form-group"><label for="pdEditPrio">Priority</label><select id="pdEditPrio"><option value="P1">P1 - Critical</option><option value="P2" selected>P2 - Important</option><option value="P3">P3 - Nice to Have</option></select></div>
+            <div class="form-group"><label for="pdEditEst">Estimated Minutes</label><input type="number" id="pdEditEst" value="30" min="5" max="480"></div>
+            <div class="form-group"><label for="pdEditAC">Acceptance Criteria</label><textarea id="pdEditAC"></textarea></div>
             <div class="btn-row"><button class="btn btn-primary" onclick="pdSaveEdit()">Save Changes</button></div>
         </div>
     </div>
@@ -623,7 +635,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <h1>Visual Designer</h1>
         <div style="display:flex;gap:8px">
-            <select id="designerPlanSelect" style="width:200px;margin-top:0" onchange="loadDesignerForPlan(this.value)"><option value="">Select a plan...</option></select>
+            <select id="designerPlanSelect" name="designerPlanSelect" style="width:200px;margin-top:0" onchange="loadDesignerForPlan(this.value)"><option value="">Select a plan...</option></select>
             <button class="btn btn-primary btn-sm" onclick="exportDesignSpec()">Export Spec</button>
         </div>
     </div>
@@ -631,7 +643,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <button class="responsive-btn active" data-bp="desktop" onclick="setBreakpoint('desktop')">Desktop (1440)</button>
         <button class="responsive-btn" data-bp="tablet" onclick="setBreakpoint('tablet')">Tablet (768)</button>
         <button class="responsive-btn" data-bp="mobile" onclick="setBreakpoint('mobile')">Mobile (375)</button>
-        <div class="zoom-control"><span>Zoom:</span><input type="range" id="canvasZoom" min="25" max="200" value="100" oninput="setCanvasZoom(this.value)"><span id="zoomLabel">100%</span></div>
+        <div class="zoom-control"><label for="canvasZoom">Zoom:</label><input type="range" id="canvasZoom" min="25" max="200" value="100" oninput="setCanvasZoom(this.value)"><span id="zoomLabel">100%</span></div>
     </div>
     <div id="designerContainer" style="display:none">
         <div class="page-tabs" id="pageTabs"></div>
@@ -706,7 +718,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
             <div class="coding-header">
                 <span id="codingSessionName" style="font-weight:600">No session selected</span>
                 <div style="display:flex;gap:8px">
-                    <select id="codingTaskSelect" style="width:180px;margin-top:0;font-size:0.85em"><option value="">Link to task...</option></select>
+                    <select id="codingTaskSelect" name="codingTaskSelect" style="width:180px;margin-top:0;font-size:0.85em"><option value="">Link to task...</option></select>
                     <button class="btn btn-sm btn-secondary" onclick="generatePromptFromTask()">Generate Prompt</button>
                     <button class="btn btn-sm btn-secondary" onclick="copyCodingToClipboard()">Copy All</button>
                 </div>
@@ -715,10 +727,10 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <div class="empty">Start a session to begin the coding conversation.</div>
             </div>
             <div class="coding-input">
-                <textarea id="codingInput" placeholder="Type a message or paste agent response..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCodingMsg()}"></textarea>
+                <textarea id="codingInput" name="codingInput" placeholder="Type a message or paste agent response..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCodingMsg()}"></textarea>
                 <div style="display:flex;flex-direction:column;gap:4px">
-                    <button class="btn btn-primary btn-sm" onclick="sendCodingMsg()">Send</button>
-                    <button class="btn btn-secondary btn-sm" onclick="addAgentResponse()">Agent Reply</button>
+                    <button class="btn btn-primary btn-sm" id="codingSendBtn" onclick="sendCodingMsg()">User Send</button>
+                    <button class="btn btn-secondary btn-sm" id="codingAgentBtn" onclick="addAgentResponse()">Agent Response</button>
                 </div>
             </div>
         </div>
@@ -783,11 +795,11 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <div class="modal">
         <button class="modal-close" onclick="closeModal('taskModal')">&times;</button>
         <h2>Create Task</h2>
-        <div class="form-group"><label>Title</label><input type="text" id="newTaskTitle" placeholder="Task title"></div>
-        <div class="form-group"><label>Description</label><textarea id="newTaskDesc" placeholder="What needs to be done..."></textarea></div>
-        <div class="form-group"><label>Priority</label><select id="newTaskPrio"><option value="P1">P1 — Must Have</option><option value="P2" selected>P2 — Should Have</option><option value="P3">P3 — Nice to Have</option></select></div>
-        <div class="form-group"><label>Estimated Minutes</label><input type="number" id="newTaskEst" value="30" min="5" max="480"></div>
-        <div class="form-group"><label>Acceptance Criteria</label><textarea id="newTaskAC" placeholder="How do we know this is done?"></textarea></div>
+        <div class="form-group"><label for="newTaskTitle">Title</label><input type="text" id="newTaskTitle" placeholder="Task title"></div>
+        <div class="form-group"><label for="newTaskDesc">Description</label><textarea id="newTaskDesc" placeholder="What needs to be done..."></textarea></div>
+        <div class="form-group"><label for="newTaskPrio">Priority</label><select id="newTaskPrio"><option value="P1">P1 — Must Have</option><option value="P2" selected>P2 — Should Have</option><option value="P3">P3 — Nice to Have</option></select></div>
+        <div class="form-group"><label for="newTaskEst">Estimated Minutes</label><input type="number" id="newTaskEst" value="30" min="5" max="480"></div>
+        <div class="form-group"><label for="newTaskAC">Acceptance Criteria</label><textarea id="newTaskAC" placeholder="How do we know this is done?"></textarea></div>
         <div class="btn-row"><button class="btn btn-primary" onclick="createTask()">Create Task</button></div>
     </div>
 </div>
@@ -796,9 +808,9 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <div class="modal">
         <button class="modal-close" onclick="closeModal('ticketModal')">&times;</button>
         <h2>Create Ticket</h2>
-        <div class="form-group"><label>Title</label><input type="text" id="newTicketTitle" placeholder="Question or issue..."></div>
-        <div class="form-group"><label>Description</label><textarea id="newTicketBody" placeholder="Details..."></textarea></div>
-        <div class="form-group"><label>Priority</label><select id="newTicketPrio"><option value="P1">P1</option><option value="P2" selected>P2</option><option value="P3">P3</option></select></div>
+        <div class="form-group"><label for="newTicketTitle">Title</label><input type="text" id="newTicketTitle" placeholder="Question or issue..."></div>
+        <div class="form-group"><label for="newTicketBody">Description</label><textarea id="newTicketBody" placeholder="Details..."></textarea></div>
+        <div class="form-group"><label for="newTicketPrio">Priority</label><select id="newTicketPrio"><option value="P1">P1</option><option value="P2" selected>P2</option><option value="P3">P3</option></select></div>
         <div class="btn-row"><button class="btn btn-primary" onclick="createTicket()">Create Ticket</button></div>
     </div>
 </div>
@@ -847,10 +859,50 @@ async function api(path, opts = {}) {
         ...opts,
         body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
-    return res.json();
+    const json = await res.json();
+    // Unwrap paginated responses: { data: [...], total, page, limit, totalPages }
+    if (json && typeof json === 'object' && Array.isArray(json.data) && 'total' in json && 'page' in json) {
+        return json.data;
+    }
+    return json;
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function renderMarkdown(text) {
+    var BT3 = String.fromCharCode(96,96,96);
+    var BT1 = String.fromCharCode(96);
+    var parts = text.split(new RegExp('(' + BT3 + '[\\\\s\\\\S]*?' + BT3 + ')', 'g'));
+    var inlineCodeRe = new RegExp(BT1 + '([^' + BT1 + ']+)' + BT1, 'g');
+    return parts.map(function(part) {
+        if (part.indexOf(BT3) === 0) {
+            var inner = part.slice(3, part.length - 3);
+            var nlIdx = inner.indexOf('\\n');
+            var lang = nlIdx >= 0 ? inner.slice(0, nlIdx).trim() : '';
+            var code = nlIdx >= 0 ? inner.slice(nlIdx + 1) : inner;
+            if (code.endsWith('\\n')) code = code.slice(0, -1);
+            return '<pre><code data-lang="' + esc(lang || 'text') + '">' + esc(code) + '</code></pre>';
+        }
+        var lines = part.split('\\n');
+        return lines.map(function(line) {
+            var h = esc(line);
+            h = h.replace(/^### (.+)/, '<strong style="display:block;font-size:0.95em;color:var(--teal);margin:4px 0">$1</strong>');
+            h = h.replace(/^## (.+)/, '<strong style="display:block;font-size:1.05em;color:var(--blue);margin:6px 0">$1</strong>');
+            h = h.replace(/^# (.+)/, '<strong style="display:block;font-size:1.15em;color:var(--blue);margin:8px 0">$1</strong>');
+            h = h.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+            h = h.replace(inlineCodeRe, '<code style="background:var(--bg);padding:1px 5px;border-radius:3px;font-size:0.9em">$1</code>');
+            if (h.match(/^- /)) h = '<div style="padding-left:12px">' + h.replace(/^- /, '&#8226; ') + '</div>';
+            if (h.match(/^\\d+\\. /)) h = '<div style="padding-left:12px">' + h + '</div>';
+            return h;
+        }).join('<br>');
+    }).join('');
+}
+function formatTime(ts) {
+    if (!ts) return '';
+    try {
+        var d = new Date(ts);
+        return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch(e) { return ts; }
+}
 function statusBadge(s) {
     const map = { not_started: 'gray', in_progress: 'blue', pending_verification: 'yellow', verified: 'green', failed: 'red', blocked: 'mauve', needs_recheck: 'yellow',
         open: 'blue', resolved: 'green', escalated: 'red', in_review: 'yellow',
@@ -917,7 +969,8 @@ async function loadDashboard() {
 
 async function loadTasks() {
     try {
-        let tasks = await api('tasks');
+        const result = await api('tasks');
+        let tasks = Array.isArray(result) ? result : [];
         if (currentTaskFilter !== 'all') tasks = tasks.filter(t => t.status === currentTaskFilter);
         document.getElementById('taskTableBody').innerHTML = tasks.map(t =>
             '<tr>' +
@@ -981,7 +1034,8 @@ async function createTask() {
 // ==================== TICKETS ====================
 async function loadTickets() {
     try {
-        const tickets = await api('tickets');
+        const result = await api('tickets');
+        const tickets = Array.isArray(result) ? result : [];
         document.getElementById('ticketTableBody').innerHTML = tickets.map(t =>
             '<tr>' +
             '<td>TK-' + String(t.ticket_number).padStart(3, '0') + '</td>' +
@@ -1200,14 +1254,20 @@ async function wizGenerate() {
             name, description: desc, scale: wizConfig.scale, focus: wizConfig.focus,
             priorities: wizConfig.priorities, design
         }});
-        if (data.taskCount && data.plan) {
-            out.style.display = 'none';
+        if (data.plan) {
+            if (data.taskCount > 0) {
+                out.innerHTML = '<div class="detail-panel" style="color:var(--green)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created with ' + data.taskCount + ' tasks.</div>';
+            } else {
+                out.innerHTML = '<div class="detail-panel" style="color:var(--yellow)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created. AI could not generate structured tasks — add tasks manually in the designer.' +
+                    (data.raw_response ? '<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--subtext)">AI Response</summary><pre style="white-space:pre-wrap;color:var(--subtext);margin-top:4px;font-size:0.85em">' + esc(data.raw_response) + '</pre></details>' : '') +
+                    '</div>';
+            }
             openPlanDesigner(data.plan.id, data.plan.name, design);
             loadPlans();
-        } else if (data.raw_response) {
-            out.innerHTML = '<div class="detail-panel"><pre style="white-space:pre-wrap;color:var(--subtext)">' + esc(data.raw_response) + '</pre></div>';
+        } else if (data.error) {
+            out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(data.error) + '</div>';
         } else {
-            out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Unexpected response</div>';
+            out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Unexpected response from server</div>';
         }
     } catch (err) {
         out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(String(err)) + '</div>';
@@ -1223,12 +1283,18 @@ async function wizQuick() {
     out.innerHTML = '<div class="loading-overlay"><div class="spinner"></div> Generating plan...</div>';
     try {
         const data = await api('plans/generate', { method: 'POST', body: { name, description: desc } });
-        if (data.taskCount && data.plan) {
-            out.style.display = 'none';
+        if (data.plan) {
+            if (data.taskCount > 0) {
+                out.innerHTML = '<div class="detail-panel" style="color:var(--green)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created with ' + data.taskCount + ' tasks.</div>';
+            } else {
+                out.innerHTML = '<div class="detail-panel" style="color:var(--yellow)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created. Add tasks manually in the designer.</div>';
+            }
             openPlanDesigner(data.plan.id, data.plan.name, {});
             loadPlans();
+        } else if (data.error) {
+            out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(data.error) + '</div>';
         } else {
-            out.innerHTML = '<div class="detail-panel"><pre style="white-space:pre-wrap;color:var(--subtext)">' + esc(JSON.stringify(data, null, 2)) + '</pre></div>';
+            out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Unexpected response from server</div>';
         }
     } catch (err) {
         out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(String(err)) + '</div>';
@@ -1480,7 +1546,8 @@ function pdBackToWizard() {
 // ===== PLAN LIST =====
 async function loadPlans() {
     try {
-        const plans = await api('plans');
+        const result = await api('plans');
+        const plans = Array.isArray(result) ? result : [];
         document.getElementById('plansList').innerHTML = plans.length ? '<table><thead><tr><th>Name</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>' +
             plans.map(p => '<tr><td class="clickable" onclick="showPlanDetail(\\'' + p.id + '\\')">' + esc(p.name) + '</td><td>' + statusBadge(p.status) + '</td><td>' + esc(p.created_at) + '</td><td><button class="btn btn-sm btn-primary" onclick="openPlanDesignerFromList(\\'' + p.id + '\\')">Design</button></td></tr>').join('') +
             '</tbody></table>' : '<div class="empty">No plans yet. Create one above.</div>';
@@ -1521,7 +1588,8 @@ async function activatePlan(id) {
 // ==================== AGENTS ====================
 async function loadAgents() {
     try {
-        const agents = await api('agents');
+        const result = await api('agents');
+        const agents = Array.isArray(result) ? result : [];
         document.getElementById('agentCards').innerHTML = agents.map(a =>
             '<div class="card">' +
             '<div style="display:flex;justify-content:space-between;align-items:center">' +
@@ -1539,7 +1607,8 @@ async function loadAgents() {
 // ==================== SYSTEM ====================
 async function loadAudit() {
     try {
-        const log = await api('audit');
+        const result = await api('audit');
+        const log = Array.isArray(result) ? result : [];
         document.getElementById('sysAudit').innerHTML = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">' +
             log.map(e =>
                 '<div class="audit-entry"><span class="audit-agent">' + esc(e.agent) + '</span>: ' + esc(e.action) + ' — ' + esc(e.detail) +
@@ -1562,7 +1631,8 @@ async function loadConfig() {
 
 async function loadEvolution() {
     try {
-        const log = await api('evolution');
+        const result = await api('evolution');
+        const log = Array.isArray(result) ? result : [];
         document.getElementById('sysEvolution').innerHTML = log.length ? '<table><thead><tr><th>Pattern</th><th>Proposal</th><th>Status</th><th>Result</th></tr></thead><tbody>' +
             log.map(e => '<tr><td>' + esc(e.pattern) + '</td><td>' + esc(e.proposal) + '</td><td>' + statusBadge(e.status) + '</td><td>' + esc(e.result || '—') + '</td></tr>').join('') +
             '</tbody></table>' : '<div class="empty">No evolution entries yet</div>';
@@ -1585,7 +1655,8 @@ document.querySelectorAll('.gh-filter').forEach(btn => {
 
 async function loadGitHubIssues() {
     try {
-        let issues = await api('github/issues');
+        const result = await api('github/issues');
+        let issues = Array.isArray(result) ? result : [];
         if (currentGhFilter === 'open') issues = issues.filter(i => i.state === 'open');
         else if (currentGhFilter === 'closed') issues = issues.filter(i => i.state === 'closed');
         else if (currentGhFilter === 'linked') issues = issues.filter(i => i.task_id);
@@ -1644,11 +1715,13 @@ let dsgDragOffset = { x: 0, y: 0 };
 
 async function loadDesignerPlanList() {
     try {
-        const plans = await api('plans');
+        const plansResult = await api('plans');
+        const plans = Array.isArray(plansResult) ? plansResult : [];
         const sel = document.getElementById('designerPlanSelect');
         sel.innerHTML = '<option value="">Select a plan...</option>' + plans.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
         // Also populate coding task select
-        const tasks = await api('tasks');
+        const tasksResult = await api('tasks');
+        const tasks = Array.isArray(tasksResult) ? tasksResult : [];
         const tsel = document.getElementById('codingTaskSelect');
         if (tsel) tsel.innerHTML = '<option value="">Link to task...</option>' + tasks.map(t => '<option value="' + t.id + '">' + esc(t.title) + '</option>').join('');
     } catch(e) {}
@@ -1670,10 +1743,11 @@ async function loadDesignerForPlan(planId) {
 }
 
 async function loadDesignerPages() {
-    dsgPages = await api('design/pages?plan_id=' + dsgPlanId);
+    const result = await api('design/pages?plan_id=' + dsgPlanId);
+    dsgPages = Array.isArray(result) ? result : [];
     if (dsgPages.length === 0) {
         const page = await api('design/pages', { method: 'POST', body: { plan_id: dsgPlanId, name: 'Home' } });
-        dsgPages = [page];
+        if (page && page.id) dsgPages = [page];
     }
     renderPageTabs();
     if (!dsgCurrentPageId || !dsgPages.find(p => p.id === dsgCurrentPageId)) {
@@ -1704,7 +1778,8 @@ async function addDesignPage() {
 }
 
 async function loadPageComponents() {
-    dsgComponents = await api('design/components?page_id=' + dsgCurrentPageId);
+    const result = await api('design/components?page_id=' + dsgCurrentPageId);
+    dsgComponents = Array.isArray(result) ? result : [];
     renderCanvas();
     renderLayers();
     renderProps();
@@ -1815,33 +1890,33 @@ function renderProps() {
     const s = comp.styles || {};
     panel.innerHTML = '' +
         '<div class="prop-section"><h4>Element</h4>' +
-        '<div class="prop-row"><label>Name</label><input value="' + esc(comp.name) + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'name\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-name">Name</label><input id="prop-' + comp.id + '-name" value="' + esc(comp.name) + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'name\\', this.value)"></div>' +
         '<div class="prop-row"><label>Type</label><span style="font-size:0.85em;color:var(--blue)">' + esc(comp.type) + '</span></div>' +
-        '<div class="prop-row"><label>Content</label><input value="' + esc(comp.content) + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'content\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-content">Content</label><input id="prop-' + comp.id + '-content" value="' + esc(comp.content) + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'content\\', this.value)"></div>' +
         '</div>' +
         '<div class="prop-section"><h4>Position & Size</h4>' +
-        '<div class="prop-row"><label>X</label><input type="number" value="' + comp.x + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'x\\', +this.value)"></div>' +
-        '<div class="prop-row"><label>Y</label><input type="number" value="' + comp.y + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'y\\', +this.value)"></div>' +
-        '<div class="prop-row"><label>Width</label><input type="number" value="' + comp.width + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'width\\', +this.value)"></div>' +
-        '<div class="prop-row"><label>Height</label><input type="number" value="' + comp.height + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'height\\', +this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-x">X</label><input id="prop-' + comp.id + '-x" type="number" value="' + comp.x + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'x\\', +this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-y">Y</label><input id="prop-' + comp.id + '-y" type="number" value="' + comp.y + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'y\\', +this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-width">Width</label><input id="prop-' + comp.id + '-width" type="number" value="' + comp.width + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'width\\', +this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-height">Height</label><input id="prop-' + comp.id + '-height" type="number" value="' + comp.height + '" onchange="updateCompProp(\\'' + comp.id + '\\', \\'height\\', +this.value)"></div>' +
         '</div>' +
         '<div class="prop-section"><h4>Appearance</h4>' +
-        '<div class="prop-row"><label>BG</label><input type="color" value="' + (s.backgroundColor || '#313244') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'backgroundColor\\', this.value)"><input value="' + esc(s.backgroundColor || '') + '" placeholder="#hex" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'backgroundColor\\', this.value)" style="flex:1"></div>' +
-        '<div class="prop-row"><label>Color</label><input type="color" value="' + (s.color || '#cdd6f4') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'color\\', this.value)"><input value="' + esc(s.color || '') + '" placeholder="#hex" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'color\\', this.value)" style="flex:1"></div>' +
-        '<div class="prop-row"><label>Font</label><input value="' + esc(s.fontSize || '14px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'fontSize\\', this.value)"></div>' +
-        '<div class="prop-row"><label>Weight</label><select onchange="updateCompStyle(\\'' + comp.id + '\\', \\'fontWeight\\', this.value)"><option' + (!s.fontWeight || s.fontWeight==='normal' ? ' selected' : '') + '>normal</option><option' + (s.fontWeight==='bold' ? ' selected' : '') + '>bold</option><option' + (s.fontWeight==='600' ? ' selected' : '') + '>600</option></select></div>' +
-        '<div class="prop-row"><label>Radius</label><input value="' + esc(s.borderRadius || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'borderRadius\\', this.value)"></div>' +
-        '<div class="prop-row"><label>Border</label><input value="' + esc(s.border || 'none') + '" placeholder="1px solid #ccc" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'border\\', this.value)"></div>' +
-        '<div class="prop-row"><label>Shadow</label><input value="' + esc(s.boxShadow || 'none') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'boxShadow\\', this.value)"></div>' +
-        '<div class="prop-row"><label>Opacity</label><input type="range" min="0" max="1" step="0.05" value="' + (s.opacity ?? 1) + '" oninput="updateCompStyle(\\'' + comp.id + '\\', \\'opacity\\', +this.value)"></div>' +
-        '<div class="prop-row"><label>Padding</label><input value="' + esc(s.padding || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'padding\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-bgColor">BG</label><input id="prop-' + comp.id + '-bgColor" type="color" value="' + (s.backgroundColor || '#313244') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'backgroundColor\\', this.value)"><input id="prop-' + comp.id + '-bgHex" value="' + esc(s.backgroundColor || '') + '" placeholder="#hex" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'backgroundColor\\', this.value)" style="flex:1"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-fgColor">Color</label><input id="prop-' + comp.id + '-fgColor" type="color" value="' + (s.color || '#cdd6f4') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'color\\', this.value)"><input id="prop-' + comp.id + '-fgHex" value="' + esc(s.color || '') + '" placeholder="#hex" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'color\\', this.value)" style="flex:1"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-font">Font</label><input id="prop-' + comp.id + '-font" value="' + esc(s.fontSize || '14px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'fontSize\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-weight">Weight</label><select id="prop-' + comp.id + '-weight" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'fontWeight\\', this.value)"><option' + (!s.fontWeight || s.fontWeight==='normal' ? ' selected' : '') + '>normal</option><option' + (s.fontWeight==='bold' ? ' selected' : '') + '>bold</option><option' + (s.fontWeight==='600' ? ' selected' : '') + '>600</option></select></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-radius">Radius</label><input id="prop-' + comp.id + '-radius" value="' + esc(s.borderRadius || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'borderRadius\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-border">Border</label><input id="prop-' + comp.id + '-border" value="' + esc(s.border || 'none') + '" placeholder="1px solid #ccc" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'border\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-shadow">Shadow</label><input id="prop-' + comp.id + '-shadow" value="' + esc(s.boxShadow || 'none') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'boxShadow\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-opacity">Opacity</label><input id="prop-' + comp.id + '-opacity" type="range" min="0" max="1" step="0.05" value="' + (s.opacity ?? 1) + '" oninput="updateCompStyle(\\'' + comp.id + '\\', \\'opacity\\', +this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-padding">Padding</label><input id="prop-' + comp.id + '-padding" value="' + esc(s.padding || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'padding\\', this.value)"></div>' +
         '</div>' +
         '<div class="prop-section"><h4>Layout (Flex)</h4>' +
-        '<div class="prop-row"><label>Display</label><select onchange="updateCompStyle(\\'' + comp.id + '\\', \\'display\\', this.value)"><option' + (s.display==='block' ? ' selected' : '') + '>block</option><option' + (s.display==='flex' ? ' selected' : '') + '>flex</option><option' + (s.display==='grid' ? ' selected' : '') + '>grid</option><option' + (s.display==='none' ? ' selected' : '') + '>none</option></select></div>' +
-        '<div class="prop-row"><label>Dir</label><select onchange="updateCompStyle(\\'' + comp.id + '\\', \\'flexDirection\\', this.value)"><option' + (s.flexDirection==='row' ? ' selected' : '') + '>row</option><option' + (s.flexDirection==='column' || !s.flexDirection ? ' selected' : '') + '>column</option></select></div>' +
-        '<div class="prop-row"><label>Justify</label><select onchange="updateCompStyle(\\'' + comp.id + '\\', \\'justifyContent\\', this.value)"><option>flex-start</option><option' + (s.justifyContent==='center' ? ' selected' : '') + '>center</option><option' + (s.justifyContent==='flex-end' ? ' selected' : '') + '>flex-end</option><option' + (s.justifyContent==='space-between' ? ' selected' : '') + '>space-between</option></select></div>' +
-        '<div class="prop-row"><label>Align</label><select onchange="updateCompStyle(\\'' + comp.id + '\\', \\'alignItems\\', this.value)"><option>stretch</option><option' + (s.alignItems==='center' ? ' selected' : '') + '>center</option><option' + (s.alignItems==='flex-start' ? ' selected' : '') + '>flex-start</option><option' + (s.alignItems==='flex-end' ? ' selected' : '') + '>flex-end</option></select></div>' +
-        '<div class="prop-row"><label>Gap</label><input value="' + esc(s.gap || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'gap\\', this.value)"></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-display">Display</label><select id="prop-' + comp.id + '-display" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'display\\', this.value)"><option' + (s.display==='block' ? ' selected' : '') + '>block</option><option' + (s.display==='flex' ? ' selected' : '') + '>flex</option><option' + (s.display==='grid' ? ' selected' : '') + '>grid</option><option' + (s.display==='none' ? ' selected' : '') + '>none</option></select></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-dir">Dir</label><select id="prop-' + comp.id + '-dir" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'flexDirection\\', this.value)"><option' + (s.flexDirection==='row' ? ' selected' : '') + '>row</option><option' + (s.flexDirection==='column' || !s.flexDirection ? ' selected' : '') + '>column</option></select></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-justify">Justify</label><select id="prop-' + comp.id + '-justify" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'justifyContent\\', this.value)"><option>flex-start</option><option' + (s.justifyContent==='center' ? ' selected' : '') + '>center</option><option' + (s.justifyContent==='flex-end' ? ' selected' : '') + '>flex-end</option><option' + (s.justifyContent==='space-between' ? ' selected' : '') + '>space-between</option></select></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-align">Align</label><select id="prop-' + comp.id + '-align" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'alignItems\\', this.value)"><option>stretch</option><option' + (s.alignItems==='center' ? ' selected' : '') + '>center</option><option' + (s.alignItems==='flex-start' ? ' selected' : '') + '>flex-start</option><option' + (s.alignItems==='flex-end' ? ' selected' : '') + '>flex-end</option></select></div>' +
+        '<div class="prop-row"><label for="prop-' + comp.id + '-gap">Gap</label><input id="prop-' + comp.id + '-gap" value="' + esc(s.gap || '0px') + '" onchange="updateCompStyle(\\'' + comp.id + '\\', \\'gap\\', this.value)"></div>' +
         '</div>' +
         '<div class="prop-section"><h4>Actions</h4>' +
         '<button class="btn btn-sm btn-secondary" onclick="duplicateComponent(\\'' + comp.id + '\\')" style="margin-right:4px">Duplicate</button>' +
@@ -2000,7 +2075,8 @@ function setCanvasZoom(val) {
 // Design Tokens
 async function loadDesignerTokens() {
     if (!dsgPlanId) return;
-    const tokens = await api('design/tokens?plan_id=' + dsgPlanId);
+    const result = await api('design/tokens?plan_id=' + dsgPlanId);
+    const tokens = Array.isArray(result) ? result : [];
     const el = document.getElementById('tokenList');
     el.innerHTML = tokens.length ? '<div class="token-grid">' + tokens.map(t => {
         const isColor = t.category === 'color';
@@ -2082,9 +2158,37 @@ async function loadCodingMessages() {
         return;
     }
     container.innerHTML = codingMessages.map(m => {
-        const tools = m.tool_calls && m.tool_calls !== '[]' ? '<div class="msg-tools"><strong>Tools:</strong> ' + esc(m.tool_calls) + '</div>' : '';
-        return '<div class="coding-msg ' + esc(m.role) + '"><div class="msg-bubble">' + esc(m.content) + '</div>' + tools +
-            '<div class="msg-meta">' + esc(m.role) + ' — ' + esc(m.created_at) + '</div></div>';
+        var toolsHtml = '';
+        var confidenceBadge = '';
+        if (m.role === 'agent' && m.tool_calls && m.tool_calls !== '[]') {
+            try {
+                var tc = JSON.parse(m.tool_calls);
+                if (tc.confidence !== undefined) {
+                    var cls = tc.confidence >= 70 ? 'confidence-high' : tc.confidence >= 40 ? 'confidence-mid' : 'confidence-low';
+                    confidenceBadge = '<span class="msg-confidence ' + cls + '">' + tc.confidence + '%</span>';
+                }
+                var metaParts = [];
+                if (tc.duration_ms) metaParts.push(tc.duration_ms + 'ms');
+                if (tc.tokens_used) metaParts.push(tc.tokens_used + ' tokens');
+                if (tc.files && tc.files.length > 0) metaParts.push(tc.files.length + ' file(s)');
+                if (tc.requires_approval) metaParts.push('Needs approval');
+                if (tc.warnings && tc.warnings.length > 0) metaParts.push(tc.warnings.length + ' warning(s)');
+                if (metaParts.length > 0) {
+                    toolsHtml = '<div class="msg-tools">' + esc(metaParts.join(' | ')) + '</div>';
+                }
+            } catch (e) {
+                toolsHtml = '<div class="msg-tools"><strong>Tools:</strong> ' + esc(m.tool_calls) + '</div>';
+            }
+        } else if (m.tool_calls && m.tool_calls !== '[]') {
+            toolsHtml = '<div class="msg-tools"><strong>Tools:</strong> ' + esc(m.tool_calls) + '</div>';
+        }
+        var contentHtml = renderMarkdown(m.content || '');
+        var roleLabel = m.role === 'user' ? 'You' : m.role === 'agent' ? 'Coding Agent' : 'System';
+        var roleIcon = m.role === 'user' ? '' : m.role === 'agent' ? '' : '';
+        return '<div class="coding-msg ' + esc(m.role) + '">' +
+            '<div class="msg-role">' + roleIcon + ' ' + roleLabel + '</div>' +
+            '<div class="msg-bubble">' + contentHtml + '</div>' + toolsHtml +
+            '<div class="msg-meta">' + formatTime(m.created_at) + confidenceBadge + '</div></div>';
     }).join('');
     container.scrollTop = container.scrollHeight;
 }
@@ -2095,11 +2199,36 @@ async function sendCodingMsg() {
     const text = input.value.trim();
     if (!text) return;
     const taskId = document.getElementById('codingTaskSelect')?.value || null;
-    await api('coding/messages', { method: 'POST', body: {
-        session_id: currentSessionId, role: 'user', content: text, task_id: taskId
-    }});
+
+    // Clear input and show loading state
     input.value = '';
-    await loadCodingMessages();
+    input.disabled = true;
+    const sendBtn = document.getElementById('codingSendBtn');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Thinking...'; }
+
+    // Show user message + loading bubble immediately
+    const container = document.getElementById('codingMessages');
+    container.innerHTML += '<div class="coding-msg user"><div class="msg-role"> You</div><div class="msg-bubble">' + renderMarkdown(text) + '</div><div class="msg-meta">just now</div></div>';
+    container.innerHTML += '<div class="coding-msg agent loading" id="loadingMsg"><div class="msg-role"> Coding Agent</div><div class="msg-bubble">Thinking...</div></div>';
+    container.scrollTop = container.scrollHeight;
+
+    try {
+        await api('coding/process', { method: 'POST', body: {
+            session_id: currentSessionId, content: text, task_id: taskId
+        }});
+        var loading = document.getElementById('loadingMsg');
+        if (loading) loading.remove();
+        await loadCodingMessages();
+    } catch (e) {
+        var ld = document.getElementById('loadingMsg');
+        if (ld) ld.remove();
+        container.innerHTML += '<div class="coding-msg system"><div class="msg-bubble">Error: ' + esc(String(e)) + '</div></div>';
+        container.scrollTop = container.scrollHeight;
+    } finally {
+        input.disabled = false;
+        input.focus();
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'User Send'; }
+    }
 }
 
 async function addAgentResponse() {
@@ -2166,12 +2295,12 @@ function showSettingsSection(section) {
 
     const sections = {
         llm: () => '<div class="settings-section"><h3>LLM Configuration</h3>' +
-            settingRow('API Endpoint', 'URL of the LLM server (LM Studio, Ollama, OpenAI)', '<input value="' + esc(settingsConfig.llm?.endpoint || '') + '" onchange="updateSetting(\\'llm.endpoint\\', this.value)">') +
-            settingRow('Model', 'Model identifier', '<input value="' + esc(settingsConfig.llm?.model || '') + '" onchange="updateSetting(\\'llm.model\\', this.value)">') +
-            settingRow('Max Tokens', 'Maximum response length', '<input type="number" value="' + (settingsConfig.llm?.maxTokens || 4096) + '" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">') +
-            settingRow('Timeout (seconds)', 'Max total request time', '<input type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">') +
-            settingRow('Startup Timeout', 'Wait for model load', '<input type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 300) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">') +
-            settingRow('Stream Stall Timeout', 'Max gap between stream chunks', '<input type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 120) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">') +
+            settingRow('API Endpoint', 'URL of the LLM server (LM Studio, Ollama, OpenAI)', '<input id="setting-llm-endpoint" value="' + esc(settingsConfig.llm?.endpoint || '') + '" onchange="updateSetting(\\'llm.endpoint\\', this.value)">', 'setting-llm-endpoint') +
+            settingRow('Model', 'Model identifier', '<input id="setting-llm-model" value="' + esc(settingsConfig.llm?.model || '') + '" onchange="updateSetting(\\'llm.model\\', this.value)">', 'setting-llm-model') +
+            settingRow('Max Tokens', 'Maximum response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 4096) + '" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
+            settingRow('Timeout (seconds)', 'Max total request time', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
+            settingRow('Startup Timeout', 'Wait for model load', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 300) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
+            settingRow('Stream Stall Timeout', 'Max gap between stream chunks', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 120) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
             '</div>',
 
         agents: () => {
@@ -2179,43 +2308,43 @@ function showSettingsSection(section) {
             return '<div class="settings-section"><h3>Agent Configuration</h3>' +
                 Object.entries(agents).map(([name, cfg]) =>
                     settingRow(name.charAt(0).toUpperCase() + name.slice(1) + ' Agent', 'Context limit and enabled state',
-                        '<div style="display:flex;gap:8px;align-items:center"><input type="number" value="' + ((cfg && cfg.contextLimit) || 4096) + '" style="width:80px" onchange="updateAgentSetting(\\'' + name + '\\', \\'contextLimit\\', +this.value)"><div class="toggle-switch' + ((cfg && cfg.enabled !== false) ? ' on' : '') + '" onclick="toggleAgent(\\'' + name + '\\', this)"></div></div>')
+                        '<div style="display:flex;gap:8px;align-items:center"><input id="setting-agent-' + name + '-contextLimit" type="number" value="' + ((cfg && cfg.contextLimit) || 4096) + '" style="width:80px" onchange="updateAgentSetting(\\'' + name + '\\', \\'contextLimit\\', +this.value)"><div class="toggle-switch' + ((cfg && cfg.enabled !== false) ? ' on' : '') + '" onclick="toggleAgent(\\'' + name + '\\', this)"></div></div>', 'setting-agent-' + name + '-contextLimit')
                 ).join('') + '</div>';
         },
 
         tasks: () => '<div class="settings-section"><h3>Task Queue</h3>' +
-            settingRow('Max Pending Tasks', 'Maximum tasks in queue before blocking', '<input type="number" value="' + (settingsConfig.taskQueue?.maxPending || 50) + '" onchange="updateSetting(\\'taskQueue.maxPending\\', +this.value)">') +
+            settingRow('Max Pending Tasks', 'Maximum tasks in queue before blocking', '<input id="setting-taskQueue-maxPending" type="number" value="' + (settingsConfig.taskQueue?.maxPending || 50) + '" onchange="updateSetting(\\'taskQueue.maxPending\\', +this.value)">', 'setting-taskQueue-maxPending') +
             '</div>',
 
         verification: () => '<div class="settings-section"><h3>Verification</h3>' +
-            settingRow('Delay (seconds)', 'Wait before running verification after task completion', '<input type="number" value="' + (settingsConfig.verification?.delaySeconds || 5) + '" onchange="updateSetting(\\'verification.delaySeconds\\', +this.value)">') +
-            settingRow('Coverage Threshold (%)', 'Minimum test coverage to pass', '<input type="number" value="' + (settingsConfig.verification?.coverageThreshold || 80) + '" min="0" max="100" onchange="updateSetting(\\'verification.coverageThreshold\\', +this.value)">') +
+            settingRow('Delay (seconds)', 'Wait before running verification after task completion', '<input id="setting-verification-delay" type="number" value="' + (settingsConfig.verification?.delaySeconds || 5) + '" onchange="updateSetting(\\'verification.delaySeconds\\', +this.value)">', 'setting-verification-delay') +
+            settingRow('Coverage Threshold (%)', 'Minimum test coverage to pass', '<input id="setting-verification-coverage" type="number" value="' + (settingsConfig.verification?.coverageThreshold || 80) + '" min="0" max="100" onchange="updateSetting(\\'verification.coverageThreshold\\', +this.value)">', 'setting-verification-coverage') +
             '</div>',
 
         'github-settings': () => '<div class="settings-section"><h3>GitHub Integration</h3>' +
-            settingRow('Personal Access Token', 'GitHub PAT for API access', '<input type="password" value="' + esc(settingsConfig.github?.token || '') + '" onchange="updateSetting(\\'github.token\\', this.value)">') +
-            settingRow('Repository Owner', 'GitHub username or org', '<input value="' + esc(settingsConfig.github?.owner || '') + '" onchange="updateSetting(\\'github.owner\\', this.value)">') +
-            settingRow('Repository Name', 'Repository name', '<input value="' + esc(settingsConfig.github?.repo || '') + '" onchange="updateSetting(\\'github.repo\\', this.value)">') +
-            settingRow('Sync Interval (minutes)', 'How often to auto-sync', '<input type="number" value="' + (settingsConfig.github?.syncIntervalMinutes || 15) + '" onchange="updateSetting(\\'github.syncIntervalMinutes\\', +this.value)">') +
+            settingRow('Personal Access Token', 'GitHub PAT for API access', '<input id="setting-github-token" type="password" value="' + esc(settingsConfig.github?.token || '') + '" onchange="updateSetting(\\'github.token\\', this.value)">', 'setting-github-token') +
+            settingRow('Repository Owner', 'GitHub username or org', '<input id="setting-github-owner" value="' + esc(settingsConfig.github?.owner || '') + '" onchange="updateSetting(\\'github.owner\\', this.value)">', 'setting-github-owner') +
+            settingRow('Repository Name', 'Repository name', '<input id="setting-github-repo" value="' + esc(settingsConfig.github?.repo || '') + '" onchange="updateSetting(\\'github.repo\\', this.value)">', 'setting-github-repo') +
+            settingRow('Sync Interval (minutes)', 'How often to auto-sync', '<input id="setting-github-syncInterval" type="number" value="' + (settingsConfig.github?.syncIntervalMinutes || 15) + '" onchange="updateSetting(\\'github.syncIntervalMinutes\\', +this.value)">', 'setting-github-syncInterval') +
             '</div>',
 
         'designer-settings': () => '<div class="settings-section"><h3>Visual Designer</h3>' +
-            settingRow('Default Canvas Width', 'Desktop canvas width in pixels', '<input type="number" value="1440">') +
-            settingRow('Default Canvas Height', 'Canvas height in pixels', '<input type="number" value="900">') +
-            settingRow('Grid Snap', 'Snap components to grid', '<input type="number" value="8" min="1" max="100">') +
+            settingRow('Default Canvas Width', 'Desktop canvas width in pixels', '<input id="setting-designer-width" type="number" value="1440">', 'setting-designer-width') +
+            settingRow('Default Canvas Height', 'Canvas height in pixels', '<input id="setting-designer-height" type="number" value="900">', 'setting-designer-height') +
+            settingRow('Grid Snap', 'Snap components to grid', '<input id="setting-designer-gridSnap" type="number" value="8" min="1" max="100">', 'setting-designer-gridSnap') +
             settingRow('Show Grid', 'Display grid lines on canvas', '<div class="toggle-switch on" onclick="this.classList.toggle(\\'on\\')"></div>') +
             '</div>',
 
         appearance: () => '<div class="settings-section"><h3>Appearance</h3>' +
-            settingRow('Theme', 'Dashboard color theme', '<select><option selected>Dark (Catppuccin Mocha)</option><option>Light</option><option>High Contrast</option></select>') +
+            settingRow('Theme', 'Dashboard color theme', '<select id="setting-ui-theme"><option selected>Dark (Catppuccin Mocha)</option><option>Light</option><option>High Contrast</option></select>', 'setting-ui-theme') +
             settingRow('Compact Mode', 'Reduce padding and spacing', '<div class="toggle-switch" onclick="this.classList.toggle(\\'on\\')"></div>') +
-            settingRow('Font Size', 'Base font size', '<select><option>Small (13px)</option><option selected>Medium (14px)</option><option>Large (16px)</option></select>') +
+            settingRow('Font Size', 'Base font size', '<select id="setting-ui-fontSize"><option>Small (13px)</option><option selected>Medium (14px)</option><option>Large (16px)</option></select>', 'setting-ui-fontSize') +
             '</div>',
 
         advanced: () => '<div class="settings-section"><h3>Advanced</h3>' +
-            settingRow('Watcher Debounce (ms)', 'File change detection delay', '<input type="number" value="' + (settingsConfig.watcher?.debounceMs || 2000) + '" onchange="updateSetting(\\'watcher.debounceMs\\', +this.value)">') +
-            settingRow('Database Path', 'SQLite database location', '<input value=".coe/tickets.db" disabled style="opacity:0.6">') +
-            settingRow('MCP Port', 'MCP server port (auto-increments if busy)', '<input type="number" value="3030" disabled style="opacity:0.6">') +
+            settingRow('Watcher Debounce (ms)', 'File change detection delay', '<input id="setting-advanced-debounce" type="number" value="' + (settingsConfig.watcher?.debounceMs || 2000) + '" onchange="updateSetting(\\'watcher.debounceMs\\', +this.value)">', 'setting-advanced-debounce') +
+            settingRow('Database Path', 'SQLite database location', '<input id="setting-advanced-dbPath" value=".coe/tickets.db" disabled style="opacity:0.6">', 'setting-advanced-dbPath') +
+            settingRow('MCP Port', 'MCP server port (auto-increments if busy)', '<input id="setting-advanced-mcpPort" type="number" value="3030" disabled style="opacity:0.6">', 'setting-advanced-mcpPort') +
             '<div class="btn-row"><button class="btn btn-danger btn-sm" onclick="if(confirm(\\'Reset all settings to defaults?\\'))resetSettings()">Reset to Defaults</button></div>' +
             '</div>',
     };
@@ -2223,8 +2352,9 @@ function showSettingsSection(section) {
     panel.innerHTML = (sections[section] || sections.llm)();
 }
 
-function settingRow(label, desc, control) {
-    return '<div class="setting-row"><div class="setting-label"><strong>' + label + '</strong><span>' + desc + '</span></div><div class="setting-control">' + control + '</div></div>';
+function settingRow(label, desc, control, forId) {
+    const labelTag = forId ? '<label for="' + forId + '"><strong>' + label + '</strong><span>' + desc + '</span></label>' : '<div class="setting-label"><strong>' + label + '</strong><span>' + desc + '</span></div>';
+    return '<div class="setting-row">' + labelTag + '<div class="setting-control">' + control + '</div></div>';
 }
 
 async function updateSetting(path, value) {

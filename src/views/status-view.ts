@@ -32,7 +32,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<StatusItem> {
         const items: StatusItem[] = [];
         const stats = this.database.getStats();
         const plan = this.database.getActivePlan();
-        const agents = this.database.getAllAgents();
+        const agents = this.database.getAllAgents() || [];
 
         // MCP Server status
         const port = this.mcpServer.getPort();

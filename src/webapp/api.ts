@@ -2,6 +2,7 @@ import * as http from 'http';
 import { Database } from '../core/database';
 import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from '../core/config';
+import { CodingAgentService } from '../core/coding-agent';
 import { getEventBus } from '../core/event-bus';
 import { AgentContext, PlanStatus, TaskPriority, TicketPriority } from '../types';
 
@@ -92,13 +93,54 @@ function extractParam(route: string, pattern: string): string | null {
     return paramIdx >= 0 ? routeParts[paramIdx] : null;
 }
 
+function formatAgentResponse(response: {
+    explanation: string;
+    code: string;
+    language: string;
+    files: Array<{ name: string; content: string; language: string }>;
+    confidence: number;
+    warnings: string[];
+    requires_approval: boolean;
+    duration_ms: number;
+}): string {
+    const parts: string[] = [];
+
+    if (response.explanation) {
+        parts.push(response.explanation);
+    }
+
+    if (response.files.length > 0) {
+        for (const file of response.files) {
+            parts.push(`\n📄 ${file.name}:`);
+            parts.push('```' + file.language + '\n' + file.content + '\n```');
+        }
+    } else if (response.code) {
+        parts.push('```' + response.language + '\n' + response.code + '\n```');
+    }
+
+    if (response.warnings.length > 0) {
+        parts.push('\n⚠️ ' + response.warnings.join('\n⚠️ '));
+    }
+
+    const meta: string[] = [];
+    meta.push(`Confidence: ${response.confidence}%`);
+    meta.push(`Time: ${response.duration_ms}ms`);
+    if (response.requires_approval) {
+        meta.push('🔒 Requires approval');
+    }
+    parts.push('\n' + meta.join(' | '));
+
+    return parts.join('\n');
+}
+
 export async function handleApiRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     pathname: string,
     database: Database,
     orchestrator: Orchestrator,
-    config: ConfigManager
+    config: ConfigManager,
+    codingAgentService?: CodingAgentService
 ): Promise<boolean> {
     if (!pathname.startsWith('/api/')) return false;
 
@@ -299,6 +341,20 @@ export async function handleApiRequest(
             return true;
         }
 
+        if (route === 'plans' && method === 'POST') {
+            const body = await parseBody(req);
+            const planName = body.name as string;
+            if (!planName) { json(res, { error: 'name is required' }, 400); return true; }
+            const plan = database.createPlan(planName, JSON.stringify(body.config || {}));
+            if (body.status) {
+                database.updatePlan(plan.id, { status: body.status as PlanStatus });
+            }
+            eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
+            database.addAuditLog('webapp', 'plan_created', `Plan "${planName}" created via web app`);
+            json(res, database.getPlan(plan.id), 201);
+            return true;
+        }
+
         if (route === 'plans/generate' && method === 'POST') {
             const body = await parseBody(req);
             const name = body.name as string;
@@ -309,64 +365,73 @@ export async function handleApiRequest(
             const design = (body.design as Record<string, string>) || {};
 
             const prompt = [
-                `Create a structured development plan called "${name}".`,
+                `You are a project planning assistant. Create a structured development plan called "${name}".`,
                 `Project Scale: ${scale}`,
                 `Primary Focus: ${focus}`,
                 `Key Priorities: ${priorities.join(', ')}`,
                 `Description: ${description}`,
                 '',
-                'Generate atomic tasks (15-45 min each) with:',
-                '- Clear title and description',
-                '- Acceptance criteria',
-                '- Priority (P1 = critical, P2 = important, P3 = nice-to-have)',
-                '- Dependencies (which tasks must complete first)',
-                '- Estimated minutes',
+                'Generate atomic tasks (15-45 min each). Each task needs:',
+                '- title: clear action-oriented name',
+                '- description: what to implement',
+                '- priority: "P1" (critical), "P2" (important), or "P3" (nice-to-have)',
+                '- estimated_minutes: number between 15 and 45',
+                '- acceptance_criteria: how to verify it is done',
+                '- depends_on_titles: array of task titles this depends on (empty array if none)',
                 '',
-                'Return as JSON: { "plan_name": "...", "tasks": [{ "title": "...", "description": "...", "priority": "P1|P2|P3", "estimated_minutes": N, "acceptance_criteria": "...", "depends_on_titles": [] }] }',
+                'IMPORTANT: You MUST respond with ONLY valid JSON. No explanation, no markdown, no text before or after.',
+                'Response format:',
+                '{"plan_name": "...", "tasks": [{"title": "...", "description": "...", "priority": "P1", "estimated_minutes": 30, "acceptance_criteria": "...", "depends_on_titles": []}]}',
             ].join('\n');
 
             const ctx: AgentContext = { conversationHistory: [] };
             const response = await orchestrator.callAgent('planning', prompt, ctx);
 
             // Try to parse structured response
+            let parsed: { tasks?: Array<{ title: string; description?: string; priority?: string; estimated_minutes?: number; acceptance_criteria?: string; depends_on_titles?: string[] }> } | null = null;
             try {
                 const jsonMatch = response.content.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
-                    const parsed = JSON.parse(jsonMatch[0]);
-                    if (parsed.tasks && Array.isArray(parsed.tasks)) {
-                        const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities, design }));
-                        database.updatePlan(plan.id, { status: PlanStatus.Active });
-
-                        const titleToId: Record<string, string> = {};
-                        let sortIdx = 0;
-                        for (const t of parsed.tasks) {
-                            const deps = (t.depends_on_titles || [])
-                                .map((title: string) => titleToId[title])
-                                .filter(Boolean);
-                            const task = database.createTask({
-                                title: t.title,
-                                description: t.description || '',
-                                priority: (['P1', 'P2', 'P3'].includes(t.priority) ? t.priority : 'P2') as TaskPriority,
-                                estimated_minutes: t.estimated_minutes || 30,
-                                acceptance_criteria: t.acceptance_criteria || '',
-                                plan_id: plan.id,
-                                dependencies: deps,
-                                sort_order: sortIdx * 10,
-                            });
-                            titleToId[t.title] = task.id;
-                            sortIdx++;
-                        }
-
-                        eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
-                        database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
-                        json(res, { plan, taskCount: parsed.tasks.length, tasks: database.getTasksByPlan(plan.id) }, 201);
-                        return true;
-                    }
+                    parsed = JSON.parse(jsonMatch[0]);
                 }
-            } catch { /* fall through */ }
+            } catch { /* JSON parse failed */ }
 
-            // Raw response if structured parsing failed
-            json(res, { raw_response: response.content });
+            // Create the plan regardless of whether LLM returned valid JSON
+            const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities, design }));
+            database.updatePlan(plan.id, { status: PlanStatus.Active });
+
+            if (parsed?.tasks && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+                // LLM returned valid structured tasks
+                const titleToId: Record<string, string> = {};
+                let sortIdx = 0;
+                for (const t of parsed.tasks) {
+                    const deps = (t.depends_on_titles || [])
+                        .map((title: string) => titleToId[title])
+                        .filter(Boolean);
+                    const task = database.createTask({
+                        title: t.title,
+                        description: t.description || '',
+                        priority: (['P1', 'P2', 'P3'].includes(t.priority ?? '') ? t.priority : 'P2') as TaskPriority,
+                        estimated_minutes: t.estimated_minutes || 30,
+                        acceptance_criteria: t.acceptance_criteria || '',
+                        plan_id: plan.id,
+                        dependencies: deps,
+                        sort_order: sortIdx * 10,
+                    });
+                    titleToId[t.title] = task.id;
+                    sortIdx++;
+                }
+
+                eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
+                database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
+                json(res, { plan: database.getPlan(plan.id), taskCount: parsed.tasks.length, tasks: database.getTasksByPlan(plan.id) }, 201);
+                return true;
+            }
+
+            // LLM didn't return valid JSON — plan created but with no tasks
+            eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
+            database.addAuditLog('planning', 'plan_created', `Plan "${name}": created without AI tasks (parsing failed)`);
+            json(res, { plan: database.getPlan(plan.id), taskCount: 0, tasks: [], raw_response: response.content }, 201);
             return true;
         }
 
@@ -738,6 +803,116 @@ export async function handleApiRequest(
         if (msgSessionId && method === 'GET') {
             const messages = database.getCodingMessages(msgSessionId);
             json(res, messages);
+            return true;
+        }
+
+        // ==================== CODING AGENT PROCESSING ====================
+        if (route === 'coding/process' && method === 'POST') {
+            if (!codingAgentService) {
+                json(res, { error: 'Coding agent service not available' }, 503);
+                return true;
+            }
+
+            const body = await parseBody(req);
+            const sessionId = body.session_id as string;
+            const content = body.content as string;
+            const taskId = (body.task_id as string) || undefined;
+
+            if (!sessionId || !content) {
+                json(res, { error: 'session_id and content are required' }, 400);
+                return true;
+            }
+
+            // 1. Store the user message
+            const userMsg = database.addCodingMessage({
+                session_id: sessionId,
+                role: 'user',
+                content: content,
+                task_id: taskId,
+            });
+
+            // 2. Build context from session
+            const session = database.getCodingSession(sessionId);
+            const previousMessages = database.getCodingMessages(sessionId, 20);
+
+            const agentContext: {
+                plan_id?: string | null;
+                session_id?: string | null;
+                constraints?: Record<string, unknown>;
+            } = {
+                session_id: sessionId,
+                plan_id: session?.plan_id ?? null,
+            };
+
+            // If a task is linked, pull plan context from it
+            if (taskId) {
+                const task = database.getTask(taskId);
+                if (task?.plan_id) {
+                    agentContext.plan_id = task.plan_id;
+                }
+            }
+
+            // Pass conversation history so the agent has context
+            const conversationHistory = previousMessages
+                .slice(-10)
+                .map(m => `[${m.role}]: ${m.content}`)
+                .join('\n');
+            agentContext.constraints = { conversation_history: conversationHistory };
+
+            // 3. Process through coding agent
+            try {
+                const agentResponse = await codingAgentService.processCommand(content, agentContext);
+
+                // 4. Format agent message content
+                const agentContent = formatAgentResponse(agentResponse);
+
+                // 5. Build metadata from response
+                const toolCallsData = {
+                    confidence: agentResponse.confidence,
+                    files: agentResponse.files.map(f => f.name),
+                    warnings: agentResponse.warnings,
+                    requires_approval: agentResponse.requires_approval,
+                    tokens_used: agentResponse.tokens_used,
+                    duration_ms: agentResponse.duration_ms,
+                };
+
+                // 6. Store the agent response message
+                const agentMsg = database.addCodingMessage({
+                    session_id: sessionId,
+                    role: 'agent',
+                    content: agentContent,
+                    tool_calls: JSON.stringify(toolCallsData),
+                    task_id: taskId,
+                });
+
+                eventBus.emit('coding:agent_responded', 'webapp', {
+                    sessionId,
+                    userMessageId: userMsg.id,
+                    agentMessageId: agentMsg.id,
+                    confidence: agentResponse.confidence,
+                    duration_ms: agentResponse.duration_ms,
+                });
+
+                json(res, {
+                    user_message: userMsg,
+                    agent_message: agentMsg,
+                    agent_response: agentResponse,
+                }, 201);
+            } catch (error) {
+                const errorStr = error instanceof Error ? error.message : String(error);
+                const errorMessage = database.addCodingMessage({
+                    session_id: sessionId,
+                    role: 'system',
+                    content: `Error processing message: ${errorStr}`,
+                });
+
+                json(res, {
+                    user_message: userMsg,
+                    error_message: errorMessage,
+                    error: errorStr,
+                }, 500);
+            }
+
             return true;
         }
 

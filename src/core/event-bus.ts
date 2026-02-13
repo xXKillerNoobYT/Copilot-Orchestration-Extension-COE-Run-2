@@ -40,6 +40,7 @@ export type COEEventType =
     | 'design:flow_created' | 'design:flow_deleted'
     // Coding
     | 'coding:session_created' | 'coding:message_sent' | 'coding:session_completed'
+    | 'coding:agent_responded'
     // Coding Agent (v2.0)
     | 'coding_agent:command_received' | 'coding_agent:generating' | 'coding_agent:completed'
     | 'coding_agent:diff_pending' | 'coding_agent:diff_approved' | 'coding_agent:diff_rejected'

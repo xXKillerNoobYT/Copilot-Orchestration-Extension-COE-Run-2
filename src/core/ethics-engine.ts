@@ -240,7 +240,16 @@ const DEFAULT_MODULES: DefaultModuleSeed[] = [
             + 'and UI code generation by default.',
         sensitivity: EthicsSensitivity.High,
         scope: ['sensitive_operations'],
-        allowed_actions: ['read_local_files', 'generate_ui_code'],
+        allowed_actions: [
+            'read_local_files',
+            'generate_ui_code',
+            'coding_agent_build',
+            'coding_agent_modify',
+            'coding_agent_explain',
+            'coding_agent_fix',
+            'coding_agent_automate',
+            'coding_agent_query',
+        ],
         blocked_actions: ['execute_without_approval'],
         rules: [
             {
