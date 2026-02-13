@@ -2,7 +2,65 @@ import * as http from 'http';
 import { Database } from '../core/database';
 import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from '../core/config';
+import { getEventBus } from '../core/event-bus';
 import { AgentContext, PlanStatus, TaskPriority, TicketPriority } from '../types';
+
+// ==================== PAGINATION HELPERS ====================
+
+interface PaginationParams {
+    page: number;
+    limit: number;
+    search?: string;
+    sort?: string;
+    order: 'asc' | 'desc';
+    status?: string;
+    priority?: string;
+}
+
+function parsePagination(req: http.IncomingMessage): PaginationParams {
+    const url = new URL(req.url || '', 'http://localhost');
+    return {
+        page: Math.max(1, parseInt(url.searchParams.get('page') || '1')),
+        limit: Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '50'))),
+        search: url.searchParams.get('search') || undefined,
+        sort: url.searchParams.get('sort') || undefined,
+        order: (url.searchParams.get('order') === 'asc' ? 'asc' : 'desc'),
+        status: url.searchParams.get('status') || undefined,
+        priority: url.searchParams.get('priority') || undefined,
+    };
+}
+
+function paginateAndFilter<T extends Record<string, unknown>>(items: T[], params: PaginationParams): { data: T[]; total: number; page: number; limit: number; totalPages: number } {
+    let filtered = [...items];
+    if (params.search) {
+        const q = params.search.toLowerCase();
+        filtered = filtered.filter(item => {
+            return Object.values(item).some(v =>
+                typeof v === 'string' && v.toLowerCase().includes(q)
+            );
+        });
+    }
+    if (params.status) {
+        filtered = filtered.filter(item => (item as any).status === params.status);
+    }
+    if (params.priority) {
+        filtered = filtered.filter(item => (item as any).priority === params.priority);
+    }
+    if (params.sort) {
+        const field = params.sort;
+        filtered.sort((a, b) => {
+            const va = a[field] ?? '';
+            const vb = b[field] ?? '';
+            if (typeof va === 'number' && typeof vb === 'number') return params.order === 'asc' ? va - vb : vb - va;
+            return params.order === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+        });
+    }
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / params.limit);
+    const start = (params.page - 1) * params.limit;
+    const data = filtered.slice(start, start + params.limit);
+    return { data, total, page: params.page, limit: params.limit, totalPages };
+}
 
 function parseBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
@@ -45,10 +103,39 @@ export async function handleApiRequest(
     if (!pathname.startsWith('/api/')) return false;
 
     const method = req.method || 'GET';
-    const route = pathname.slice(5); // strip "/api/"
+    const route = pathname.slice(5); // strip \"/api/\"
+    const eventBus = getEventBus();
 
     try {
-        // ==================== DASHBOARD ====================
+        // ==================== SSE EVENT STREAM ====================
+        if (route === 'events/stream' && method === 'GET') {
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            });
+            const handler = (event: any) => {
+                res.write('data: ' + JSON.stringify(event) + '\n\n');
+            };
+            eventBus.on('*', handler);
+            req.on('close', () => {
+                eventBus.off('*', handler);
+            });
+            return true;
+        }
+
+        // ==================== EVENT HISTORY ====================
+        if (route === 'events/history' && method === 'GET') {
+            json(res, eventBus.getHistory(100));
+            return true;
+        }
+
+        // ==================== EVENT METRICS ====================
+        if (route === 'events/metrics' && method === 'GET') {
+            json(res, eventBus.getMetrics());
+            return true;
+        }
+// ==================== DASHBOARD ====================
         if (route === 'dashboard' && method === 'GET') {
             const stats = database.getStats();
             const plan = database.getActivePlan();
@@ -73,7 +160,9 @@ export async function handleApiRequest(
 
         // ==================== TASKS ====================
         if (route === 'tasks' && method === 'GET') {
-            json(res, database.getAllTasks());
+            const params = parsePagination(req);
+            const allTasks = database.getAllTasks() as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allTasks, params));
             return true;
         }
 
@@ -90,6 +179,7 @@ export async function handleApiRequest(
                 sort_order: (body.sort_order as number) || 0,
                 dependencies: (body.dependencies as string[]) || [],
             });
+            eventBus.emit('task:created', 'webapp', { taskId: task.id, title: task.title });
             database.addAuditLog('webapp', 'task_created', `Task "${task.title}" created via web app`);
             json(res, task, 201);
             return true;
@@ -103,6 +193,7 @@ export async function handleApiRequest(
                 return true;
             }
             database.reorderTasks(orders);
+            eventBus.emit('task:reordered', 'webapp', { count: orders.length });
             database.addAuditLog('webapp', 'tasks_reordered', `${orders.length} tasks reordered via drag & drop`);
             json(res, { success: true });
             return true;
@@ -127,6 +218,7 @@ export async function handleApiRequest(
             const body = await parseBody(req);
             const updated = database.updateTask(taskId, body as any);
             if (!updated) { json(res, { error: 'Task not found' }, 404); return true; }
+            eventBus.emit('task:updated', 'webapp', { taskId: taskId, title: updated.title });
             database.addAuditLog('webapp', 'task_updated', `Task "${updated.title}" updated via web app`);
             json(res, updated);
             return true;
@@ -134,13 +226,16 @@ export async function handleApiRequest(
         if (taskId && method === 'DELETE') {
             const deleted = database.deleteTask(taskId);
             if (!deleted) { json(res, { error: 'Task not found' }, 404); return true; }
+            eventBus.emit('task:deleted', 'webapp', { taskId: taskId });
             json(res, { success: true });
             return true;
         }
 
         // ==================== TICKETS ====================
         if (route === 'tickets' && method === 'GET') {
-            json(res, database.getAllTickets());
+            const params = parsePagination(req);
+            const allTickets = database.getAllTickets() as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allTickets, params));
             return true;
         }
 
@@ -152,6 +247,7 @@ export async function handleApiRequest(
                 priority: (body.priority as TicketPriority) || TicketPriority.P2,
                 creator: (body.creator as string) || 'user',
             });
+            eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
             database.addAuditLog('webapp', 'ticket_created', `Ticket TK-${ticket.ticket_number} created via web app`);
             json(res, ticket, 201);
             return true;
@@ -171,6 +267,7 @@ export async function handleApiRequest(
                 body.body as string,
                 body.clarity_score as number | undefined
             );
+            eventBus.emit('ticket:replied', 'webapp', { ticketId: replyTicketId, replyId: reply.id });
             json(res, reply, 201);
             return true;
         }
@@ -188,6 +285,7 @@ export async function handleApiRequest(
             const body = await parseBody(req);
             const updated = database.updateTicket(ticketId, body as any);
             if (!updated) { json(res, { error: 'Ticket not found' }, 404); return true; }
+            eventBus.emit('ticket:updated', 'webapp', { ticketId: ticketId, ticketNumber: updated.ticket_number });
             database.addAuditLog('webapp', 'ticket_updated', `Ticket TK-${updated.ticket_number} updated via web app`);
             json(res, updated);
             return true;
@@ -195,7 +293,9 @@ export async function handleApiRequest(
 
         // ==================== PLANS ====================
         if (route === 'plans' && method === 'GET') {
-            json(res, database.getAllPlans());
+            const params = parsePagination(req);
+            const allPlans = database.getAllPlans() as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allPlans, params));
             return true;
         }
 
@@ -257,6 +357,7 @@ export async function handleApiRequest(
                             sortIdx++;
                         }
 
+                        eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
                         database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
                         json(res, { plan, taskCount: parsed.tasks.length, tasks: database.getTasksByPlan(plan.id) }, 201);
                         return true;
@@ -282,25 +383,32 @@ export async function handleApiRequest(
             const body = await parseBody(req);
             const updated = database.updatePlan(planId, body as any);
             if (!updated) { json(res, { error: 'Plan not found' }, 404); return true; }
+            eventBus.emit('plan:updated', 'webapp', { planId: planId, name: updated.name });
             json(res, updated);
             return true;
         }
 
         // ==================== AGENTS ====================
         if (route === 'agents' && method === 'GET') {
-            json(res, database.getAllAgents());
+            const params = parsePagination(req);
+            const allAgents = database.getAllAgents() as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allAgents, params));
             return true;
         }
 
         // ==================== AUDIT LOG ====================
         if (route === 'audit' && method === 'GET') {
-            json(res, database.getAuditLog(100));
+            const params = parsePagination(req);
+            const allAudit = database.getAuditLog(100) as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allAudit, params));
             return true;
         }
 
         // ==================== EVOLUTION ====================
         if (route === 'evolution' && method === 'GET') {
-            json(res, database.getEvolutionLog(50));
+            const params = parsePagination(req);
+            const allEvolution = database.getEvolutionLog(50) as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allEvolution, params));
             return true;
         }
 
@@ -315,6 +423,7 @@ export async function handleApiRequest(
         const approveTaskId = extractParam(route, 'verification/:id/approve');
         if (approveTaskId && method === 'POST') {
             database.updateTask(approveTaskId, { status: 'verified' as any });
+            eventBus.emit('verification:approved', 'webapp', { taskId: approveTaskId });
             database.addAuditLog('webapp', 'verification_approved', `Task ${approveTaskId} approved via web app`);
             json(res, { success: true });
             return true;
@@ -325,17 +434,19 @@ export async function handleApiRequest(
             const body = await parseBody(req);
             database.updateTask(rejectTaskId, { status: 'failed' as any });
             const reason = (body.reason as string) || 'Rejected via web app';
+            eventBus.emit('verification:rejected', 'webapp', { taskId: rejectTaskId, reason });
             database.addAuditLog('webapp', 'verification_rejected', `Task ${rejectTaskId}: ${reason}`);
             // Create follow-up task
             const task = database.getTask(rejectTaskId);
             if (task) {
-                database.createTask({
+                const fixTask = database.createTask({
                     title: `Fix: ${task.title}`,
                     description: `Verification rejected: ${reason}`,
                     priority: task.priority,
                     plan_id: task.plan_id || undefined,
                     dependencies: [rejectTaskId],
                 });
+                eventBus.emit('task:created', 'webapp', { taskId: fixTask.id, title: fixTask.title });
             }
             json(res, { success: true });
             return true;
@@ -371,6 +482,7 @@ export async function handleApiRequest(
                 const syncService = new GitHubSyncService(client, database, config, { appendLine: () => {} } as any);
                 const taskId = syncService.convertIssueToTask(convertId);
                 if (taskId) {
+                    eventBus.emit('task:created', 'webapp', { taskId, source: 'github_issue', issueId: convertId });
                     json(res, { success: true, task_id: taskId });
                 } else {
                     json(res, { error: 'Failed to convert issue' }, 400);
@@ -391,6 +503,7 @@ export async function handleApiRequest(
             const currentConfig = config.getConfig();
             const merged = { ...currentConfig, ...body };
             config.updateConfig(merged as any);
+            eventBus.emit('system:config_updated', 'webapp', { updatedKeys: Object.keys(body) });
             database.addAuditLog('webapp', 'config_updated', 'Configuration updated via Settings tab');
             json(res, config.getConfig());
             return true;
@@ -415,6 +528,7 @@ export async function handleApiRequest(
                 height: (body.height as number) || 900,
                 background: (body.background as string) || '#1e1e2e',
             });
+            eventBus.emit('design:page_created', 'webapp', { pageId: page.id, name: page.name });
             database.addAuditLog('webapp', 'design_page_created', `Page "${page.name}" created`);
             json(res, page, 201);
             return true;
@@ -424,11 +538,13 @@ export async function handleApiRequest(
         if (designPageId && method === 'PUT') {
             const body = await parseBody(req);
             const updated = database.updateDesignPage(designPageId, body as any);
+            eventBus.emit('design:page_updated', 'webapp', { pageId: designPageId });
             json(res, updated);
             return true;
         }
         if (designPageId && method === 'DELETE') {
             database.deleteDesignPage(designPageId);
+            eventBus.emit('design:page_deleted', 'webapp', { pageId: designPageId });
             json(res, { success: true });
             return true;
         }
@@ -465,6 +581,7 @@ export async function handleApiRequest(
                 content: (body.content as string) || '',
                 props: (body.props as Record<string, unknown>) || {},
             } as any);
+            eventBus.emit('design:component_created', 'webapp', { componentId: comp.id, name: comp.name });
             json(res, comp, 201);
             return true;
         }
@@ -474,6 +591,7 @@ export async function handleApiRequest(
             const updates = body.updates as Array<{ id: string; x?: number; y?: number; width?: number; height?: number; sort_order?: number; parent_id?: string | null }>;
             if (!Array.isArray(updates)) { json(res, { error: 'updates must be an array' }, 400); return true; }
             database.batchUpdateComponents(updates);
+            eventBus.emit('design:component_updated', 'webapp', { batchCount: updates.length });
             json(res, { success: true });
             return true;
         }
@@ -488,11 +606,13 @@ export async function handleApiRequest(
         if (compId && method === 'PUT') {
             const body = await parseBody(req);
             const updated = database.updateDesignComponent(compId, body as Record<string, unknown>);
+            eventBus.emit('design:component_updated', 'webapp', { componentId: compId });
             json(res, updated);
             return true;
         }
         if (compId && method === 'DELETE') {
             database.deleteDesignComponent(compId);
+            eventBus.emit('design:component_deleted', 'webapp', { componentId: compId });
             json(res, { success: true });
             return true;
         }
@@ -514,6 +634,7 @@ export async function handleApiRequest(
                 value: body.value as string,
                 description: (body.description as string) || '',
             });
+            eventBus.emit('design:token_created', 'webapp', { tokenId: token.id, name: token.name });
             json(res, token, 201);
             return true;
         }
@@ -527,6 +648,7 @@ export async function handleApiRequest(
         }
         if (tokenId && method === 'DELETE') {
             database.deleteDesignToken(tokenId);
+            eventBus.emit('design:token_deleted', 'webapp', { tokenId: tokenId });
             json(res, { success: true });
             return true;
         }
@@ -548,6 +670,7 @@ export async function handleApiRequest(
                 trigger: (body.trigger as string) || 'click',
                 label: (body.label as string) || '',
             });
+            eventBus.emit('design:flow_created', 'webapp', { flowId: flow.id });
             json(res, flow, 201);
             return true;
         }
@@ -555,13 +678,16 @@ export async function handleApiRequest(
         const flowId = extractParam(route, 'design/flows/:id');
         if (flowId && method === 'DELETE') {
             database.deletePageFlow(flowId);
+            eventBus.emit('design:flow_deleted', 'webapp', { flowId: flowId });
             json(res, { success: true });
             return true;
         }
 
         // ==================== CODING SESSIONS ====================
         if (route === 'coding/sessions' && method === 'GET') {
-            json(res, database.getAllCodingSessions());
+            const params = parsePagination(req);
+            const allSessions = database.getAllCodingSessions() as unknown as Record<string, unknown>[];
+            json(res, paginateAndFilter(allSessions, params));
             return true;
         }
 
@@ -571,6 +697,7 @@ export async function handleApiRequest(
                 plan_id: (body.plan_id as string) || undefined,
                 name: (body.name as string) || 'Coding Session',
             });
+            eventBus.emit('coding:session_created', 'webapp', { sessionId: session.id, name: session.name });
             database.addAuditLog('webapp', 'coding_session_created', `Session "${session.name}" created`);
             json(res, session, 201);
             return true;
@@ -587,6 +714,7 @@ export async function handleApiRequest(
         if (sessionId && method === 'PUT') {
             const body = await parseBody(req);
             database.updateCodingSession(sessionId, body as any);
+            eventBus.emit('coding:session_completed', 'webapp', { sessionId: sessionId });
             json(res, { success: true });
             return true;
         }
@@ -602,6 +730,7 @@ export async function handleApiRequest(
                 tool_calls: (body.tool_calls as string) || undefined,
                 task_id: (body.task_id as string) || undefined,
             });
+            eventBus.emit('coding:message_sent', 'webapp', { messageId: msg.id, sessionId: body.session_id as string });
             json(res, msg, 201);
             return true;
         }

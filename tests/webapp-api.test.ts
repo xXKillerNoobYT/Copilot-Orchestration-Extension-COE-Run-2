@@ -180,7 +180,9 @@ describe('Webapp API Handlers', () => {
 
             expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
             const body = getJsonResponse(res);
-            expect(body).toHaveLength(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
+            expect(body.page).toBe(1);
         });
 
         test('POST /api/tasks creates a task', async () => {
@@ -305,7 +307,8 @@ describe('Webapp API Handlers', () => {
             await handleApiRequest(req, res, '/api/tickets', db, orchestrator, config);
 
             const body = getJsonResponse(res);
-            expect(body).toHaveLength(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
         });
 
         test('POST /api/tickets creates a ticket', async () => {
@@ -418,7 +421,8 @@ describe('Webapp API Handlers', () => {
             await handleApiRequest(req, res, '/api/plans', db, orchestrator, config);
 
             const body = getJsonResponse(res);
-            expect(body).toHaveLength(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
         });
 
         test('GET /api/plans/:id returns plan with tasks', async () => {
@@ -503,7 +507,8 @@ describe('Webapp API Handlers', () => {
             await handleApiRequest(req, res, '/api/agents', db, orchestrator, config);
 
             const body = getJsonResponse(res);
-            expect(body).toHaveLength(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
         });
     });
 
@@ -519,7 +524,8 @@ describe('Webapp API Handlers', () => {
             await handleApiRequest(req, res, '/api/audit', db, orchestrator, config);
 
             const body = getJsonResponse(res);
-            expect(body.length).toBe(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
         });
     });
 
@@ -535,7 +541,8 @@ describe('Webapp API Handlers', () => {
             await handleApiRequest(req, res, '/api/evolution', db, orchestrator, config);
 
             const body = getJsonResponse(res);
-            expect(body).toHaveLength(2);
+            expect(body.data).toHaveLength(2);
+            expect(body.total).toBe(2);
         });
     });
 

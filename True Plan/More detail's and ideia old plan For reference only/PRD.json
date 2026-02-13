@@ -1,0 +1,86 @@
+{
+    "metadata": {
+        "title": "Copilot Orchestration Extension (COE) - PRD",
+        "version": "0.1",
+        "status": "draft",
+        "lastGenerated": "2026-02-01T00:00:00Z",
+        "source": "CONSOLIDATED-MASTER-PLAN.md + PRD.md",
+        "description": "Machine-readable Product Requirements Document for agents and tools"
+    },
+    "features": {
+        "p1_mvp": [
+            {
+                "id": "feat_ticket_db",
+                "name": "Ticket Database",
+                "description": "CRUD operations, persistence to SQLite, fallback to in-memory mode",
+                "priority": "P1",
+                "acceptance_criteria": [
+                    "All CRUD operations functional",
+                    "Error handling for concurrent access",
+                    "Automatic fallback to in-memory on SQLite failure",
+                    "Persistence verified via unit tests"
+                ]
+            },
+            {
+                "id": "feat_orchestrator",
+                "name": "Orchestrator Routing",
+                "description": "Route tasks from Planning → Coding AI → Answer → Verification",
+                "priority": "P1",
+                "acceptance_criteria": [
+                    "Strict role separations enforced",
+                    "30-second escalation timeouts defined",
+                    "Handoff via MCP tools (askQuestion)",
+                    "Fallback to human ticket on escalation"
+                ]
+            },
+            {
+                "id": "feat_sidebar_ui",
+                "name": "Sidebar UI",
+                "description": "VS Code sidebar with Agents tab and Tickets tab",
+                "priority": "P1",
+                "acceptance_criteria": [
+                    "TreeView shows live agent status",
+                    "Tickets tab displays current task queue",
+                    "Real-time refresh on task updates",
+                    "Click handlers for task selection"
+                ]
+            },
+            {
+                "id": "feat_agent_coordination",
+                "name": "Agent Coordination",
+                "description": "Strict role separations and clear handoff patterns",
+                "priority": "P1",
+                "acceptance_criteria": [
+                    "Agent responsibilities documented in AGENT-RESPONSIBILITIES-MATRIX.md",
+                    "No overlapping roles (Clarity vs Answer clarified)",
+                    "E2E tests validate coordination flow",
+                    "Escalation rules implemented"
+                ]
+            }
+        ],
+        "p2_future": [
+            {
+                "id": "feat_advanced_tracing",
+                "name": "Advanced Agent Tracing",
+                "description": "Detailed execution logs and debugging dashboard",
+                "priority": "P2"
+            }
+        ]
+    },
+    "tasks": [],
+    "verification": {
+        "status": "not_started",
+        "checklist": [
+            "All P1 features implemented and tested",
+            "Test coverage ≥ 80%",
+            "Security audit passed",
+            "E2E tests passing",
+            "Documentation complete"
+        ]
+    },
+    "notes": {
+        "how_generated": "This file is auto-generated from CONSOLIDATED-MASTER-PLAN.md and PRD.md. See those files for implementation details.",
+        "how_updated": "Run 'npm run generate-prd' to regenerate this file. Or use file watcher if configured.",
+        "for_agents": "Planning, Orchestrator, and Coding AI agents should consume this file to understand current requirements and priorities."
+    }
+}

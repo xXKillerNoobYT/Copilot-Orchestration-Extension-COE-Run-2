@@ -1,7 +1,7 @@
 # Copilot Orchestration Extension (COE) — True Plan
 
-**Version**: 1.1  
-**Date**: February 9, 2026
+**Version**: 2.0
+**Date**: February 12, 2026
 
 ---
 
@@ -35,6 +35,10 @@ And then guiding the coding agent to actually. Program. The exact plan? That was
 | 08 | [Context Management & Safety](08-Context-Management-and-Safety.md) | Token management, error recovery, offline support, loop detection, **custom agent safety loop & hardlock protections**, **smart improvement systems**, security, input validation, and performance guardrails |
 | 09 | [Features & Capabilities](09-Features-and-Capabilities.md) | Complete list of 35 features across 7 categories, success metrics, and risk management |
 | 10 | [AI Funshin Baseline Gole](10-AI-Funshin-Basline-Gole.md) | The core operating principles for how the AI agents should function, including the 3-layer architecture, orchestration principles, and self-annealing process |
+| **11** | **[Program Designer PRD](11-Program-Designer-PRD.md)** | **Product Requirements Document for the Visual Program Designer — drag-and-drop GUI builder, component library (5 groups), integrated AI coding agent, multi-device sync, ethics framework** |
+| **12** | **[Agile Stories & Tasks](12-Agile-Stories-and-Tasks.md)** | **38 user stories across 7 epics with acceptance criteria, decomposed into 100+ developer tasks (15-45 min each)** |
+| **13** | **[Implementation Plan](13-Implementation-Plan.md)** | **Developer-level plan: TypeScript interfaces, database schema, API shapes, component-to-code mappings, sync protocol, AI agent architecture, event bus extensions, phased schedule** |
+| **14** | **[AI Agent Behavior Spec](14-AI-Agent-Behavior-Spec.md)** | **Engineering-ready behavioral specification: intent classification, code generation pipeline, ethics enforcement, multi-device coordination, behavioral states, logging requirements** |
 
 ---
 
@@ -59,3 +63,16 @@ And then guiding the coding agent to actually. Program. The exact plan? That was
 ## One-Sentence Summary
 
 > COE is a plan-driven orchestration layer that breaks your project into atomic tasks, feeds them to AI coding agents one at a time, verifies the results, and continuously learns to do it better.
+
+---
+
+## v2.0 Update: Visual Program Designer (February 12, 2026)
+
+Documents 11-14 define the major expansion from task orchestrator to full program designer:
+
+- **Drag-and-Drop GUI Builder** with 5 component groups (Primitive Inputs, Containers, Logic Blocks, Data/Sync, Ethics/Rights)
+- **Integrated AI Coding Agent** that generates code from visual designs, interprets natural language, and enforces ethical boundaries
+- **Multi-Device Sync** via Cloud, NAS, or P2P with conflict resolution
+- **FreedomGuard_AI Ethics Framework** with configurable freedom modules and transparency logging
+- **Pre-built Layout Templates** (Form, Tab View, Dashboard, Modal Window)
+- **Code Export** to React TSX, HTML, CSS, and JSON

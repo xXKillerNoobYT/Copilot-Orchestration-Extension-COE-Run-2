@@ -1,0 +1,163 @@
+LLM My 3rd party setup
+
+LLM Platform: LM Studio
+
+LLM Adress: https://192.168.1.205:1234
+
+LLM Default Model: mistralai/ministral-3-14b-reasoning
+
+Accesses type: v1 
+
+
+
+Note: need to be chasable in settings
+
+
+
+
+
+More Information
+
+https://lmstudio.ai/docs/app/mcp/deeplink
+
+https://lmstudio.ai/docs/app/mcp
+
+https://lmstudio.ai/docs/app/modelyaml
+
+https://lmstudio.ai/docs/app/modelyaml/publish
+
+
+
+CLS Information: https://lmstudio.ai/docs/cli
+
+
+
+Jave Script Information:
+
+https://lmstudio.ai/docs/typescript
+
+
+
+Python Script: https://lmstudio.ai/docs/python
+
+
+**Here’s a clean, detailed, *thorough* list of every major LM Studio Server documentation URL, organized so you can navigate the entire API‑server ecosystem without hunting.**  
+All links come directly from the official LM Studio documentation and its public GitHub repo.
+
+---
+
+# LM Studio Server Documentation — Complete URL Index
+
+## 🌐 **Primary Documentation Hub**
+- **LM Studio Docs (root):**  
+  [https://lmstudio.ai/docs](https://lmstudio.ai/docs)
+
+- **GitHub Documentation Source:**  
+  `https://github.com/lmstudio-ai/docs` [(github.com in Bing)](https://www.bing.com/search?q="https%3A%2F%2Fgithub.com%2Flmstudio-ai%2Fdocs")
+
+---
+
+# 🖥️ **API Server (Core Server Docs)**
+
+### **1. LM Studio as a Local LLM API Server**  
+*How to run the server, ports, OpenAI‑compat mode, REST endpoints, TTL, monitoring.*  
+`https://lmstudio.ai/docs/core/local-llm-api-server` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fcore%2Flocal-llm-api-server")
+
+### **2. API Server Architecture**  
+*Deep dive into server internals, request flow, endpoint surfaces.*  
+`https://lmstudio.ai/docs/developer/api-server-architecture` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fapi-server-architecture")
+
+### **3. OpenAI-Compatible Endpoints**  
+*Drop‑in replacement for OpenAI API: chat, completions, embeddings, vision, etc.*  
+`https://lmstudio.ai/docs/developer/openai-compat/models` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fmodels")  
+`https://lmstudio.ai/docs/developer/openai-compat/chat` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fchat")  
+`https://lmstudio.ai/docs/developer/openai-compat/completions` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fcompletions")  
+`https://lmstudio.ai/docs/developer/openai-compat/embeddings` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fembeddings")  
+`https://lmstudio.ai/docs/developer/openai-compat/images` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fimages")  
+`https://lmstudio.ai/docs/developer/openai-compat/audio` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Faudio")  
+`https://lmstudio.ai/docs/developer/openai-compat/files` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Ffiles")
+
+### **4. Native REST API (LM Studio–specific)**  
+*Enhanced stats, model loading, server control, advanced features.*  
+`https://lmstudio.ai/docs/developer/api-v0` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fapi-v0")  
+`https://lmstudio.ai/docs/developer/api-v1` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fapi-v1")
+
+---
+
+# 🧰 **SDKs for Server Access**
+
+### **TypeScript SDK (`@lmstudio/sdk`)**  
+[https://lmstudio.ai/docs/typescript](https://lmstudio.ai/docs/typescript)
+
+### **Python SDK (`lmstudio-python`)**  
+[https://lmstudio.ai/docs/python](https://lmstudio.ai/docs/python)
+
+---
+
+# 🖥️ **CLI (lms) — Server Control & Automation**
+*Start server, load/unload models, logs, import models.*  
+[https://lmstudio.ai/docs/cli](https://lmstudio.ai/docs/cli)  
+`https://lmstudio.ai/docs/cli/server` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fcli%2Fserver")  
+`https://lmstudio.ai/docs/cli/models` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fcli%2Fmodels")  
+`https://lmstudio.ai/docs/cli/logs` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fcli%2Flogs")
+
+---
+
+# ⚙️ **Developer Section (Full Index)**  
+*Everything related to server, APIs, SDKs, MCP, plugins.*  
+[https://lmstudio.ai/docs/developer](https://lmstudio.ai/docs/developer)
+
+---
+
+# 🔌 **MCP (Model Context Protocol) Server Integration**
+*LM Studio as an MCP server provider.*  
+`https://lmstudio.ai/docs/developer/mcp` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fmcp")
+
+---
+
+# 📦 **Model Loading & Runtime**
+*GGUF, MLX, quantization, performance tuning.*  
+`https://lmstudio.ai/docs/basics/models` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fbasics%2Fmodels")  
+`https://lmstudio.ai/docs/advanced/import-model` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fadvanced%2Fimport-model")  
+`https://lmstudio.ai/docs/advanced/model-settings` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fadvanced%2Fmodel-settings")
+
+---
+
+# 🧪 **Examples & Code Snippets**
+
+### **Official Code Examples (GitHub)**  
+`https://github.com/YorkieDev/lmstudioservercodeexamples` [(github.com in Bing)](https://www.bing.com/search?q="https%3A%2F%2Fgithub.com%2FYorkieDev%2Flmstudioservercodeexamples")
+
+### **Multi-language API examples inside docs**  
+`https://lmstudio.ai/docs/developer/openai-compat/chat#examples` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fchat%23examples")  
+`https://lmstudio.ai/docs/developer/openai-compat/models#examples` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fopenai-compat%2Fmodels%23examples")
+
+---
+
+# 📝 **Changelogs (Server + API Updates)**  
+`https://lmstudio.ai/docs/developer/api-changelog` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fdeveloper%2Fapi-changelog")  
+`https://lmstudio.ai/docs/app-changelog` [(lmstudio.ai in Bing)](https://www.bing.com/search?q="https%3A%2F%2Flmstudio.ai%2Fdocs%2Fapp-changelog")
+
+---
+
+# 📚 **Everything in One Place — Master Index**
+If you want the entire documentation tree exactly as LM Studio structures it:  
+[https://lmstudio.ai/docs/core](https://lmstudio.ai/docs/core)  
+[https://lmstudio.ai/docs/basics](https://lmstudio.ai/docs/basics)  
+[https://lmstudio.ai/docs/advanced](https://lmstudio.ai/docs/advanced)  
+[https://lmstudio.ai/docs/developer](https://lmstudio.ai/docs/developer)  
+[https://lmstudio.ai/docs/python](https://lmstudio.ai/docs/python)  
+[https://lmstudio.ai/docs/typescript](https://lmstudio.ai/docs/typescript)  
+[https://lmstudio.ai/docs/cli](https://lmstudio.ai/docs/cli)
+
+---
+
+# Want me to turn this into a **Notion‑ready reference page**, a **cross‑linked index**, or a **server‑testing checklist**?
+Given your workflow style, I can also generate:
+
+- A **coverage‑checked Notion documentation map**  
+- A **server testing suite** (curl + Python + TypeScript)  
+- A **local‑server orchestration prompt** for your LM Studio agent system  
+- A **model‑info schema** for your local server at `http://192.168.137.52:1234/v1`
+
+Just tell me the format you want.
