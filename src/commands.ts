@@ -5,10 +5,16 @@ import { LLMService } from './core/llm-service';
 import { Orchestrator } from './agents/orchestrator';
 import { MCPServer } from './mcp/server';
 import { StatusViewProvider } from './views/status-view';
-import { AgentContext, TicketPriority, TaskPriority } from './types';
+import { AgentContext, TicketPriority, TaskPriority, ConflictResolutionStrategy, SyncBackend } from './types';
 import { GitHubClient } from './core/github-client';
 import { GitHubSyncService } from './core/github-sync';
 import { PlanBuilderPanel } from './views/plan-builder';
+import { TransparencyLogger } from './core/transparency-logger';
+import { EthicsEngine } from './core/ethics-engine';
+import { ComponentSchemaService } from './core/component-schema';
+import { CodingAgentService } from './core/coding-agent';
+import { ConflictResolver } from './core/conflict-resolver';
+import { SyncService } from './core/sync-service';
 
 export interface CommandDeps {
     database: Database;
@@ -19,6 +25,13 @@ export interface CommandDeps {
     statusView: StatusViewProvider;
     outputChannel: vscode.OutputChannel;
     extensionUri: vscode.Uri;
+    // v2.0 services (optional for backwards compatibility)
+    transparencyLogger?: TransparencyLogger;
+    ethicsEngine?: EthicsEngine;
+    componentSchemaService?: ComponentSchemaService;
+    codingAgentService?: CodingAgentService;
+    conflictResolver?: ConflictResolver;
+    syncService?: SyncService;
 }
 
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
@@ -629,4 +642,233 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
             });
         }),
     );
+
+    // --- v2.0: Ethics Commands ---
+    if (deps.ethicsEngine) {
+        const ethicsEngine = deps.ethicsEngine;
+        context.subscriptions.push(
+            vscode.commands.registerCommand('coe.viewEthicsModules', async () => {
+                const modules = ethicsEngine.getModules();
+                const content = modules.map(m =>
+                    `## ${m.name} ${m.enabled ? '✅' : '❌'}\n` +
+                    `Sensitivity: ${m.sensitivity}\n` +
+                    `Scope: ${m.scope}\n` +
+                    `Description: ${m.description}\n` +
+                    `Blocked actions: ${m.blocked_actions.join(', ') || 'none'}`
+                ).join('\n\n---\n\n');
+                const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                await vscode.window.showTextDocument(doc, { preview: true });
+            }),
+
+            vscode.commands.registerCommand('coe.toggleEthicsModule', async () => {
+                const modules = ethicsEngine.getModules();
+                const selected = await vscode.window.showQuickPick(
+                    modules.map(m => ({
+                        label: `${m.enabled ? '✅' : '❌'} ${m.name}`,
+                        moduleId: m.id,
+                        enabled: m.enabled,
+                    })),
+                    { placeHolder: 'Select module to toggle' }
+                );
+                if (!selected) return;
+                if (selected.enabled) {
+                    ethicsEngine.disableModule(selected.moduleId);
+                    vscode.window.showInformationMessage(`Ethics module "${selected.label}" disabled.`);
+                } else {
+                    ethicsEngine.enableModule(selected.moduleId);
+                    vscode.window.showInformationMessage(`Ethics module "${selected.label}" enabled.`);
+                }
+            }),
+
+            vscode.commands.registerCommand('coe.viewEthicsAudit', async () => {
+                const entries = ethicsEngine.audit(50);
+                const content = entries.map(e =>
+                    `[${e.created_at}] ${e.decision} — ${e.action_description} (module: ${e.module_id}, by: ${e.requestor})`
+                ).join('\n');
+                const doc = await vscode.workspace.openTextDocument({ content: content || 'No ethics audit entries yet.', language: 'log' });
+                await vscode.window.showTextDocument(doc, { preview: true });
+            }),
+        );
+    }
+
+    // --- v2.0: Coding Agent Commands ---
+    if (deps.codingAgentService) {
+        const codingAgent = deps.codingAgentService;
+        context.subscriptions.push(
+            vscode.commands.registerCommand('coe.codingAgentCommand', async () => {
+                const command = await vscode.window.showInputBox({
+                    prompt: 'Coding agent command',
+                    placeHolder: 'e.g., "create a login form", "fix the bug in auth", "explain the sync service"',
+                });
+                if (!command) return;
+
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Coding agent working...',
+                    cancellable: false,
+                }, async () => {
+                    const response = await codingAgent.processCommand(command, {});
+                    vscode.window.showInformationMessage(
+                        `${response.explanation.substring(0, 300)}`
+                    );
+                    refreshAll();
+                });
+            }),
+
+            vscode.commands.registerCommand('coe.viewCodeDiffs', async () => {
+                const diffs = deps.database.getPendingCodeDiffs();
+                if (diffs.length === 0) {
+                    vscode.window.showInformationMessage('No pending code diffs.');
+                    return;
+                }
+                const content = diffs.map((d: import('./types').CodeDiff) =>
+                    `## Diff: ${d.id}\n` +
+                    `Entity: ${d.entity_type}/${d.entity_id}\n` +
+                    `Status: ${d.status}\n` +
+                    `Lines: +${d.lines_added} / -${d.lines_removed}\n` +
+                    `\`\`\`diff\n${d.unified_diff}\n\`\`\``
+                ).join('\n\n---\n\n');
+                const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+                await vscode.window.showTextDocument(doc, { preview: true });
+            }),
+
+            vscode.commands.registerCommand('coe.approveCodeDiff', async () => {
+                const diffs = deps.database.getPendingCodeDiffs();
+                if (diffs.length === 0) {
+                    vscode.window.showInformationMessage('No pending diffs to approve.');
+                    return;
+                }
+                const selected = await vscode.window.showQuickPick(
+                    diffs.map((d: import('./types').CodeDiff) => ({
+                        label: `${d.id.substring(0, 8)} (+${d.lines_added}/-${d.lines_removed})`,
+                        diffId: d.id,
+                    })),
+                    { placeHolder: 'Select diff to approve' }
+                );
+                if (!selected) return;
+                codingAgent.approveDiff(selected.diffId, 'user');
+                vscode.window.showInformationMessage('Diff approved.');
+                refreshAll();
+            }),
+
+            vscode.commands.registerCommand('coe.rejectCodeDiff', async () => {
+                const diffs = deps.database.getPendingCodeDiffs();
+                if (diffs.length === 0) {
+                    vscode.window.showInformationMessage('No pending diffs to reject.');
+                    return;
+                }
+                const selected = await vscode.window.showQuickPick(
+                    diffs.map((d: import('./types').CodeDiff) => ({
+                        label: `${d.id.substring(0, 8)} (+${d.lines_added}/-${d.lines_removed})`,
+                        diffId: d.id,
+                    })),
+                    { placeHolder: 'Select diff to reject' }
+                );
+                if (!selected) return;
+                const reason = await vscode.window.showInputBox({ prompt: 'Rejection reason' });
+                codingAgent.rejectDiff(selected.diffId, 'user', reason || 'Rejected by user');
+                vscode.window.showInformationMessage('Diff rejected.');
+                refreshAll();
+            }),
+        );
+    }
+
+    // --- v2.0: Sync Commands ---
+    if (deps.syncService) {
+        const syncSvc = deps.syncService;
+        context.subscriptions.push(
+            vscode.commands.registerCommand('coe.configureSync', async () => {
+                const backend = await vscode.window.showQuickPick(
+                    ['cloud', 'nas', 'p2p'],
+                    { placeHolder: 'Select sync backend' }
+                );
+                if (!backend) return;
+
+                const endpoint = await vscode.window.showInputBox({
+                    prompt: 'Sync endpoint URL',
+                    placeHolder: backend === 'cloud' ? 'https://sync.example.com' : backend === 'nas' ? '//nas/share' : 'peer-address:port',
+                });
+                if (!endpoint) return;
+
+                await syncSvc.configure({
+                    device_id: require('os').hostname(),
+                    backend: backend as any,
+                    endpoint,
+                    enabled: true,
+                });
+                vscode.window.showInformationMessage(`Sync configured: ${backend} → ${endpoint}`);
+                refreshAll();
+            }),
+
+            vscode.commands.registerCommand('coe.triggerSync', async () => {
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Syncing...',
+                    cancellable: false,
+                }, async () => {
+                    const state = await syncSvc.sync();
+                    vscode.window.showInformationMessage(
+                        `Sync ${state.status}: ${state.pending_changes} pending, ${state.unresolved_conflicts} conflicts`
+                    );
+                    refreshAll();
+                });
+            }),
+
+            vscode.commands.registerCommand('coe.viewSyncStatus', async () => {
+                const state = syncSvc.getStatus();
+                const content = JSON.stringify(state, null, 2);
+                const doc = await vscode.workspace.openTextDocument({ content, language: 'json' });
+                await vscode.window.showTextDocument(doc, { preview: true });
+            }),
+
+            vscode.commands.registerCommand('coe.resolveConflict', async () => {
+                if (!deps.conflictResolver) return;
+                const conflicts = deps.conflictResolver.getUnresolved();
+                if (conflicts.length === 0) {
+                    vscode.window.showInformationMessage('No unresolved conflicts.');
+                    return;
+                }
+                const selected = await vscode.window.showQuickPick(
+                    conflicts.map(c => ({
+                        label: `${c.entity_type}/${c.entity_id} — ${c.conflicting_fields.join(', ')}`,
+                        conflictId: c.id,
+                    })),
+                    { placeHolder: 'Select conflict to resolve' }
+                );
+                if (!selected) return;
+
+                const strategy = await vscode.window.showQuickPick(
+                    ['KeepLocal', 'KeepRemote', 'Merge', 'LastWriteWins'],
+                    { placeHolder: 'Resolution strategy' }
+                ) as string | undefined;
+                if (!strategy) return;
+
+                syncSvc.resolveConflict(
+                    selected.conflictId,
+                    strategy as ConflictResolutionStrategy,
+                    'user'
+                );
+                vscode.window.showInformationMessage('Conflict resolved.');
+                refreshAll();
+            }),
+        );
+    }
+
+    // --- v2.0: Transparency Log Commands ---
+    if (deps.transparencyLogger) {
+        const logger = deps.transparencyLogger;
+        context.subscriptions.push(
+            vscode.commands.registerCommand('coe.viewTransparencyLog', async () => {
+                const entries = logger.getLog({ limit: 100 });
+                const content = entries.map((e: import('./types').ActionLog) =>
+                    `[${e.created_at}] [${e.severity}] ${e.source}/${e.category}: ${e.action} — ${e.detail}`
+                ).join('\n');
+                const doc = await vscode.workspace.openTextDocument({
+                    content: content || 'No transparency log entries yet.',
+                    language: 'log',
+                });
+                await vscode.window.showTextDocument(doc, { preview: true });
+            }),
+        );
+    }
 }

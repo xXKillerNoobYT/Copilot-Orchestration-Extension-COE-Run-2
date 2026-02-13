@@ -14,6 +14,14 @@ import { ContextFeeder } from './core/context-feeder';
 import { TaskDecompositionEngine } from './core/task-decomposition-engine';
 import { ContextBreakingChain } from './core/context-breaking-chain';
 import { ContentType } from './types';
+// v2.0 services
+import { TransparencyLogger } from './core/transparency-logger';
+import { EthicsEngine } from './core/ethics-engine';
+import { ComponentSchemaService } from './core/component-schema';
+import { CodingAgentService } from './core/coding-agent';
+import { ConflictResolver } from './core/conflict-resolver';
+import { SyncService } from './core/sync-service';
+import { getEventBus } from './core/event-bus';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -21,6 +29,7 @@ let llmService: LLMService;
 let orchestrator: Orchestrator;
 let mcpServer: MCPServer;
 let fileWatcher: FileWatcherService;
+let syncService: SyncService;
 
 export async function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('COE');
@@ -111,6 +120,52 @@ export async function activate(context: vscode.ExtensionContext) {
             `thresholds=${coeConfig.tokenBudget?.warningThresholdPercent ?? 70}%/${coeConfig.tokenBudget?.criticalThresholdPercent ?? 90}%`
         );
 
+        // Phase 2e: Initialize v2.0 services
+        const eventBus = getEventBus();
+
+        const transparencyLogger = new TransparencyLogger(database, eventBus, outputChannel);
+        outputChannel.appendLine('TransparencyLogger initialized.');
+
+        const ethicsEngine = new EthicsEngine(database, eventBus, transparencyLogger, outputChannel);
+        ethicsEngine.seedDefaultModules();
+        outputChannel.appendLine('EthicsEngine (FreedomGuard_AI) initialized with default modules.');
+
+        const componentSchemaService = new ComponentSchemaService(database, outputChannel);
+        componentSchemaService.seedDefaultSchemas();
+        outputChannel.appendLine('ComponentSchemaService initialized with 37 default schemas.');
+
+        const codingAgentService = new CodingAgentService(
+            llmService, database, ethicsEngine, componentSchemaService,
+            eventBus, transparencyLogger, outputChannel
+        );
+        outputChannel.appendLine('CodingAgentService initialized.');
+
+        const conflictResolver = new ConflictResolver(database, eventBus, outputChannel);
+        outputChannel.appendLine('ConflictResolver initialized.');
+
+        syncService = new SyncService(database, eventBus, conflictResolver, transparencyLogger, outputChannel);
+        outputChannel.appendLine('SyncService initialized.');
+
+        // Auto-configure sync if settings present
+        const syncConfig = coeConfig.sync;
+        if (syncConfig?.enabled) {
+            try {
+                await syncService.configure({
+                    device_id: require('os').hostname(),
+                    backend: syncConfig.backend as any,
+                    endpoint: syncConfig.endpoint,
+                    enabled: true,
+                    auto_sync_interval_seconds: syncConfig.autoSyncIntervalSeconds,
+                });
+                if (syncConfig.autoSyncIntervalSeconds > 0) {
+                    syncService.startAutoSync(syncConfig.autoSyncIntervalSeconds);
+                }
+                outputChannel.appendLine(`SyncService auto-configured: ${syncConfig.backend} backend.`);
+            } catch (err) {
+                outputChannel.appendLine(`SyncService auto-config failed: ${err}`);
+            }
+        }
+
         // Phase 3: Initialize MCP server
         mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel);
         await mcpServer.initialize();
@@ -132,7 +187,14 @@ export async function activate(context: vscode.ExtensionContext) {
             mcpServer,
             statusView,
             outputChannel,
-            extensionUri: context.extensionUri
+            extensionUri: context.extensionUri,
+            // v2.0 services
+            transparencyLogger,
+            ethicsEngine,
+            componentSchemaService,
+            codingAgentService,
+            conflictResolver,
+            syncService,
         });
 
         // Phase 6: Start file watchers
@@ -170,7 +232,8 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 }
 
-export function deactivate() {
+export async function deactivate() {
+    if (syncService) { await syncService.dispose(); }
     if (fileWatcher) { fileWatcher.stop(); }
     if (mcpServer) { mcpServer.dispose(); }
     if (orchestrator) { orchestrator.dispose(); }

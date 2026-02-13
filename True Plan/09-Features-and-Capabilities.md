@@ -1,13 +1,16 @@
 # Features & Capabilities
 
-**Version**: 1.0  
-**Date**: February 9, 2026
+**Version**: 1.1
+**Date**: February 12, 2026
+**Updated**: v2.0 features added, implementation status markers
 
 ---
 
 ## Overview
 
-COE includes 35 features across 7 categories. This document lists every capability the system provides, organized by what it does for the user.
+COE includes 50+ features across 10 categories. This document lists every capability the system provides, organized by what it does for the user.
+
+**Status Legend**: ✅ Implemented | 🔧 In Progress | 📋 Planned
 
 ---
 
@@ -144,12 +147,61 @@ Full sidebar experience with Agents, Tickets, Tasks, and Conversations tabs, plu
 
 ---
 
+## Category 8: Context Management (4 Features) — v1.1 ✅
+
+### Token Budget Management ✅
+Model-aware token budget tracking with configurable warning (70%) and critical (90%) thresholds, per-model profiles, and real-time utilization reporting.
+
+### Intelligent Context Feeding ✅
+Priority-based context window composition that selects the most relevant items (task details, plan excerpts, code snippets) within the available token budget.
+
+### Context Breaking Chain ✅
+Multi-strategy context overflow recovery: summarize long contexts, trim low-priority items, compress repeated patterns. Prevents token limit crashes.
+
+### Deterministic Task Decomposition ✅
+Pattern-based task splitting engine that decomposes tasks without LLM calls. Falls back to LLM only for unrecognized patterns.
+
+---
+
+## Category 9: Ethics & Transparency (3 Features) — v2.0 ✅
+
+### FreedomGuard_AI Ethics Engine ✅
+6 freedom modules (Privacy, Speech, Self-Protection, Data Sovereignty, Transparency, Consent) with 4 sensitivity levels. Absolute blocks that cannot be overridden: no backdoors, spyware, unauthorized data collection, system file deletion, or data exfiltration. Every check is audited.
+
+### Transparency Logger ✅
+Append-only action logging for all service operations. Every action by every service is recorded with source, category, severity, correlation IDs, and entity references. Export to JSON/CSV. Sync-aware with device attribution.
+
+### Ethics Override Audit Trail ✅
+When authorized users override an ethics block, the justification is permanently recorded with who, when, why, and what was overridden.
+
+---
+
+## Category 10: Multi-Device Sync & Visual Design (5 Features) — v2.0 ✅
+
+### Multi-Device Sync Service ✅
+Pluggable sync backends (Cloud REST, NAS file-based, P2P direct) with vector clocks for causal ordering, advisory locking with 5-minute stale detection, and exponential backoff retry.
+
+### Conflict Resolution Engine ✅
+SHA-256 hash-based conflict detection with field-level auto-merge for non-overlapping changes. 5 resolution strategies: KeepLocal, KeepRemote, Merge, LastWriteWins, UserChoice.
+
+### Component Schema Library ✅
+37 default component schemas across 5 categories (Primitive Inputs, Containers, Interactive Logic, Data & Sync, Ethics & Rights) with code templates for React TSX, HTML, and CSS.
+
+### Integrated Coding Agent ✅
+NL command processing with 2-stage intent classification (keyword scoring + LLM fallback), 6 intent handlers (build, modify, explain, fix, automate, query), code generation from component schemas, and diff approval flow.
+
+### Device Registration & Management ✅
+Register/unregister devices, track device presence, sync-enabled flags, and per-device vector clock counters for distributed ordering.
+
+---
+
 ## Feature Priorities (What Gets Built First)
 
 | Priority | Count | What |
 |----------|-------|------|
 | **P1 (Must Have)** | 12 | Ticket DB, orchestrator routing, sidebar UI, agent coordination, verification, MCP tools |
 | **P2 (Should Have)** | 13 | Custom agents, GitHub sync, evolution system, context management, planning wizard |
+| **P2+ (v2.0)** | 12 | Ethics engine, transparency logger, sync service, conflict resolver, coding agent, component schemas |
 | **P3 (Nice to Have)** | 10 | Advanced analytics, RL optimization, Copilot Workspace integration, Docker MCP toolkit |
 
 ---

@@ -1,7 +1,8 @@
 # System Architecture & Design
 
-**Version**: 1.0  
-**Date**: February 9, 2026
+**Version**: 2.0
+**Date**: February 12, 2026
+**Updated**: v2.0 services added — EthicsEngine, SyncService, CodingAgent, TransparencyLogger, ComponentSchema, ConflictResolver
 
 ---
 
@@ -56,7 +57,7 @@ This is what the developer sees and interacts with. It includes:
   - **Custom Agent Builder** — UI for creating new specialized agents
   - **Agent Gallery** — Browse and manage available agents
 
-- **Commands** — 43 registered actions the user can trigger (e.g., "Create Plan", "Fresh Restart", "Refresh PRD")
+- **Commands** — 55+ registered actions the user can trigger (e.g., "Create Plan", "Fresh Restart", "Coding Agent Command", "View Ethics Modules", "Trigger Sync")
 
 - **File Watchers** — Monitors plan files, source code, and GitHub issues for changes
 
@@ -112,11 +113,27 @@ The **Model Context Protocol (MCP) Server** exposes tools that external AI codin
 
 ### Layer 4: Core Services (Data & Intelligence)
 
-- **Ticket Database (SQLite)** — Stores all tasks, tickets, conversations, and audit logs
-- **LLM Service** — Connects to a local LLM server (LM Studio) for AI inference
+**Foundation Services (v1.0):**
+- **Ticket Database (SQLite)** — 27 tables storing tasks, tickets, conversations, audit logs, design components, ethics rules, sync state, and more
+- **LLM Service** — Connects to a local LLM server (LM Studio) for AI inference with 3-tier timeout, caching, batch classify
 - **Task Queue** — Priority-based queue with dependency graph tracking
 - **Planning Service** — Backend for the Planning Wizard
 - **Config System** — Validated settings with live reloading
+- **EventBus** — Central pub/sub with 55+ event types, WebSocket broadcast, history tracking
+
+**Context Management Services (v1.1):**
+- **TokenBudgetTracker** — Model-aware token budget tracking with warning/critical thresholds
+- **ContextFeeder** — Intelligent context window composition with priority-based item selection
+- **ContextBreakingChain** — Multi-strategy context overflow recovery (summarize, trim, compress)
+- **TaskDecompositionEngine** — Deterministic task decomposition with pattern-based splitting
+
+**v2.0 Services:**
+- **TransparencyLogger** — Append-only action logging for all service operations, export (JSON/CSV), sync-aware
+- **EthicsEngine (FreedomGuard_AI)** — 6 freedom modules, 4 sensitivity levels, absolute blocks, rule evaluation with override audit trail
+- **ComponentSchemaService** — 37 default component schemas across 5 categories with code templates (React, HTML, CSS)
+- **CodingAgentService** — NL command parsing, 2-stage intent classification (keyword + LLM), code generation from component schemas, diff management, ethics gate
+- **ConflictResolver** — SHA-256 hash-based conflict detection, field-level auto-merge, 5 resolution strategies, entity priority rules
+- **SyncService** — Multi-device sync via pluggable adapters (Cloud REST, NAS file-based, P2P direct), vector clocks, advisory locking, exponential backoff retry
 
 ---
 
@@ -144,10 +161,20 @@ flowchart TB
     end
 
     subgraph "Core Services"
-        TDB[(Ticket Database - SQLite)]
+        TDB[(SQLite Database - 27 Tables)]
         TQ[Task Queue - Priority + Dependencies]
         LLM[LLM Service - Local AI]
         CFG[Config System]
+        EB[EventBus - 55+ Event Types]
+    end
+
+    subgraph "v2.0 Services"
+        TLOG[TransparencyLogger]
+        ETHICS[EthicsEngine - FreedomGuard_AI]
+        COMP[ComponentSchemaService]
+        CODING[CodingAgentService]
+        CONFLICT[ConflictResolver]
+        SYNC[SyncService - Cloud/NAS/P2P]
     end
 
     subgraph "External"

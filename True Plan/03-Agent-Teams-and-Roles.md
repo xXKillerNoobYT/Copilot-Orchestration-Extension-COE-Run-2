@@ -1,8 +1,8 @@
 # AI Agent Teams & Roles
 
-**Version**: 1.1
-**Date**: February 11, 2026
-**Updated**: Agent descriptions rewritten with ultra-granular prompt specifications
+**Version**: 1.2
+**Date**: February 12, 2026
+**Updated**: v2.0 — Added context service injection, deterministic decomposition, CodingAgentService integration
 
 ---
 
@@ -145,6 +145,14 @@ flowchart LR
 - Create a ticket for any request that couldn't be properly routed
 - Reset flag on next successful LLM call
 
+**Context Service Injection (v1.1+)**:
+
+All agents receive token management services via the Orchestrator:
+- `injectContextServices(budgetTracker, contextFeeder)` — Sets `TokenBudgetTracker` and `ContextFeeder` on all `BaseAgent` instances
+- `injectDecompositionEngine(engine)` — Sets `TaskDecompositionEngine` on the PlanningAgent
+- The `processMessage()` flow now checks remaining token budget before LLM calls via `budgetTracker.getRemainingBudget()`
+- If budget is critical (>90% used), the `ContextBreakingChain` triggers summarization or context trimming strategies
+
 **Key Constraint**: The Orchestrator never writes code and never processes tasks directly — it only routes.
 
 ---
@@ -200,12 +208,21 @@ flowchart LR
 - Produces exactly ONE deliverable
 - Can be rolled back independently
 
-**Auto-Decomposition**: When a task has `estimated_minutes > 45`:
-1. The Planning Agent automatically calls `decompose(taskId)` on it
-2. The decompose method splits it into sub-tasks (15-45 min each)
-3. If a sub-task is STILL >45 min, decompose again (max depth: 3 levels)
-4. The parent task's status becomes `decomposed` — it is not executed directly
-5. Sub-tasks inherit the parent's dependencies and depend on each other in order
+**Auto-Decomposition** (v1.1+ — Deterministic First, LLM Fallback):
+
+When a task has `estimated_minutes > 45`, decomposition uses a two-stage approach:
+
+**Stage 1: Deterministic (TaskDecompositionEngine)**
+1. The PlanningAgent first tries `TaskDecompositionEngine.decompose()` — a pure deterministic engine
+2. The engine applies pattern matching and heuristics (no LLM) to split by scope, layer, or component
+3. If the engine produces valid sub-tasks (each 15-45 min), those are used directly
+
+**Stage 2: LLM Fallback**
+4. If the deterministic engine returns no results (task doesn't match known patterns), the PlanningAgent falls back to LLM-based decomposition
+5. The decompose method splits it into sub-tasks (15-45 min each)
+6. If a sub-task is STILL >45 min, decompose again (max depth: 3 levels)
+7. The parent task's status becomes `decomposed` — it is not executed directly
+8. Sub-tasks inherit the parent's dependencies and depend on each other in order
 
 **Constraints**:
 - Maximum 100 tasks per plan
@@ -477,6 +494,34 @@ FEEDBACK: [If needs_clarification: numbered list of max 3 specific points that n
 | Cannot execute any command | Prevents system-level side effects |
 | Cannot modify other agents | Prevents cascade failures |
 | Cannot modify their own config | Prevents self-escalation of permissions |
+
+---
+
+## Team 8: Integrated Coding Agent (v2.0 — Internal Service)
+
+**Role**: NL-driven code generation, modification, and explanation engine integrated directly into COE.
+
+**File**: `src/core/coding-agent.ts`
+
+**What It Does**:
+- Two-stage intent classification: keyword scoring (deterministic, instant) → LLM fallback (ambiguous commands)
+- 6 intent handlers: `build`, `modify`, `explain`, `fix`, `automate`, `query`
+- Code generation from ComponentSchemaService templates (React TSX, HTML, CSS)
+- Deterministic diff generation (no LLM) with approval flow
+- Ethics gate on every action via EthicsEngine
+- Natural language → logic tree conversion via LLM
+
+**Intent Keywords**:
+| Intent | Keywords |
+|--------|----------|
+| build | create, add, build, new, make, generate, insert, place |
+| modify | change, update, edit, move, resize, rename, replace, swap |
+| explain | explain, what, why, how, describe, tell me, show me |
+| fix | fix, bug, error, broken, wrong, issue, debug, repair |
+| automate | automate, if, when, trigger, rule, schedule, repeat, workflow |
+| query | find, search, list, show, get, count, filter, where |
+
+**Safety**: Every action passes through the EthicsEngine before execution. Absolute blocks (backdoors, spyware, data exfiltration) cannot be overridden.
 
 ---
 

@@ -328,6 +328,18 @@ export interface COEConfig {
         };
     };
     tokenBudget?: TokenBudgetConfig;
+    /** Sync configuration for multi-device sync (v2.0) */
+    sync?: {
+        enabled: boolean;
+        backend: 'cloud' | 'nas' | 'p2p';
+        endpoint: string;
+        autoSyncIntervalSeconds: number;
+    };
+    /** Ethics configuration (v2.0) */
+    ethics?: {
+        enabled: boolean;
+        sensitivity: 'low' | 'medium' | 'high' | 'maximum';
+    };
 }
 
 // --- Agent Framework Types ---
@@ -746,7 +758,10 @@ export enum LogicBlockType {
     ElseIf = 'else_if',
     Else = 'else',
     Loop = 'loop',
+    Action = 'action',
+    EventHandler = 'event_handler',
     Switch = 'switch',
+    Case = 'case',
     TryCatch = 'try_catch'
 }
 

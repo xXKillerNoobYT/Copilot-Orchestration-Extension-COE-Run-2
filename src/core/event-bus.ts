@@ -40,6 +40,18 @@ export type COEEventType =
     | 'design:flow_created' | 'design:flow_deleted'
     // Coding
     | 'coding:session_created' | 'coding:message_sent' | 'coding:session_completed'
+    // Coding Agent (v2.0)
+    | 'coding_agent:command_received' | 'coding_agent:generating' | 'coding_agent:completed'
+    | 'coding_agent:diff_pending' | 'coding_agent:diff_approved' | 'coding_agent:diff_rejected'
+    | 'coding_agent:explaining'
+    // Ethics (v2.0)
+    | 'ethics:check_passed' | 'ethics:action_blocked' | 'ethics:user_override'
+    | 'ethics:module_enabled' | 'ethics:module_disabled' | 'ethics:sensitivity_changed'
+    // Sync (v2.0)
+    | 'sync:started' | 'sync:completed' | 'sync:conflict_detected' | 'sync:conflict_resolved'
+    | 'sync:device_connected' | 'sync:device_disconnected'
+    // Transparency (v2.0)
+    | 'transparency:action_logged' | 'transparency:log_exported' | 'transparency:log_queried'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'
