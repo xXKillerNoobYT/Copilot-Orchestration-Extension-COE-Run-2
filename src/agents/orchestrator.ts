@@ -11,6 +11,9 @@ import { ClarityAgent } from './clarity-agent';
 import { BossAgent } from './boss-agent';
 import { CustomAgentRunner } from './custom-agent';
 import { EvolutionService } from '../core/evolution-service';
+import { TokenBudgetTracker } from '../core/token-budget-tracker';
+import { ContextFeeder } from '../core/context-feeder';
+import { TaskDecompositionEngine } from '../core/task-decomposition-engine';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
     ConversationRole, Task, TaskStatus
@@ -369,6 +372,42 @@ When classifying, respond with ONLY the category name as a single lowercase word
     getClarityAgent(): ClarityAgent { return this.clarityAgent; }
     getBossAgent(): BossAgent { return this.bossAgent; }
     getCustomAgentRunner(): CustomAgentRunner { return this.customAgentRunner; }
+
+    /**
+     * Get all agents (including the orchestrator itself) as an array.
+     * Useful for injecting shared services into all agents at once.
+     */
+    getAllAgents(): BaseAgent[] {
+        return [
+            this,
+            this.planningAgent,
+            this.answerAgent,
+            this.verificationAgent,
+            this.researchAgent,
+            this.clarityAgent,
+            this.bossAgent,
+            this.customAgentRunner,
+        ];
+    }
+
+    /**
+     * Inject token management services into all agents.
+     * Called during extension activation after services are created.
+     */
+    injectContextServices(budgetTracker: TokenBudgetTracker, contextFeeder: ContextFeeder): void {
+        for (const agent of this.getAllAgents()) {
+            agent.setContextServices(budgetTracker, contextFeeder);
+        }
+        this.outputChannel.appendLine(`Context services injected into ${this.getAllAgents().length} agents.`);
+    }
+
+    /**
+     * Inject the deterministic decomposition engine into the PlanningAgent.
+     */
+    injectDecompositionEngine(engine: TaskDecompositionEngine): void {
+        this.planningAgent.setDecompositionEngine(engine);
+        this.outputChannel.appendLine('TaskDecompositionEngine injected into PlanningAgent.');
+    }
 
     dispose(): void {
         super.dispose();

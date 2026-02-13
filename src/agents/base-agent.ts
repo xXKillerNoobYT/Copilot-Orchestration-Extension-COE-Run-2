@@ -2,9 +2,11 @@ import * as vscode from 'vscode';
 import { Database } from '../core/database';
 import { LLMService } from '../core/llm-service';
 import { ConfigManager } from '../core/config';
+import { TokenBudgetTracker } from '../core/token-budget-tracker';
+import { ContextFeeder } from '../core/context-feeder';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
-    LLMMessage, ConversationRole
+    LLMMessage, ConversationRole, ContentType, ContextItem
 } from '../types';
 
 export abstract class BaseAgent {
@@ -12,6 +14,10 @@ export abstract class BaseAgent {
     protected llm: LLMService;
     protected config: ConfigManager;
     protected outputChannel: vscode.OutputChannel;
+
+    // New token management services (optional — backward-compatible)
+    protected budgetTracker: TokenBudgetTracker | null = null;
+    protected contextFeeder: ContextFeeder | null = null;
 
     abstract readonly name: string;
     abstract readonly type: AgentType;
@@ -29,6 +35,18 @@ export abstract class BaseAgent {
         this.outputChannel = outputChannel;
     }
 
+    /**
+     * Inject token management services.
+     * Called during extension activation after services are created.
+     * When set, buildMessages() uses ContextFeeder for intelligent context
+     * loading and estimateTokens() uses TokenBudgetTracker for accurate estimation.
+     */
+    setContextServices(budgetTracker: TokenBudgetTracker, contextFeeder: ContextFeeder): void {
+        this.budgetTracker = budgetTracker;
+        this.contextFeeder = contextFeeder;
+        this.outputChannel.appendLine(`[${this.name}] Context services injected (TokenBudgetTracker + ContextFeeder)`);
+    }
+
     async initialize(): Promise<void> {
         this.database.registerAgent(this.name, this.type);
         this.outputChannel.appendLine(`Agent initialized: ${this.name} (${this.type})`);
@@ -40,9 +58,22 @@ export abstract class BaseAgent {
 
         try {
             const messages = this.buildMessages(message, context);
+
+            // Estimate total input tokens for tracking
+            const inputTokensEstimated = this.estimateMessagesTokens(messages);
+
             const response = await this.llm.chat(messages, {
                 maxTokens: this.config.getAgentContextLimit(this.type),
             });
+
+            // Record usage for calibration when budgetTracker is available
+            if (this.budgetTracker) {
+                this.budgetTracker.recordUsage(
+                    inputTokensEstimated,
+                    response.tokens_used,
+                    this.type
+                );
+            }
 
             this.database.addConversation(
                 this.name,
@@ -68,14 +99,73 @@ export abstract class BaseAgent {
 
     /**
      * Estimate token count for a string.
-     * Uses the ~4 chars per token heuristic (conservative for English text).
-     * This avoids needing a tokenizer dependency.
+     * Delegates to TokenBudgetTracker when available (content-type-aware).
+     * Falls back to the ~4 chars per token heuristic.
      */
-    protected estimateTokens(text: string): number {
+    protected estimateTokens(text: string, contentType?: ContentType): number {
+        if (this.budgetTracker) {
+            return this.budgetTracker.estimateTokens(text, contentType);
+        }
         return Math.ceil(text.length / 4);
     }
 
-    protected buildMessages(userMessage: string, context: AgentContext): LLMMessage[] {
+    /**
+     * Estimate total tokens across an array of LLM messages.
+     * Uses content-type-aware estimation when budgetTracker is available.
+     */
+    protected estimateMessagesTokens(messages: LLMMessage[]): number {
+        let total = 0;
+        for (const msg of messages) {
+            total += this.estimateTokens(msg.content);
+            // Add per-message overhead (role headers, formatting)
+            if (this.budgetTracker) {
+                total += this.budgetTracker.getCurrentModelProfile().overheadTokensPerMessage;
+            } else {
+                total += 4; // legacy overhead estimate
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Build LLM messages from context.
+     *
+     * When ContextFeeder is available: delegates to buildOptimizedMessages()
+     * which uses relevance scoring, tiered loading, and deterministic compression.
+     *
+     * When ContextFeeder is NOT available: uses the legacy manual budget approach
+     * for backward compatibility.
+     */
+    protected buildMessages(userMessage: string, context: AgentContext, additionalItems?: ContextItem[]): LLMMessage[] {
+        // --- New path: ContextFeeder handles everything ---
+        if (this.contextFeeder) {
+            const result = this.contextFeeder.buildOptimizedMessages(
+                this.type,
+                userMessage,
+                this.systemPrompt,
+                context,
+                additionalItems
+            );
+
+            this.outputChannel.appendLine(
+                `[${this.name}] Context feed: ${result.includedItems.length} items included, ` +
+                `${result.excludedItems.length} excluded, ` +
+                `${result.budget.consumed}/${result.budget.availableForInput} tokens consumed` +
+                `${result.compressionApplied ? ' (compression applied)' : ''}`
+            );
+
+            return result.messages;
+        }
+
+        // --- Legacy path: manual budget arithmetic ---
+        return this.buildMessagesLegacy(userMessage, context);
+    }
+
+    /**
+     * Legacy message building — preserved for backward compatibility.
+     * Used when ContextFeeder has not been injected.
+     */
+    private buildMessagesLegacy(userMessage: string, context: AgentContext): LLMMessage[] {
         // Token budget: agent's configured context limit, minus 20% reserved for LLM response
         const agentContextLimit = this.config.getAgentContextLimit(this.type);
         const responseBudget = Math.ceil(agentContextLimit * 0.2);

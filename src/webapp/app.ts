@@ -2044,7 +2044,8 @@ let currentSessionId = null;
 let codingMessages = [];
 
 async function loadCodingSessions() {
-    codingSessions = await api('coding/sessions');
+    const result = await api('coding/sessions');
+    codingSessions = Array.isArray(result) ? result : [];
     const list = document.getElementById('sessionList');
     list.innerHTML = codingSessions.map(s =>
         '<div class="session-item' + (s.id === currentSessionId ? ' active' : '') + '" onclick="openCodingSession(\\'' + s.id + '\\')">' +

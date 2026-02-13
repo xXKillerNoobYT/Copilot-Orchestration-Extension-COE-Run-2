@@ -321,6 +321,13 @@ export interface COEConfig {
         syncIntervalMinutes: number;
         autoImport: boolean;
     };
+    models?: {
+        [modelId: string]: {
+            contextWindowTokens: number;
+            maxOutputTokens: number;
+        };
+    };
+    tokenBudget?: TokenBudgetConfig;
 }
 
 // --- Agent Framework Types ---
@@ -453,6 +460,212 @@ export interface CodingSession {
     updated_at: string;
 }
 
+// --- Token & Context Management Types ---
+
+export enum ContentType {
+    Code = 'code',
+    NaturalText = 'natural_text',
+    JSON = 'json',
+    Markdown = 'markdown',
+    Mixed = 'mixed'
+}
+
+export enum ContextCategory {
+    SystemPrompt = 'system_prompt',
+    CurrentTask = 'current_task',
+    UserMessage = 'user_message',
+    ActivePlan = 'active_plan',
+    RelatedTicket = 'related_ticket',
+    RecentHistory = 'recent_history',
+    DesignComponents = 'design_components',
+    ComponentSchemas = 'component_schemas',
+    EthicsRules = 'ethics_rules',
+    SyncState = 'sync_state',
+    OlderHistory = 'older_history',
+    Supplementary = 'supplementary',
+}
+
+export enum ContextPriority {
+    Mandatory = 1,
+    Important = 2,
+    Supplementary = 3,
+    Optional = 4,
+}
+
+export enum ContextBreakingLevel {
+    None = 0,
+    SummarizeOld = 1,
+    PrioritizeRecent = 2,
+    SmartChunking = 3,
+    DiscardLowRelevance = 4,
+    FreshStart = 5,
+}
+
+export enum DecompositionStrategy {
+    ByFile = 'by_file',
+    ByPropertyGroup = 'by_property_group',
+    ByComponent = 'by_component',
+    ByDependency = 'by_dependency',
+    ByPhase = 'by_phase',
+    ByComplexity = 'by_complexity',
+    Hybrid = 'hybrid',
+}
+
+export enum SubtaskCategory {
+    Setup = 'setup',
+    Implementation = 'implementation',
+    Testing = 'testing',
+    Documentation = 'documentation',
+    Integration = 'integration',
+    Styling = 'styling',
+    Configuration = 'configuration',
+}
+
+export interface ModelProfile {
+    id: string;
+    name: string;
+    contextWindowTokens: number;
+    maxOutputTokens: number;
+    tokensPerChar: Record<ContentType, number>;
+    overheadTokensPerMessage: number;
+}
+
+export interface TokenBudget {
+    modelProfile: ModelProfile;
+    totalContextWindow: number;
+    reservedForOutput: number;
+    availableForInput: number;
+    consumed: number;
+    remaining: number;
+    warningLevel: 'ok' | 'warning' | 'critical' | 'exceeded';
+    items: TokenBudgetItem[];
+}
+
+export interface TokenBudgetItem {
+    label: string;
+    contentType: ContentType;
+    charCount: number;
+    estimatedTokens: number;
+    priority: ContextPriority;
+    included: boolean;
+}
+
+export interface TokenBudgetWarning {
+    level: 'warning' | 'critical';
+    message: string;
+    budgetUsedPercent: number;
+    remainingTokens: number;
+    suggestion: string;
+}
+
+export interface ContextItem {
+    id: string;
+    label: string;
+    content: string;
+    contentType: ContentType;
+    category: ContextCategory;
+    priority: ContextPriority;
+    relevanceScore: number;
+    estimatedTokens: number;
+    metadata: {
+        sourceType: 'task' | 'ticket' | 'plan' | 'history' | 'component' | 'schema' | 'ethics_rule' | 'sync_state' | 'code' | 'custom';
+        sourceId: string;
+        createdAt: string;
+        isStale: boolean;
+        relatedTaskIds: string[];
+        relatedFilePatterns: string[];
+    };
+}
+
+export interface RelevanceKeywordSet {
+    taskKeywords: string[];
+    fileKeywords: string[];
+    domainKeywords: string[];
+}
+
+export interface ContextFeedResult {
+    messages: LLMMessage[];
+    budget: TokenBudget;
+    includedItems: ContextItem[];
+    excludedItems: ContextItem[];
+    compressionApplied: boolean;
+    totalItemsConsidered: number;
+}
+
+export interface ContextBreakingResult {
+    strategyApplied: ContextBreakingLevel;
+    originalTokens: number;
+    resultTokens: number;
+    reductionPercent: number;
+    itemsDropped: number;
+    freshStartTriggered: boolean;
+    savedState: ContextSnapshot | null;
+}
+
+export interface ContextSnapshot {
+    id: string;
+    agent_type: string;
+    task_id: string | null;
+    ticket_id: string | null;
+    summary: string;
+    essential_context: string;
+    resume_instructions: string;
+    created_at: string;
+}
+
+export interface DecompositionResult {
+    originalTaskId: string;
+    subtasks: SubtaskDefinition[];
+    strategy: DecompositionStrategy;
+    reason: string;
+    estimatedTotalMinutes: number;
+    isFullyCovered: boolean;
+}
+
+export interface SubtaskDefinition {
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    estimatedMinutes: number;
+    acceptanceCriteria: string;
+    dependencies: string[];
+    filesToModify: string[];
+    filesToCreate: string[];
+    contextBundle: string;
+    category: SubtaskCategory;
+}
+
+export interface DecompositionRule {
+    name: string;
+    condition: (task: Task, metadata: TaskMetadata) => boolean;
+    strategy: DecompositionStrategy;
+    priority: number;
+    decompose: (task: Task, metadata: TaskMetadata) => SubtaskDefinition[];
+}
+
+export interface TaskMetadata {
+    fileCount: number;
+    filesModified: string[];
+    filesToCreate: string[];
+    componentCount: number;
+    propertyCount: number;
+    dependencyCount: number;
+    hasTests: boolean;
+    hasDocs: boolean;
+    hasUI: boolean;
+    isDesignTask: boolean;
+    isSyncTask: boolean;
+    isEthicsTask: boolean;
+    estimatedComplexity: 'low' | 'medium' | 'high' | 'very_high';
+    keywordSignals: string[];
+}
+
+export interface TokenBudgetConfig {
+    warningThresholdPercent: number;
+    criticalThresholdPercent: number;
+    inputBufferPercent: number;
+}
+
 // --- Custom Agent Types ---
 
 export interface CustomAgentConfig {
@@ -483,4 +696,468 @@ export interface CustomAgentConfig {
         maxTimeMinutes: number;
         timePerGoalMinutes: number;
     };
+}
+
+// ============================================================
+// Program Designer v2.0 — New Type Definitions
+// Sync, Ethics, Coding Agent, Transparency, Component Schema
+// ============================================================
+
+// --- v2.0 Enums ---
+
+export enum SyncBackend {
+    Cloud = 'cloud',
+    NAS = 'nas',
+    P2P = 'p2p'
+}
+
+export enum SyncStatus {
+    Idle = 'idle',
+    Syncing = 'syncing',
+    Conflict = 'conflict',
+    Error = 'error',
+    Offline = 'offline'
+}
+
+export enum ConflictResolutionStrategy {
+    LastWriteWins = 'last_write_wins',
+    UserChoice = 'user_choice',
+    Merge = 'merge',
+    KeepLocal = 'keep_local',
+    KeepRemote = 'keep_remote'
+}
+
+export enum EthicsSensitivity {
+    Low = 'low',
+    Medium = 'medium',
+    High = 'high',
+    Maximum = 'maximum'
+}
+
+export enum CodeDiffStatus {
+    Pending = 'pending',
+    Approved = 'approved',
+    Rejected = 'rejected',
+    Applied = 'applied'
+}
+
+export enum LogicBlockType {
+    If = 'if',
+    ElseIf = 'else_if',
+    Else = 'else',
+    Loop = 'loop',
+    Switch = 'switch',
+    TryCatch = 'try_catch'
+}
+
+// --- Component Schema Types ---
+
+export interface ComponentSchema {
+    id: string;
+    /** Component type identifier: matches DesignComponent.type or extended types */
+    type: string;
+    /** Human-readable display name */
+    display_name: string;
+    /** Category for grouping in the component library palette */
+    category: 'primitive_input' | 'container' | 'interactive_logic' | 'data_sync' | 'ethics_rights' | 'display' | 'navigation' | 'custom';
+    /** Description shown in the component library tooltip */
+    description: string;
+    /** Configurable properties with types, defaults, and validation */
+    properties: ComponentSchemaProperty[];
+    /** Events this component can emit */
+    events: ComponentSchemaEvent[];
+    /** Default styles applied when dragged onto canvas */
+    default_styles: Partial<ComponentStyles>;
+    /** Default dimensions (width x height) */
+    default_size: { width: number; height: number };
+    /** Code templates keyed by output format */
+    code_templates: {
+        react_tsx: string;
+        html: string;
+        css: string;
+    };
+    /** Icon identifier for the component palette (VS Code codicon name) */
+    icon: string;
+    /** Whether this is a container that can hold children */
+    is_container: boolean;
+    /** Allowed child component types (empty array = any, null = no children) */
+    allowed_children: string[] | null;
+    /** Minimum and maximum instance counts per page (null = unlimited) */
+    instance_limits: { min: number; max: number | null };
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ComponentSchemaProperty {
+    name: string;
+    type: 'string' | 'number' | 'boolean' | 'color' | 'enum' | 'json' | 'expression';
+    default_value: unknown;
+    required: boolean;
+    description: string;
+    /** For enum types, the allowed values */
+    enum_values?: string[];
+    /** Validation constraints */
+    validation?: {
+        min?: number;
+        max?: number;
+        pattern?: string;
+        max_length?: number;
+    };
+}
+
+export interface ComponentSchemaEvent {
+    name: string;
+    description: string;
+    /** TypeScript type signature for the event payload */
+    payload_type: string;
+    /** Example handler code */
+    example_handler: string;
+}
+
+// --- Sync Types ---
+
+export interface SyncConfig {
+    id: string;
+    /** Which sync backend to use */
+    backend: SyncBackend;
+    /** Backend-specific endpoint URL */
+    endpoint: string;
+    /** Reference to a stored credential (never store raw secrets) */
+    credentials_ref: string;
+    /** Whether sync is currently enabled */
+    enabled: boolean;
+    /** Auto-sync interval in seconds (0 = manual only) */
+    auto_sync_interval_seconds: number;
+    /** Conflict resolution default strategy */
+    default_conflict_strategy: ConflictResolutionStrategy;
+    /** Maximum file size to sync in bytes (default 50MB) */
+    max_file_size_bytes: number;
+    /** Directories/patterns to exclude from sync */
+    exclude_patterns: string[];
+    /** This device's unique identifier */
+    device_id: string;
+    /** Display name for this device */
+    device_name: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface SyncState {
+    device_id: string;
+    device_name: string;
+    status: SyncStatus;
+    /** ISO timestamp of last successful sync */
+    last_sync_at: string | null;
+    /** Number of pending local changes */
+    pending_changes: number;
+    /** Number of unresolved conflicts */
+    unresolved_conflicts: number;
+    /** Current sync progress (0-100, null if not syncing) */
+    progress_percent: number | null;
+    /** Error message if status is 'error' */
+    error_message: string | null;
+    /** Vector clock for causal ordering */
+    vector_clock: Record<string, number>;
+}
+
+export interface SyncConflict {
+    id: string;
+    /** The entity type that conflicted */
+    entity_type: 'design_component' | 'design_page' | 'design_token' | 'page_flow' | 'task' | 'plan';
+    /** The entity ID */
+    entity_id: string;
+    /** JSON snapshot of the local version */
+    local_version: string;
+    /** JSON snapshot of the remote version */
+    remote_version: string;
+    /** Device ID that created the remote version */
+    remote_device_id: string;
+    /** ISO timestamp of local change */
+    local_changed_at: string;
+    /** ISO timestamp of remote change */
+    remote_changed_at: string;
+    /** The specific fields that conflict */
+    conflicting_fields: string[];
+    /** Current resolution status */
+    resolution: ConflictResolutionStrategy | null;
+    /** Who resolved it (device_id or 'auto') */
+    resolved_by: string | null;
+    /** ISO timestamp of resolution */
+    resolved_at: string | null;
+    created_at: string;
+}
+
+export interface SyncChange {
+    id: string;
+    /** The entity type that changed */
+    entity_type: string;
+    /** The entity ID */
+    entity_id: string;
+    /** Type of change */
+    change_type: 'create' | 'update' | 'delete';
+    /** Device that originated the change */
+    device_id: string;
+    /** SHA-256 hash of the entity state before the change */
+    before_hash: string;
+    /** SHA-256 hash of the entity state after the change */
+    after_hash: string;
+    /** JSON diff (RFC 6902 JSON Patch format) */
+    patch: string;
+    /** Monotonic sequence number per device */
+    sequence_number: number;
+    /** Whether this change has been synced to remote */
+    synced: boolean;
+    created_at: string;
+}
+
+// --- Ethics Types ---
+
+export interface EthicsModule {
+    id: string;
+    /** Human-readable module name (e.g. "Data Privacy", "Content Safety") */
+    name: string;
+    /** Detailed description of what this module governs */
+    description: string;
+    /** Whether this module is currently active */
+    enabled: boolean;
+    /** Sensitivity level controlling how strict the rules are */
+    sensitivity: EthicsSensitivity;
+    /** Broad action categories this module governs */
+    scope: string[];
+    /** Actions explicitly allowed under this module */
+    allowed_actions: string[];
+    /** Actions explicitly blocked under this module */
+    blocked_actions: string[];
+    /** Ordered list of rules within this module */
+    rules: EthicsRule[];
+    /** Version for tracking module updates */
+    version: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface EthicsRule {
+    id: string;
+    /** Parent module ID */
+    module_id: string;
+    /** Human-readable rule name */
+    name: string;
+    /** Natural language description of the rule */
+    description: string;
+    /** The condition expression (evaluated against action context) */
+    condition: string;
+    /** What happens when the condition matches */
+    action: 'allow' | 'block' | 'warn' | 'audit';
+    /** Priority for rule evaluation order (lower = higher priority) */
+    priority: number;
+    /** Whether this rule is currently active */
+    enabled: boolean;
+    /** Optional message shown when rule triggers */
+    message: string;
+    created_at: string;
+}
+
+export interface EthicsAuditEntry {
+    id: string;
+    /** The module that evaluated this action */
+    module_id: string;
+    /** The specific rule that triggered (null if no rule matched) */
+    rule_id: string | null;
+    /** The action that was evaluated */
+    action_description: string;
+    /** The evaluation result */
+    decision: 'allowed' | 'blocked' | 'warned' | 'overridden';
+    /** The agent or service that requested the action */
+    requestor: string;
+    /** Context JSON at the time of evaluation */
+    context_snapshot: string;
+    /** If overridden, who approved the override */
+    override_by: string | null;
+    /** Reason for override (if applicable) */
+    override_reason: string | null;
+    created_at: string;
+}
+
+export interface EthicsEvaluationResult {
+    allowed: boolean;
+    decision: 'allowed' | 'blocked' | 'warned';
+    triggeredRules: EthicsRule[];
+    messages: string[];
+    auditEntryId: string;
+}
+
+export interface EthicsActionContext {
+    action: string;
+    source: string;
+    targetEntityType?: string;
+    targetEntityId?: string;
+    metadata?: Record<string, unknown>;
+}
+
+// --- Coding Agent Types ---
+
+export interface CodingAgentRequest {
+    id: string;
+    /** The natural language command from the user */
+    command: string;
+    /** Intent classification result */
+    intent: 'build' | 'modify' | 'explain' | 'fix' | 'automate' | 'query';
+    /** Target component IDs this command applies to */
+    target_component_ids: string[];
+    /** Target page ID context */
+    page_id: string | null;
+    /** Target plan ID context */
+    plan_id: string | null;
+    /** The output format requested */
+    output_format: 'react_tsx' | 'html' | 'css' | 'typescript' | 'json';
+    /** Additional constraints or preferences */
+    constraints: Record<string, unknown>;
+    /** Conversation session ID for multi-turn interactions */
+    session_id: string | null;
+    created_at: string;
+}
+
+export interface CodingAgentResponse {
+    id: string;
+    /** The request this responds to */
+    request_id: string;
+    /** Generated code (main output) */
+    code: string;
+    /** Language of the generated code */
+    language: string;
+    /** Natural language explanation of what was generated */
+    explanation: string;
+    /** Multiple output files if the generation spans several files */
+    files: Array<{ name: string; content: string; language: string }>;
+    /** Confidence score (0-100) */
+    confidence: number;
+    /** Warnings or suggestions */
+    warnings: string[];
+    /** Whether this response requires user approval before applying */
+    requires_approval: boolean;
+    /** The diff if this modifies existing code */
+    diff: CodeDiff | null;
+    /** Tokens consumed by the LLM */
+    tokens_used: number;
+    /** Processing time in milliseconds */
+    duration_ms: number;
+    created_at: string;
+}
+
+export interface CodeDiff {
+    id: string;
+    /** Source request ID */
+    request_id: string;
+    /** The entity being modified (component, page, file) */
+    entity_type: string;
+    /** Entity ID */
+    entity_id: string;
+    /** Code before the change */
+    before: string;
+    /** Code after the change */
+    after: string;
+    /** Unified diff format string */
+    unified_diff: string;
+    /** Number of lines added */
+    lines_added: number;
+    /** Number of lines removed */
+    lines_removed: number;
+    /** Current approval status */
+    status: CodeDiffStatus;
+    /** Who approved/rejected */
+    reviewed_by: string | null;
+    /** Review comment */
+    review_comment: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// --- Logic Block Types ---
+
+export interface LogicBlock {
+    id: string;
+    /** Parent page or component this logic belongs to */
+    page_id: string | null;
+    component_id: string | null;
+    plan_id: string;
+    /** Block type */
+    type: LogicBlockType;
+    /** Display label in the visual editor */
+    label: string;
+    /** The condition expression (for if/else_if/loop/switch) */
+    condition: string;
+    /** The body code or nested block references */
+    body: string;
+    /** Parent block ID for nesting (null = top level) */
+    parent_block_id: string | null;
+    /** Ordering within the parent */
+    sort_order: number;
+    /** Generated TypeScript code from this block */
+    generated_code: string;
+    /** Visual position on canvas */
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    /** Whether this block is collapsed in the visual editor */
+    collapsed: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+// --- Device & Transparency Types ---
+
+export interface DeviceInfo {
+    id: string;
+    /** Unique device identifier (machine-generated UUID) */
+    device_id: string;
+    /** User-facing device name */
+    name: string;
+    /** Operating system identifier */
+    os: string;
+    /** Last known IP address or network identifier */
+    last_address: string;
+    /** Last time this device was seen online */
+    last_seen_at: string;
+    /** Whether this is the current device */
+    is_current: boolean;
+    /** Whether sync is enabled for this device */
+    sync_enabled: boolean;
+    /** Device-specific vector clock value */
+    clock_value: number;
+    created_at: string;
+}
+
+export interface ActionLog {
+    id: string;
+    /** Which subsystem performed the action */
+    source: 'coding_agent' | 'ethics_engine' | 'sync_service' | 'designer_engine' | 'user' | 'system';
+    /** Action category for filtering */
+    category: 'code_generation' | 'ethics_decision' | 'sync_operation' | 'design_change' | 'configuration' | 'error';
+    /** Human-readable action description */
+    action: string;
+    /** Detailed payload/context as JSON */
+    detail: string;
+    /** Severity level */
+    severity: 'info' | 'warning' | 'error' | 'critical';
+    /** Related entity type (optional) */
+    entity_type: string | null;
+    /** Related entity ID (optional) */
+    entity_id: string | null;
+    /** Device that originated the action */
+    device_id: string | null;
+    /** Session or request ID for correlation */
+    correlation_id: string | null;
+    /** Whether this entry has been synced to remote log */
+    synced: boolean;
+    created_at: string;
+}
+
+// --- Conflict Resolution Types ---
+
+export interface ResolutionSuggestion {
+    strategy: ConflictResolutionStrategy;
+    confidence: number;
+    reason: string;
+    preview: string;
 }

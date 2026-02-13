@@ -9,6 +9,11 @@ import { registerCommands } from './commands';
 import { FileWatcherService } from './core/file-watcher';
 import { TestRunnerService } from './core/test-runner';
 import { EvolutionService } from './core/evolution-service';
+import { TokenBudgetTracker } from './core/token-budget-tracker';
+import { ContextFeeder } from './core/context-feeder';
+import { TaskDecompositionEngine } from './core/task-decomposition-engine';
+import { ContextBreakingChain } from './core/context-breaking-chain';
+import { ContentType } from './types';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -51,6 +56,60 @@ export async function activate(context: vscode.ExtensionContext) {
         const evolutionService = new EvolutionService(database, configManager, llmService, outputChannel);
         orchestrator.setEvolutionService(evolutionService);
         outputChannel.appendLine('EvolutionService wired into Orchestrator.');
+
+        // Phase 2d: Wire token management services into all agents
+        const coeConfig = configManager.getConfig();
+        const budgetTracker = new TokenBudgetTracker(
+            coeConfig.llm.model,
+            coeConfig.tokenBudget,
+            outputChannel
+        );
+
+        // Register any additional model profiles from config
+        if (coeConfig.models) {
+            for (const [modelId, modelConfig] of Object.entries(coeConfig.models)) {
+                if (modelId !== coeConfig.llm.model) {
+                    // The default model was already registered by the constructor
+                    budgetTracker.registerModel({
+                        id: modelId,
+                        name: modelId,
+                        contextWindowTokens: modelConfig.contextWindowTokens,
+                        maxOutputTokens: modelConfig.maxOutputTokens,
+                        tokensPerChar: {
+                            [ContentType.Code]: 3.2,
+                            [ContentType.NaturalText]: 4.0,
+                            [ContentType.JSON]: 3.5,
+                            [ContentType.Markdown]: 3.8,
+                            [ContentType.Mixed]: 3.6,
+                        },
+                        overheadTokensPerMessage: 4,
+                    });
+                }
+            }
+        }
+
+        const contextFeeder = new ContextFeeder(budgetTracker, outputChannel);
+        const decompositionEngine = new TaskDecompositionEngine(outputChannel);
+        const contextBreakingChain = new ContextBreakingChain(budgetTracker, outputChannel);
+
+        // Inject into all agents
+        orchestrator.injectContextServices(budgetTracker, contextFeeder);
+        orchestrator.injectDecompositionEngine(decompositionEngine);
+
+        // Wire budget warning callbacks
+        budgetTracker.onWarning((warning) => {
+            outputChannel.appendLine(`[TokenBudget] ${warning.level.toUpperCase()}: ${warning.message}`);
+            if (warning.level === 'critical') {
+                outputChannel.appendLine(`[TokenBudget] Suggestion: ${warning.suggestion}`);
+            }
+        });
+
+        outputChannel.appendLine(
+            `Token management services initialized: ` +
+            `model=${coeConfig.llm.model}, ` +
+            `context=${budgetTracker.getCurrentModelProfile().contextWindowTokens} tokens, ` +
+            `thresholds=${coeConfig.tokenBudget?.warningThresholdPercent ?? 70}%/${coeConfig.tokenBudget?.criticalThresholdPercent ?? 90}%`
+        );
 
         // Phase 3: Initialize MCP server
         mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel);

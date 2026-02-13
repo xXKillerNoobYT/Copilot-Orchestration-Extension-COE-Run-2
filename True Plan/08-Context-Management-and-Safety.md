@@ -1,7 +1,8 @@
 # Context Management & Safety Systems
 
-**Version**: 1.0  
-**Date**: February 9, 2026
+**Version**: 1.1
+**Date**: February 12, 2026
+**Updated**: Layered Context Breaking Chain — IMPLEMENTED (4 services)
 
 ---
 
@@ -17,23 +18,30 @@ AI models have limited "memory" (context windows). COE includes sophisticated sy
 
 AI models can only process a certain number of "tokens" (roughly, words) at once. When a conversation or task context grows too large, the AI starts losing track, hallucinating, or failing outright.
 
-### COE's Solution: Layered Context Breaking
+### COE's Solution: Layered Context Breaking — ✅ IMPLEMENTED
+
+> **Status**: Fully implemented as of v1.1 (February 12, 2026)
+> **Services**: `TokenBudgetTracker`, `ContextFeeder`, `ContextBreakingChain`, `TaskDecompositionEngine`
+> **Files**: `src/core/token-budget-tracker.ts`, `src/core/context-feeder.ts`, `src/core/context-breaking-chain.ts`, `src/core/task-decomposition-engine.ts`
 
 When context approaches the limit, COE applies a chain of strategies to reduce size while preserving the most important information:
 
 ```
-Context Approaching Limit (80% Full)
+Context Approaching Limit (70% = Warning, 90% = Critical)
               │
               ▼
    Strategy 1: Summarize Old Context
-   Compress the first 60% into a brief summary
+   Compress the oldest 60% of items to ~30%
+   (keep first sentences, headings, file paths)
+   [ContextBreakingChain.applyLevel1()]
               │
    Still too big?
               │
               ▼
    Strategy 2: Prioritize Recent
-   Keep recent + high-priority items
-   Discard low-relevance older items
+   Keep last-hour items at full fidelity
+   Drop items >24h old with low relevance score
+   [ContextBreakingChain.applyLevel2()]
               │
    Still too big?
               │
@@ -42,45 +50,66 @@ Context Approaching Limit (80% Full)
    Compress by content type:
    - Code: compress to 70%
    - Text: compress to 50%
-   - Plan references: keep 100% (verbatim)
+   - Plan references: keep 100% (NEVER compressed)
    - Logs: compress to 40%
+   [ContextBreakingChain.applyLevel3()]
               │
    Still too big?
               │
               ▼
    Strategy 4: Discard Low Relevance
    Drop bottom 30% by relevance score
-   Replace with brief placeholders
+   Replace with one-line placeholders
+   [ContextBreakingChain.applyLevel4()]
               │
    Still too big?
               │
               ▼
    Strategy 5: Fresh Start
-   Save state, start new context
-   with essential information only
+   Save full state to context_snapshots DB table
+   Restart with only system prompt + current task + summary
+   [ContextBreakingChain.applyLevel5()]
 ```
+
+### Supporting Services
+
+| Service | File | Purpose |
+|---------|------|---------|
+| **TokenBudgetTracker** | `src/core/token-budget-tracker.ts` | Content-type-aware token estimation (Code ~3.2 chars/token, Text ~4.0, JSON ~3.5, Markdown ~3.8). Per-call budget management with warning/critical thresholds. |
+| **ContextFeeder** | `src/core/context-feeder.ts` | Relevance scoring (deterministic keyword matching), tiered loading (Mandatory→Important→Supplementary→Optional), deterministic compression (strip comments, collapse patterns, abbreviate JSON). |
+| **ContextBreakingChain** | `src/core/context-breaking-chain.ts` | 5-level progressive context reduction. Applied automatically when budget is exceeded. Level 5 saves state to `context_snapshots` table. |
+| **TaskDecompositionEngine** | `src/core/task-decomposition-engine.ts` | Rule-based task decomposition (no LLM calls). 6 built-in rules: ByFile, ByComponent, ByPropertyGroup, ByPhase, ByDependency, ByComplexity. |
+
+### Integration Points
+
+- **BaseAgent.buildMessages()** → delegates to `ContextFeeder.buildOptimizedMessages()` when available
+- **BaseAgent.estimateTokens()** → delegates to `TokenBudgetTracker.estimateTokens()` when available
+- **BaseAgent.processMessage()** → records usage via `TokenBudgetTracker.recordUsage()` after each LLM call
+- **PlanningAgent.autoDecompose()** → tries `TaskDecompositionEngine.decompose()` first, LLM fallback only if no rule matches
+- **extension.ts** → creates all services and injects into all agents during activation
 
 ### Per-Agent Context Limits
 
-Different agents have different context needs:
+Different agents have different context needs. These are configured in `.coe/config.json`:
 
-| Agent | Limit | Why |
-|-------|-------|-----|
-| Verification | 4,000 tokens | Only needs task + criteria + test results |
-| Answer Agent | 5,000 tokens | Needs question + plan context + history |
-| Planning | 5,000 tokens | Needs requirements + existing structure |
-| Coding (external) | 5,000 tokens | Gets one task at a time with focused context |
-| Custom Agents | 4,000 tokens | Configurable, kept small for simple models |
+| Agent | Legacy Limit | Actual Budget | Why |
+|-------|-------------|---------------|-----|
+| Verification | 4,000 tokens | ~27,200 input tokens* | Only needs task + criteria + test results |
+| Answer Agent | 5,000 tokens | ~27,200 input tokens* | Needs question + plan context + history |
+| Planning | 5,000 tokens | ~27,200 input tokens* | Needs requirements + existing structure |
+| Coding (external) | 5,000 tokens | ~27,200 input tokens* | Gets one task at a time with focused context |
+| Custom Agents | 4,000 tokens | ~27,200 input tokens* | Configurable, kept small for simple models |
+
+\* With TokenBudgetTracker: 32,768 context window - 4,096 reserved output - 5% buffer ≈ 27,238 input tokens available per call. Legacy limits used as max output tokens in `llm.chat()`.
 
 ### Per-LLM Configuration
 
-Different AI models have different capabilities:
+Different AI models have different capabilities. Model profiles are registered in `TokenBudgetTracker` with content-type-aware token ratios:
 
-| Model Type | Token Limit | Notes |
-|-----------|-------------|-------|
-| Local 14B model | 3,500 tokens | Conservative for reliability |
-| Cloud model (Grok) | 8,000 tokens | Can handle more context |
-| GPT-4 class | 6,000 tokens | Balanced limit |
+| Model Type | Context Window | Max Output | Token Ratios |
+|-----------|---------------|------------|-------------|
+| Local 14B (ministral-3-14b) | 32,768 tokens | 4,096 tokens | Code: 3.2, Text: 4.0, JSON: 3.5 chars/token |
+| Additional models | Configurable via `config.models` | Configurable | Uses same default ratios |
 
 ---
 

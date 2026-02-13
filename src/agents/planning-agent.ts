@@ -1,10 +1,24 @@
 import { BaseAgent } from './base-agent';
+import { TaskDecompositionEngine } from '../core/task-decomposition-engine';
 import {
     AgentType, AgentContext, AgentResponse, AgentAction,
     TaskPriority, TaskStatus, PlanStatus
 } from '../types';
 
 export class PlanningAgent extends BaseAgent {
+    // Optional deterministic decomposition engine — avoids LLM calls for most splits
+    private decompositionEngine: TaskDecompositionEngine | null = null;
+
+    /**
+     * Inject the deterministic decomposition engine.
+     * When set, autoDecompose() tries rule-based splitting first
+     * and only falls back to LLM if no deterministic rule matches.
+     */
+    setDecompositionEngine(engine: TaskDecompositionEngine): void {
+        this.decompositionEngine = engine;
+        this.outputChannel.appendLine(`[${this.name}] TaskDecompositionEngine injected`);
+    }
+
     readonly name = 'Planning Team';
     readonly type = AgentType.Planning;
     readonly systemPrompt = `You are the Planning Team agent for the Copilot Orchestration Extension (COE).
@@ -226,9 +240,14 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
 
     /**
      * Recursively decompose a task into subtasks.
+     *
+     * Strategy (deterministic-first):
+     * 1. Try TaskDecompositionEngine (rule-based, no LLM) — handles ~80% of cases
+     * 2. Fall back to LLM decomposition only if no deterministic rule matches
+     *
      * - Sets parent task status to "decomposed"
      * - Creates subtasks with parent_task_id set
-     * - Subtasks inherit parent's dependencies + depend on each other in order
+     * - Subtasks inherit parent's plan_id + depend on each other in order
      * - If a subtask is still >45 min, recursively decompose (max depth: 3)
      */
     private async autoDecompose(taskId: string, depth: number): Promise<AgentResponse> {
@@ -240,6 +259,70 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
         const task = this.database.getTask(taskId);
         if (!task) return { content: `Task not found: ${taskId}` };
 
+        // --- Attempt 1: Deterministic decomposition (no LLM call) ---
+        if (this.decompositionEngine) {
+            const deterministicResult = this.decompositionEngine.decompose(task, depth);
+
+            if (deterministicResult && deterministicResult.subtasks.length > 0) {
+                this.outputChannel.appendLine(
+                    `[${this.name}] Deterministic decomposition: "${task.title}" → ${deterministicResult.subtasks.length} subtasks ` +
+                    `(strategy: ${deterministicResult.strategy}, reason: ${deterministicResult.reason})`
+                );
+
+                // Create subtasks in the database
+                let previousSubtaskId: string | null = null;
+                const createdSubtaskIds: string[] = [];
+
+                for (const subtaskDef of deterministicResult.subtasks) {
+                    const subtask = this.database.createTask({
+                        title: subtaskDef.title,
+                        description: subtaskDef.description,
+                        priority: subtaskDef.priority ?? (task.priority as TaskPriority) ?? TaskPriority.P2,
+                        estimated_minutes: subtaskDef.estimatedMinutes,
+                        acceptance_criteria: subtaskDef.acceptanceCriteria,
+                        plan_id: task.plan_id ?? undefined,
+                        parent_task_id: taskId,
+                        dependencies: previousSubtaskId ? [previousSubtaskId] : [],
+                        context_bundle: subtaskDef.filesToModify?.length > 0
+                            ? subtaskDef.filesToModify.join(', ')
+                            : task.context_bundle || null,
+                    });
+
+                    createdSubtaskIds.push(subtask.id);
+                    previousSubtaskId = subtask.id;
+
+                    // Recursively decompose if subtask is still too large
+                    if (subtaskDef.estimatedMinutes > 45) {
+                        try {
+                            await this.autoDecompose(subtask.id, depth + 1);
+                        } catch (err) {
+                            this.outputChannel.appendLine(
+                                `Recursive decompose failed for subtask "${subtaskDef.title}": ${err}`
+                            );
+                        }
+                    }
+                }
+
+                // Mark parent as decomposed
+                this.database.updateTask(taskId, { status: TaskStatus.Decomposed });
+                this.database.addAuditLog(this.name, 'auto_decompose_deterministic',
+                    `Task "${task.title}" decomposed deterministically at depth ${depth}: ${deterministicResult.subtasks.length} subtasks (${deterministicResult.strategy})`);
+
+                return {
+                    content: `Task "${task.title}" decomposed into ${deterministicResult.subtasks.length} subtasks (deterministic: ${deterministicResult.strategy}).\n\nSubtasks:\n${deterministicResult.subtasks.map((st, i) => `${i + 1}. ${st.title} (${st.estimatedMinutes} min)`).join('\n')}`,
+                    actions: [{
+                        type: 'log',
+                        payload: { message: `Deterministic decomposition: ${deterministicResult.subtasks.length} subtasks` },
+                    }],
+                };
+            }
+
+            this.outputChannel.appendLine(
+                `[${this.name}] No deterministic rule matched for "${task.title}" — falling back to LLM decomposition`
+            );
+        }
+
+        // --- Attempt 2: LLM-based decomposition (fallback) ---
         const context: AgentContext = {
             task,
             conversationHistory: [],
@@ -255,8 +338,8 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
         // The subtasks were created by parseResponse — find them by matching the most recent plan
         // Instead, we mark the parent as decomposed
         this.database.updateTask(taskId, { status: TaskStatus.Decomposed });
-        this.database.addAuditLog(this.name, 'auto_decompose',
-            `Task "${task.title}" decomposed at depth ${depth}`);
+        this.database.addAuditLog(this.name, 'auto_decompose_llm',
+            `Task "${task.title}" decomposed via LLM at depth ${depth}`);
 
         return response;
     }

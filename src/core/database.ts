@@ -286,6 +286,27 @@ export class Database {
             CREATE INDEX IF NOT EXISTS idx_page_flows_plan ON page_flows(plan_id);
             CREATE INDEX IF NOT EXISTS idx_coding_sessions_plan ON coding_sessions(plan_id);
             CREATE INDEX IF NOT EXISTS idx_coding_messages_session ON coding_messages(session_id);
+
+            -- Context Snapshots: stores full context state for Level 5 "Fresh Start"
+            -- in the Context Breaking Chain. When context exceeds all compression levels,
+            -- the system saves everything here and restarts with a clean slate.
+            CREATE TABLE IF NOT EXISTS context_snapshots (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL,
+                task_id TEXT,
+                plan_id TEXT,
+                context_json TEXT NOT NULL DEFAULT '{}',
+                summary TEXT NOT NULL DEFAULT '',
+                token_count INTEGER NOT NULL DEFAULT 0,
+                breaking_level INTEGER NOT NULL DEFAULT 5,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (task_id) REFERENCES tasks(id),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent ON context_snapshots(agent_type);
+            CREATE INDEX IF NOT EXISTS idx_context_snapshots_task ON context_snapshots(task_id);
+            CREATE INDEX IF NOT EXISTS idx_context_snapshots_created ON context_snapshots(created_at);
         `);
     }
 
@@ -1054,6 +1075,102 @@ export class Database {
         // This resets task queue state while preserving history
         this.db.prepare("UPDATE tasks SET status = 'not_started' WHERE status = 'in_progress'").run();
         this.db.prepare("UPDATE agents SET status = 'idle', current_task = NULL").run();
+    }
+
+    // ==================== CONTEXT SNAPSHOTS ====================
+
+    /**
+     * Save a context snapshot for Level 5 "Fresh Start" recovery.
+     * Called by ContextBreakingChain when all compression levels are exhausted.
+     */
+    saveContextSnapshot(data: {
+        agentType: string;
+        taskId?: string;
+        planId?: string;
+        contextJson: string;
+        summary: string;
+        tokenCount: number;
+        breakingLevel?: number;
+    }): { id: string } {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO context_snapshots (id, agent_type, task_id, plan_id, context_json, summary, token_count, breaking_level, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(
+            id,
+            data.agentType,
+            data.taskId ?? null,
+            data.planId ?? null,
+            data.contextJson,
+            data.summary,
+            data.tokenCount,
+            data.breakingLevel ?? 5
+        );
+        return { id };
+    }
+
+    /**
+     * Retrieve the most recent context snapshot for an agent/task combination.
+     */
+    getLatestContextSnapshot(agentType: string, taskId?: string): {
+        id: string;
+        agent_type: string;
+        task_id: string | null;
+        plan_id: string | null;
+        context_json: string;
+        summary: string;
+        token_count: number;
+        breaking_level: number;
+        created_at: string;
+    } | null {
+        let query = 'SELECT * FROM context_snapshots WHERE agent_type = ?';
+        const params: unknown[] = [agentType];
+
+        if (taskId) {
+            query += ' AND task_id = ?';
+            params.push(taskId);
+        }
+
+        query += ' ORDER BY created_at DESC LIMIT 1';
+        return this.db.prepare(query).get(...params) as {
+            id: string;
+            agent_type: string;
+            task_id: string | null;
+            plan_id: string | null;
+            context_json: string;
+            summary: string;
+            token_count: number;
+            breaking_level: number;
+            created_at: string;
+        } | null;
+    }
+
+    /**
+     * Clean up old context snapshots, keeping only the most recent N per agent type.
+     */
+    pruneContextSnapshots(keepPerAgent: number = 10): number {
+        // Get distinct agent types
+        const agents = this.db.prepare(
+            'SELECT DISTINCT agent_type FROM context_snapshots'
+        ).all() as Array<{ agent_type: string }>;
+
+        let totalDeleted = 0;
+
+        for (const { agent_type } of agents) {
+            const oldSnapshots = this.db.prepare(`
+                SELECT id FROM context_snapshots
+                WHERE agent_type = ?
+                ORDER BY created_at DESC
+                LIMIT -1 OFFSET ?
+            `).all(agent_type, keepPerAgent) as Array<{ id: string }>;
+
+            for (const snap of oldSnapshots) {
+                this.db.prepare('DELETE FROM context_snapshots WHERE id = ?').run(snap.id);
+                totalDeleted++;
+            }
+        }
+
+        return totalDeleted;
     }
 
     close(): void {

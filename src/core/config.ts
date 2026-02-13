@@ -33,6 +33,19 @@ const DEFAULT_CONFIG: COEConfig = {
         boss: { contextLimit: 5000, enabled: true },
         custom: { contextLimit: 4000, enabled: true },
     },
+    // Model profiles: context windows and output limits for token budget management
+    models: {
+        'mistralai/ministral-3-14b-reasoning': {
+            contextWindowTokens: 32768,
+            maxOutputTokens: 4096,
+        },
+    },
+    // Token budget thresholds for input context management
+    tokenBudget: {
+        warningThresholdPercent: 70,
+        criticalThresholdPercent: 90,
+        inputBufferPercent: 5,
+    },
 };
 
 export class ConfigManager {
@@ -98,6 +111,12 @@ export class ConfigManager {
             watcher: { ...DEFAULT_CONFIG.watcher, ...loaded.watcher },
             agents: { ...DEFAULT_CONFIG.agents, ...loaded.agents },
             github: loaded.github,
+            models: { ...(DEFAULT_CONFIG.models ?? {}), ...(loaded.models ?? {}) },
+            tokenBudget: {
+                warningThresholdPercent: loaded.tokenBudget?.warningThresholdPercent ?? DEFAULT_CONFIG.tokenBudget!.warningThresholdPercent,
+                criticalThresholdPercent: loaded.tokenBudget?.criticalThresholdPercent ?? DEFAULT_CONFIG.tokenBudget!.criticalThresholdPercent,
+                inputBufferPercent: loaded.tokenBudget?.inputBufferPercent ?? DEFAULT_CONFIG.tokenBudget!.inputBufferPercent,
+            },
         };
     }
 
