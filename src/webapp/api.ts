@@ -2566,18 +2566,230 @@ Only return the JSON object, nothing else.`;
                 content: `Design spec loaded for "${plan.name}" (snapshot v${versionNumber}):\n\`\`\`json\n${JSON.stringify(designSpec, null, 2)}\n\`\`\``,
             });
 
-            // Generate implementation tasks from design (1 per page + components)
+            // Generate intelligent implementation tasks from design
             const generatedTasks: any[] = [];
+            const scale = (config.scale as string) || 'MVP';
+            const features = (config.design?.features as string[]) || (config.features as string[]) || [];
+            const roles = (config.design?.userRoles as string[]) || (config.userRoles as string[]) || [];
+            const techStack = (config.design?.techStack as string) || (config.techStack as string) || 'React + Node';
+            let sortIdx = 0;
+
+            // Phase 1: Project setup task (always)
+            generatedTasks.push(database.createTask({
+                title: 'Project scaffolding and setup',
+                description: `Initialize ${techStack} project structure.\n- Create folder structure\n- Install dependencies\n- Configure build tooling\n- Set up linting and formatting`,
+                plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                acceptance_criteria: 'Project builds without errors, dev server starts',
+            }));
+
+            // Phase 2: Per-page tasks with component-aware subtasks
             for (const page of pages) {
-                const pageComponents = allComponents.filter(c => c.page_id === page.id);
-                const task = database.createTask({
-                    title: `Implement page: ${page.name}`,
-                    description: `Build the "${page.name}" page (route: ${page.route || '/'}) with ${pageComponents.length} components:\n` +
-                        pageComponents.map(c => `- ${c.type} (${c.width}x${c.height})`).join('\n'),
-                    plan_id: planId,
-                });
-                generatedTasks.push(task);
+                const pageComps = allComponents.filter(c => c.page_id === page.id);
+                const hasForms = pageComps.some(c => c.type === 'form' || c.type === 'input');
+                const hasTables = pageComps.some(c => c.type === 'table' || c.type === 'list');
+                const hasNav = pageComps.some(c => c.type === 'nav' || c.type === 'sidebar');
+                const hasCards = pageComps.some(c => c.type === 'card');
+                const hasImages = pageComps.some(c => c.type === 'image');
+
+                // Main page task
+                const compList = pageComps.map(c => `- ${c.type}: "${c.name}" at (${c.x},${c.y}) ${c.width}x${c.height}${c.content ? ' — "' + c.content + '"' : ''}`).join('\n');
+                generatedTasks.push(database.createTask({
+                    title: `Build page: ${page.name}`,
+                    description: `Implement the "${page.name}" page (route: ${page.route || '/'}).\n\nComponents (${pageComps.length}):\n${compList}\n\nLayout: Match the visual designer positions and sizes.`,
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: `Page renders at ${page.route || '/'} with all ${pageComps.length} components visible and correctly positioned`,
+                }));
+
+                // Form handling subtask
+                if (hasForms) {
+                    const formComps = pageComps.filter(c => c.type === 'form' || c.type === 'input');
+                    generatedTasks.push(database.createTask({
+                        title: `${page.name}: Form validation and submission`,
+                        description: `Add input validation and submit handling for ${formComps.length} form element(s) on "${page.name}".\n- Client-side validation\n- Error messages\n- Submit handler with loading state\n- Success/error feedback`,
+                        plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                        acceptance_criteria: 'Forms validate input, show errors, submit data, and show success feedback',
+                    }));
+                }
+
+                // Table/list data binding subtask
+                if (hasTables) {
+                    generatedTasks.push(database.createTask({
+                        title: `${page.name}: Data table/list binding`,
+                        description: `Connect table/list components on "${page.name}" to data source.\n- Fetch data from API\n- Render rows/items\n- Add loading and empty states` +
+                            (scale !== 'MVP' ? '\n- Add sorting and pagination' : ''),
+                        plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                        acceptance_criteria: 'Tables display data, handle loading/empty states' + (scale !== 'MVP' ? ', support sorting and pagination' : ''),
+                    }));
+                }
             }
+
+            // Phase 3: Data model tasks (one per model)
+            for (const model of dataModels) {
+                generatedTasks.push(database.createTask({
+                    title: `Data model: ${model.name} CRUD`,
+                    description: `Implement CRUD operations for ${model.name}.\n- Create API routes (GET, POST, PUT, DELETE)\n- ${model.fields.length} fields: ${model.fields.map((f: any) => f.name).join(', ')}\n- Input validation\n- Error handling`,
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: `All CRUD endpoints work for ${model.name}, validation prevents invalid data`,
+                }));
+            }
+
+            // Phase 4: Feature-specific tasks
+            if (features.includes('User Authentication')) {
+                generatedTasks.push(database.createTask({
+                    title: 'User authentication system',
+                    description: 'Implement login, signup, and session management.\n- Login/signup forms\n- JWT or session-based auth\n- Protected routes\n- Logout flow',
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Users can register, login, access protected routes, and logout',
+                }));
+            }
+            if (features.includes('Search & Filtering')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Search and filtering system',
+                    description: 'Add search functionality across relevant pages.\n- Search input component\n- Filter controls\n- Debounced API queries\n- Result display',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Search returns relevant results, filters narrow results correctly',
+                }));
+            }
+            if (features.includes('File Upload')) {
+                generatedTasks.push(database.createTask({
+                    title: 'File upload system',
+                    description: 'Implement file upload with drag-and-drop.\n- Upload UI component\n- Backend file handling\n- File type validation\n- Progress indicator',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Files can be uploaded via click or drag, with progress shown and validation enforced',
+                }));
+            }
+            if (features.includes('Notifications / Alerts')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Notification system',
+                    description: 'Add notification display and management.\n- Notification list component\n- Mark as read\n- Toast alerts for new notifications\n- Badge count in header',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Notifications display, can be marked read, badge count updates',
+                }));
+            }
+            if (features.includes('Charts / Analytics')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Charts and analytics dashboard',
+                    description: 'Implement chart components for data visualization.\n- Choose charting library\n- Integrate with data sources\n- Responsive chart containers\n- Multiple chart types (bar, line, pie)',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Charts render with real data, resize correctly, and display tooltips',
+                }));
+            }
+            if (features.includes('Real-time Updates')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Real-time update system',
+                    description: 'Add WebSocket or SSE for live updates.\n- Connection management\n- Auto-reconnect\n- Update UI components in real-time\n- Status indicator',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Changes from one client appear on another without refresh',
+                }));
+            }
+            if (features.includes('Payment Integration')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Payment integration',
+                    description: 'Integrate payment processing (e.g., Stripe).\n- Payment form component\n- Backend payment API\n- Order confirmation flow\n- Error handling for declined payments',
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Payments process successfully, errors handled gracefully, confirmations shown',
+                }));
+            }
+            if (features.includes('Chat / Messaging')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Chat/messaging system',
+                    description: 'Implement real-time messaging.\n- Chat UI component\n- Message history\n- Send/receive messages\n- Typing indicators',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Users can send and receive messages in real-time with history',
+                }));
+            }
+            if (features.includes('Data Export')) {
+                generatedTasks.push(database.createTask({
+                    title: 'Data export functionality',
+                    description: 'Add export capabilities for data tables.\n- CSV export\n- JSON export\n- Filtered export (export current view)\n- Download handling',
+                    plan_id: planId, priority: 'P3' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Data can be exported to CSV and JSON, respecting current filters',
+                }));
+            }
+
+            // Phase 5: Role-based access (if multiple roles)
+            if (roles.length > 1) {
+                generatedTasks.push(database.createTask({
+                    title: 'Role-based access control',
+                    description: `Implement access control for ${roles.length} user roles: ${roles.join(', ')}.\n- Role assignment\n- Route protection per role\n- UI element visibility per role\n- Admin-only sections`,
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Each role sees only their authorized pages and features',
+                }));
+            }
+
+            // Phase 6: Navigation and routing (always if multiple pages)
+            if (pages.length > 1) {
+                generatedTasks.push(database.createTask({
+                    title: 'Navigation and routing',
+                    description: `Wire up navigation between ${pages.length} pages.\n- Router setup\n- ` +
+                        pages.map(p => `${p.name} → ${p.route || '/'}`).join('\n- ') +
+                        '\n- Active state highlighting\n- 404 handling',
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'All pages reachable via navigation, active page highlighted, 404 handled',
+                }));
+            }
+
+            // Phase 7: Scale-specific tasks
+            if (scale === 'Large' || scale === 'Enterprise') {
+                generatedTasks.push(database.createTask({
+                    title: 'Error handling and logging',
+                    description: 'Add global error handling.\n- Error boundary components\n- API error interceptor\n- User-friendly error messages\n- Error logging service',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Errors are caught gracefully, logged, and shown to users appropriately',
+                }));
+                generatedTasks.push(database.createTask({
+                    title: 'Loading states and skeleton screens',
+                    description: 'Add loading indicators throughout.\n- Page-level loading\n- Component skeleton screens\n- Button loading states\n- Optimistic updates where appropriate',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'No blank screens during loading, all async operations show progress',
+                }));
+            }
+            if (scale === 'Enterprise') {
+                generatedTasks.push(database.createTask({
+                    title: 'Accessibility compliance (WCAG 2.1)',
+                    description: 'Ensure accessibility across all pages.\n- ARIA labels\n- Keyboard navigation\n- Screen reader support\n- Color contrast compliance\n- Focus management',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'All pages pass WCAG 2.1 AA checks, keyboard-navigable, screen-reader compatible',
+                }));
+                generatedTasks.push(database.createTask({
+                    title: 'Performance optimization',
+                    description: 'Optimize for production performance.\n- Code splitting and lazy loading\n- Image optimization\n- Bundle size analysis\n- Caching strategy\n- Lighthouse score > 90',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Lighthouse performance score > 90, initial load under 3 seconds',
+                }));
+                generatedTasks.push(database.createTask({
+                    title: 'CI/CD pipeline setup',
+                    description: 'Set up continuous integration and deployment.\n- Build pipeline\n- Automated tests\n- Staging environment\n- Production deployment\n- Rollback procedure',
+                    plan_id: planId, priority: 'P2' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Code pushes trigger automated builds and tests, deployments are automated',
+                }));
+                generatedTasks.push(database.createTask({
+                    title: 'Security hardening',
+                    description: 'Implement security best practices.\n- Input sanitization\n- CSRF protection\n- Rate limiting\n- Content Security Policy\n- Dependency audit',
+                    plan_id: planId, priority: 'P1' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'No critical vulnerabilities, all OWASP top 10 addressed',
+                }));
+                generatedTasks.push(database.createTask({
+                    title: 'Monitoring and alerting',
+                    description: 'Set up production monitoring.\n- Application metrics\n- Error tracking (Sentry or similar)\n- Uptime monitoring\n- Alert thresholds\n- Dashboard',
+                    plan_id: planId, priority: 'P3' as any, sort_order: sortIdx++ * 10,
+                    acceptance_criteria: 'Errors and performance issues trigger alerts, metrics visible on dashboard',
+                }));
+            }
+
+            // Phase 8: Testing (always, but scope scales)
+            generatedTasks.push(database.createTask({
+                title: 'Testing suite',
+                description: scale === 'Enterprise'
+                    ? 'Comprehensive test coverage.\n- Unit tests for all components\n- Integration tests for API\n- E2E tests for critical flows\n- Visual regression tests\n- Performance tests'
+                    : scale === 'MVP'
+                    ? 'Basic test coverage.\n- Unit tests for core logic\n- Smoke tests for each page'
+                    : 'Test coverage for key features.\n- Unit tests for components\n- Integration tests for API\n- E2E tests for critical user flows',
+                plan_id: planId, priority: (scale === 'MVP' ? 'P3' : 'P2') as any, sort_order: sortIdx++ * 10,
+                acceptance_criteria: scale === 'Enterprise' ? 'Coverage > 80%, all critical paths have E2E tests' :
+                    scale === 'MVP' ? 'Core logic has unit tests, each page loads without errors' :
+                    'Key features have tests, critical flows covered by E2E',
+            }));
 
             // Create auto-ticket for the coding session
             const aiLevel = (body.ai_level as string) || getPlanAiLevel(database, planId);

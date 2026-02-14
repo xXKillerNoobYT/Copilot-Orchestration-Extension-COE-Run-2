@@ -1707,6 +1707,7 @@ let wizConfig = {
     aiLevel: 'suggestions',
     customColors: null
 };
+var wizEditPlanId = null; // Set when editing an existing plan (null = creating new)
 
 // Adaptive step logic: which steps to show based on scale + focus
 function getActiveSteps() {
@@ -2195,6 +2196,54 @@ async function wizGenerate() {
     }
 }
 
+async function wizUpdatePlan() {
+    if (!wizEditPlanId) { wizGenerate(); return; }
+    syncWizConfig();
+    var name = wizConfig.name.trim();
+    if (!name) { document.getElementById('wizName').focus(); return; }
+    var out = document.getElementById('wizOutput');
+    out.style.display = '';
+    out.innerHTML = '<div class="loading-overlay"><div class="spinner"></div> Updating plan configuration...</div>';
+    var design = {
+        layout: wizConfig.layout, theme: wizConfig.theme,
+        pages: wizConfig.pages || ['Dashboard'],
+        userRoles: wizConfig.userRoles || ['Regular User'],
+        features: wizConfig.features || ['CRUD Operations'],
+        techStack: wizConfig.techStack || 'React + Node',
+        aiLevel: wizConfig.aiLevel,
+        customColors: wizConfig.customColors || null
+    };
+    try {
+        // Update the existing plan's config — NOT create a new one
+        await api('plans/' + wizEditPlanId, { method: 'PUT', body: {
+            name: name,
+            config_json: JSON.stringify({
+                scale: wizConfig.scale, focus: wizConfig.focus,
+                priorities: wizConfig.priorities,
+                description: wizConfig.description,
+                design: design,
+                aiLevel: wizConfig.aiLevel
+            })
+        }});
+        out.innerHTML = '<div class="detail-panel" style="color:var(--green)">Plan \\u201c' + esc(name) + '\\u201d updated successfully.</div>';
+        showNotification('Plan updated. Design and tasks preserved.', 'success');
+        // Reload plans list and designer
+        await loadPlans();
+        if (dsgPlanId === wizEditPlanId) {
+            await loadDesignerForPlan(wizEditPlanId);
+        }
+        wizEditPlanId = null;
+        updateWizardGenerateButton();
+        // Hide wizard after update
+        setTimeout(function() {
+            document.getElementById('wizardSection').style.display = 'none';
+            out.style.display = 'none';
+        }, 2000);
+    } catch (err) {
+        out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Update failed: ' + esc(String(err)) + '</div>';
+    }
+}
+
 async function wizQuick() {
     syncWizConfig();
     const name = document.getElementById('wizName').value.trim();
@@ -2488,6 +2537,7 @@ function pdBackToWizard() {
     document.getElementById('planDesigner').style.display = 'none';
     document.getElementById('wizardSection').style.display = '';
     // Reset wizard state for new plan
+    wizEditPlanId = null;
     wizEditMode = false;
     wizStep = 0;
     wizConfig = {
@@ -2544,6 +2594,7 @@ function pdBackToWizard() {
     wizGoTo(0);
     renderWizardDots();
     updateImpact();
+    updateWizardGenerateButton();
 }
 
 // ===== PLAN LIST =====
@@ -2598,6 +2649,7 @@ async function loadPlans() {
             '<button class="btn btn-sm btn-primary" onclick="openPlanDesignerFromList(\\'' + active.id + '\\')">Open Designer</button>' +
             '<button class="btn btn-sm btn-secondary" onclick="showPlanDetail(\\'' + active.id + '\\')">View Tasks</button>' +
             '<button class="btn btn-sm btn-secondary" onclick="openStatusView(\\'' + active.id + '\\')">Status</button>' +
+            '<button class="btn btn-sm btn-secondary" onclick="editPlanWizard(\\'' + active.id + '\\')">Edit Plan</button>' +
             '</div></div>' +
             '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">' +
             statusBadge(active.status) + ' ' + taskBadge + ' ' + designBadge + ' ' + scaleBadge + ' ' + focusBadge +
@@ -2630,10 +2682,99 @@ function showAllPlans() {
 }
 
 function showCreatePlanWizard() {
+    wizEditPlanId = null;
+    updateWizardGenerateButton();
     var wizSection = document.getElementById('wizardSection');
     if (wizSection) {
         wizSection.style.display = '';
         wizSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+async function editPlanWizard(planId) {
+    try {
+        var planData = await api('plans/' + planId);
+        var config = {};
+        try { config = JSON.parse(planData.config_json || '{}'); } catch(e) {}
+        var design = config.design || {};
+
+        // Load plan config into wizard fields
+        wizEditPlanId = planId;
+        wizConfig.name = planData.name || '';
+        wizConfig.description = config.description || '';
+        wizConfig.scale = config.scale || 'MVP';
+        wizConfig.focus = config.focus || 'Frontend';
+        wizConfig.priorities = config.priorities || ['Core business logic'];
+        wizConfig.layout = design.layout || 'sidebar';
+        wizConfig.theme = design.theme || 'dark';
+        wizConfig.pages = design.pages || ['Dashboard'];
+        wizConfig.userRoles = design.userRoles || ['Regular User'];
+        wizConfig.features = design.features || ['CRUD Operations'];
+        wizConfig.techStack = design.techStack || 'React + Node';
+        wizConfig.aiLevel = design.aiLevel || config.aiLevel || 'suggestions';
+        wizConfig.customColors = design.customColors || null;
+
+        // Set form values
+        var nameEl = document.getElementById('wizName');
+        if (nameEl) nameEl.value = wizConfig.name;
+        var descEl = document.getElementById('wizDesc');
+        if (descEl) descEl.value = wizConfig.description;
+
+        // Set selected options in option grids
+        function setSelected(containerId, val) {
+            var container = document.getElementById(containerId);
+            if (!container) return;
+            container.querySelectorAll('.option-btn, .design-card').forEach(function(b) {
+                b.classList.remove('selected');
+                if (b.dataset.val === val) b.classList.add('selected');
+            });
+        }
+        function setMultiSelected(containerId, vals) {
+            var container = document.getElementById(containerId);
+            if (!container) return;
+            container.querySelectorAll('.option-btn').forEach(function(b) {
+                b.classList.toggle('selected', vals.indexOf(b.dataset.val) >= 0);
+            });
+        }
+        setSelected('scaleOptions', wizConfig.scale);
+        setSelected('focusOptions', wizConfig.focus);
+        setMultiSelected('priorityOptions', wizConfig.priorities);
+        // Design grids
+        document.querySelectorAll('.design-grid').forEach(function(grid) {
+            var field = grid.dataset.field;
+            if (!field) return;
+            grid.querySelectorAll('.design-card').forEach(function(card) {
+                card.classList.toggle('selected', card.dataset.val === wizConfig[field]);
+            });
+        });
+        setMultiSelected('pagesOptions', wizConfig.pages);
+        setMultiSelected('rolesOptions', wizConfig.userRoles);
+        setMultiSelected('featuresOptions', wizConfig.features);
+
+        updateWizardGenerateButton();
+        // Show wizard at step 0
+        var wizSection = document.getElementById('wizardSection');
+        if (wizSection) {
+            wizSection.style.display = '';
+            wizGoTo(0);
+            wizSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        updateImpactPanel();
+    } catch (err) {
+        showNotification('Could not load plan for editing: ' + String(err), 'error');
+    }
+}
+
+function updateWizardGenerateButton() {
+    var btn = document.querySelector('#wstep10 .btn-success');
+    if (btn) {
+        if (wizEditPlanId) {
+            btn.textContent = 'Update Plan';
+            btn.setAttribute('onclick', 'wizUpdatePlan()');
+        } else {
+            btn.textContent = 'Generate Plan';
+            btn.setAttribute('onclick', 'wizGenerate()');
+        }
     }
 }
 
