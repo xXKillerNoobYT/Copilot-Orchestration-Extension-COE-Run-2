@@ -713,7 +713,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 
     <!-- ===== WIZARD SECTION ===== -->
     <div class="section" id="wizardSection">
-        <h2>Create New Plan</h2>
+        <h2 id="wizardHeader">Create New Plan</h2>
         <div class="wizard-steps" id="wizardDots"></div>
         <div class="wizard-layout">
             <div class="wizard-left">
@@ -2166,6 +2166,7 @@ async function wizGenerate() {
             }
             await openPlanDesigner(data.plan.id, data.plan.name, design);
             await loadPlans();
+            updateTabBadges();
             // Clear wizard saved state after successful creation
             saveState('wizConfig', null);
             saveState('wizStep', 0);
@@ -2229,6 +2230,7 @@ async function wizUpdatePlan() {
         showNotification('Plan updated. Design and tasks preserved.', 'success');
         // Reload plans list and designer
         await loadPlans();
+        updateTabBadges();
         if (dsgPlanId === wizEditPlanId) {
             await loadDesignerForPlan(wizEditPlanId);
         }
@@ -2274,6 +2276,7 @@ async function wizQuick() {
             }
             await openPlanDesigner(data.plan.id, data.plan.name, design);
             await loadPlans();
+            updateTabBadges();
             // Clear wizard saved state after successful creation
             saveState('wizConfig', null);
             saveState('wizStep', 0);
@@ -2767,14 +2770,13 @@ async function editPlanWizard(planId) {
 
 function updateWizardGenerateButton() {
     var btn = document.querySelector('#wstep10 .btn-success');
-    if (btn) {
-        if (wizEditPlanId) {
-            btn.textContent = 'Update Plan';
-            btn.setAttribute('onclick', 'wizUpdatePlan()');
-        } else {
-            btn.textContent = 'Generate Plan';
-            btn.setAttribute('onclick', 'wizGenerate()');
-        }
+    var header = document.getElementById('wizardHeader');
+    if (wizEditPlanId) {
+        if (btn) { btn.textContent = 'Update Plan'; btn.setAttribute('onclick', 'wizUpdatePlan()'); }
+        if (header) header.textContent = 'Update Plan: ' + (wizConfig.name || 'Untitled');
+    } else {
+        if (btn) { btn.textContent = 'Generate Plan'; btn.setAttribute('onclick', 'wizGenerate()'); }
+        if (header) header.textContent = 'Create New Plan';
     }
 }
 
@@ -3788,6 +3790,7 @@ async function retryTaskGeneration(planId) {
             showNotification('Generated ' + data.taskCount + ' tasks for your plan.', 'success');
             if (pdPlanId === planId) loadPlanDesignerTasks(planId);
             loadPlans();
+            updateTabBadges();
         } else {
             if (out) out.innerHTML = '<div class="detail-panel" style="color:var(--yellow)">Retry did not produce tasks. ' + esc(data.error_detail || 'Try again later or add tasks manually.') + '</div>';
             showNotification('Task regeneration did not produce results.', 'warning');

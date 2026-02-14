@@ -4,7 +4,7 @@ import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from '../core/config';
 import { CodingAgentService } from '../core/coding-agent';
 import { getEventBus } from '../core/event-bus';
-import { AgentContext, DesignComponent, PlanStatus, TaskPriority, TicketPriority } from '../types';
+import { AgentContext, DesignComponent, PlanStatus, TaskPriority, TicketPriority, TicketStatus } from '../types';
 
 /** Shared no-op output channel for inline service construction */
 export const noopOutputChannel = { appendLine(_msg: string) {} } as any;
@@ -595,6 +595,12 @@ export async function handleApiRequest(
             const wizFeatures = ((design as Record<string, unknown>).features as string[]) || [];
             const wizTechStack = ((design as Record<string, unknown>).techStack as string) || 'React + Node';
 
+            // TICKET-FIRST: Create tracking ticket BEFORE the LLM call
+            const earlyParentTicket = createAutoTicket(database, 'plan_generation',
+                'Plan: ' + name + ' \u2014 Generating...',
+                'AI plan generation started.\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel + '\n\nStatus: Waiting for LLM response...',
+                'P1', aiLevel);
+
             const prompt = [
                 `You are a project planning assistant. Create a structured development plan called "${name}".`,
                 `Project Scale: ${scale}`,
@@ -671,11 +677,15 @@ export async function handleApiRequest(
                 eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
                 database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
 
-                // Auto-create tickets for plan generation — full hierarchical structure
-                const parentAutoTicket = createAutoTicket(database, 'plan_generation',
-                    'Plan: ' + name + ' \u2014 Design & Implementation',
-                    'Master ticket for plan "' + name + '". Scale: ' + scale + ', Focus: ' + focus + '. ' + parsed.tasks.length + ' tasks generated.\n\nAI Assistance Level: ' + aiLevel,
-                    'P1', aiLevel);
+                // Update the early ticket with results (ticket-first pattern)
+                if (earlyParentTicket) {
+                    database.updateTicket(earlyParentTicket.id, {
+                        title: 'Plan: ' + name + ' \u2014 Design & Implementation',
+                        body: 'Master ticket for plan "' + name + '". Scale: ' + scale + ', Focus: ' + focus + '. ' + parsed.tasks.length + ' tasks generated.\n\nAI Assistance Level: ' + aiLevel,
+                        status: TicketStatus.InReview,
+                    });
+                }
+                const parentAutoTicket = earlyParentTicket;
                 if (parentAutoTicket) {
                     // Phase sub-tickets
                     const configTicket = createAutoTicket(database, 'plan_generation',
@@ -726,12 +736,19 @@ export async function handleApiRequest(
             eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
             database.addAuditLog('planning', 'plan_created', `Plan "${name}": created without AI tasks (${genError})`);
 
-            // Create ticket even on failure path — AI attempted generation
-            createAutoTicket(database, 'plan_generation',
-                'Plan: ' + name + ' \u2014 Generation Failed',
-                'Plan "' + name + '" was created but AI task generation failed.\nError: ' + genError + '\n' + detail +
-                '\n\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel,
-                'P1', aiLevel);
+            // Update early ticket to reflect failure (or create fallback)
+            if (earlyParentTicket) {
+                database.updateTicket(earlyParentTicket.id, {
+                    title: 'Plan: ' + name + ' \u2014 Generation Failed',
+                    body: 'Plan "' + name + '" was created but AI task generation failed.\nError: ' + genError + '\n' + detail +
+                        '\n\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel,
+                });
+            } else {
+                createAutoTicket(database, 'plan_generation',
+                    'Plan: ' + name + ' \u2014 Generation Failed',
+                    'AI task generation failed.\nError: ' + genError + '\n' + detail,
+                    'P1', aiLevel);
+            }
 
             json(res, { plan: database.getPlan(plan.id), taskCount: 0, tasks: [], raw_response: response.content, generation_error: genError, error_detail: detail }, 201);
             return true;
@@ -751,6 +768,13 @@ export async function handleApiRequest(
             const rPrios = (planConfig.priorities as string[]) || ['Core business logic'];
             const rBody = await parseBody(req);
             const rDesc = (rBody.description as string) || (planConfig.description as string) || '';
+            const regenAiLevel = (planConfig.design as Record<string, unknown>)?.aiLevel as string || (rBody.ai_level as string) || 'suggestions';
+
+            // TICKET-FIRST: Create tracking ticket before LLM call
+            const earlyRegenTicket = createAutoTicket(database, 'plan_generation',
+                'Tasks Regenerating: ' + plan.name,
+                'AI is regenerating tasks for plan "' + plan.name + '".\nScale: ' + rScale + ', Focus: ' + rFocus,
+                'P2', regenAiLevel);
 
             const prompt = [
                 `You are a project planning assistant. Create a structured development plan called "${plan.name}".`,
@@ -783,8 +807,6 @@ export async function handleApiRequest(
                 console.error(`[COE] Task regeneration JSON parse failed: ${String(e)}. Snippet: ${response.content.substring(0, 200)}`);
             }
 
-            const regenAiLevel = (planConfig.design as Record<string, unknown>)?.aiLevel as string || (rBody.ai_level as string) || 'suggestions';
-
             if (parsed?.tasks && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
                 const titleToId: Record<string, string> = {};
                 let sortIdx = 0;
@@ -806,17 +828,18 @@ export async function handleApiRequest(
                 }
                 database.addAuditLog('planning', 'tasks_regenerated', `Plan "${plan.name}": regenerated ${parsed.tasks.length} tasks`);
 
-                // Create ticket for task regeneration
-                const regenParentTicket = createAutoTicket(database, 'plan_generation',
-                    'Tasks Regenerated: ' + plan.name,
-                    'AI regenerated ' + parsed.tasks.length + ' tasks for plan "' + plan.name + '".\nScale: ' + rScale + ', Focus: ' + rFocus,
-                    'P2', regenAiLevel);
-                if (regenParentTicket) {
+                // Update early ticket with results (ticket-first pattern)
+                if (earlyRegenTicket) {
+                    database.updateTicket(earlyRegenTicket.id, {
+                        title: 'Tasks Regenerated: ' + plan.name,
+                        body: 'AI regenerated ' + parsed.tasks.length + ' tasks.\nScale: ' + rScale + ', Focus: ' + rFocus,
+                        status: TicketStatus.InReview,
+                    });
                     for (const t of parsed.tasks) {
                         createAutoTicket(database, 'plan_generation',
                             'Task: ' + t.title,
                             (t.description || '') + '\nPriority: ' + (t.priority || 'P2'),
-                            (t.priority || 'P2'), regenAiLevel, regenParentTicket.id);
+                            (t.priority || 'P2'), regenAiLevel, earlyRegenTicket.id);
                     }
                 }
 
@@ -824,11 +847,18 @@ export async function handleApiRequest(
                 return true;
             }
 
-            // Failed regen — still create a ticket
-            createAutoTicket(database, 'plan_generation',
-                'Task Regeneration Failed: ' + plan.name,
-                'AI did not return valid tasks for plan "' + plan.name + '". User may retry.',
-                'P2', regenAiLevel);
+            // Update early ticket to reflect failure (or create fallback)
+            if (earlyRegenTicket) {
+                database.updateTicket(earlyRegenTicket.id, {
+                    title: 'Task Regeneration Failed: ' + plan.name,
+                    body: 'AI did not return valid tasks. User may retry.',
+                });
+            } else {
+                createAutoTicket(database, 'plan_generation',
+                    'Task Regeneration Failed: ' + plan.name,
+                    'AI did not return valid tasks. User may retry.',
+                    'P2', regenAiLevel);
+            }
 
             json(res, { plan: database.getPlan(regenPlanId), taskCount: 0, tasks: database.getTasksByPlan(regenPlanId), error_detail: 'AI did not return valid tasks. Try again.' });
             return true;
@@ -1100,6 +1130,12 @@ export async function handleApiRequest(
             const validTypes = ['container', 'text', 'button', 'input', 'image', 'card', 'nav', 'modal', 'sidebar', 'header', 'footer', 'list', 'table', 'form', 'divider', 'icon', 'custom'];
             const designAiLevel = (dsg.aiLevel as string) || getPlanAiLevel(database, planId);
 
+            // TICKET-FIRST: Create tracking ticket before LLM call
+            const earlyDesignTicket = createAutoTicket(database, 'design_change',
+                'Design Generating: ' + planName,
+                'AI generating visual layout.\nLayout: ' + layout + ', Theme: ' + theme + ', Tech: ' + wizTechStack,
+                'P2', designAiLevel);
+
             try {
                 const ctx: AgentContext = { conversationHistory: [] };
                 const response = await orchestrator.callAgent('planning', prompt, ctx);
@@ -1117,10 +1153,17 @@ export async function handleApiRequest(
                 } catch { /* JSON parse failed */ }
 
                 if (!parsed?.pages || !Array.isArray(parsed.pages) || parsed.pages.length === 0) {
-                    createAutoTicket(database, 'design_change',
-                        'Design Generation: No Layout Returned',
-                        'AI did not return a valid design layout for plan "' + planName + '".\nThe response did not contain page definitions.',
-                        'P2', designAiLevel);
+                    if (earlyDesignTicket) {
+                        database.updateTicket(earlyDesignTicket.id, {
+                            title: 'Design Generation: No Layout Returned',
+                            body: 'AI did not return a valid design layout for "' + planName + '".',
+                        });
+                    } else {
+                        createAutoTicket(database, 'design_change',
+                            'Design Generation: No Layout Returned',
+                            'AI did not return a valid design layout for "' + planName + '".',
+                            'P2', designAiLevel);
+                    }
                     json(res, { pages: [], componentCount: 0, error: 'AI did not return a valid design layout', raw_response: response.content });
                     return true;
                 }
@@ -1180,14 +1223,17 @@ export async function handleApiRequest(
 
                 database.addAuditLog('webapp', 'design_generated', `AI generated ${totalComponents} components across ${createdPages.length} pages for plan "${planName}"`);
 
-                // Auto-create comprehensive tickets for design generation process
-                const designParentTicket = createAutoTicket(database, 'design_change',
-                    'Design Generated: ' + planName,
-                    'Master ticket for AI design generation of "' + planName + '".\n' +
-                    'Result: ' + totalComponents + ' components across ' + createdPages.length + ' page(s).\n' +
-                    'Layout: ' + layout + ', Theme: ' + theme + ', Tech: ' + wizTechStack + '\n' +
-                    'Pages: ' + parsed.pages.map(p => p.name || 'Unnamed').join(', '),
-                    'P2', designAiLevel);
+                // Update early ticket with results (ticket-first pattern)
+                if (earlyDesignTicket) {
+                    database.updateTicket(earlyDesignTicket.id, {
+                        title: 'Design Generated: ' + planName,
+                        body: 'AI design complete: ' + totalComponents + ' components across ' + createdPages.length + ' pages.\n' +
+                            'Layout: ' + layout + ', Theme: ' + theme + ', Tech: ' + wizTechStack + '\n' +
+                            'Pages: ' + parsed.pages.map(p => p.name || 'Unnamed').join(', '),
+                        status: TicketStatus.InReview,
+                    });
+                }
+                const designParentTicket = earlyDesignTicket;
                 if (designParentTicket) {
                     // Phase 1: Requirements Research
                     createAutoTicket(database, 'design_change',
@@ -1271,11 +1317,18 @@ export async function handleApiRequest(
                 json(res, { pages: createdPages, componentCount: totalComponents }, 201);
                 return true;
             } catch (err) {
-                // Create ticket for design generation failure
-                createAutoTicket(database, 'design_change',
-                    'Design Generation Failed: ' + planName,
-                    'AI design generation failed for plan "' + planName + '".\nError: ' + String(err),
-                    'P1', designAiLevel);
+                // Update early ticket to reflect failure (or create fallback)
+                if (earlyDesignTicket) {
+                    database.updateTicket(earlyDesignTicket.id, {
+                        title: 'Design Generation Failed: ' + planName,
+                        body: 'AI design generation failed.\nError: ' + String(err),
+                    });
+                } else {
+                    createAutoTicket(database, 'design_change',
+                        'Design Generation Failed: ' + planName,
+                        'AI design generation failed.\nError: ' + String(err),
+                        'P1', designAiLevel);
+                }
                 json(res, { pages: [], componentCount: 0, error: 'Design generation failed: ' + String(err) });
                 return true;
             }
@@ -1973,6 +2026,14 @@ Only return the JSON array, nothing else.`;
             const questions = database.getAIQuestionsByPlan(planId);
             const dataModels = database.getDataModelsByPlan(planId);
             const config = JSON.parse(plan.config_json || '{}');
+
+            // TICKET-FIRST: Create tracking ticket before LLM call
+            const reviewAiLevel = (config.design as Record<string, unknown>)?.aiLevel as string || 'suggestions';
+            const earlyReviewTicket = createAutoTicket(database, 'suggestion',
+                'Plan Review: ' + plan.name + ' \u2014 Reviewing...',
+                'AI reviewing plan readiness.',
+                'P3', reviewAiLevel);
+
             const prompt = `You are a code readiness reviewer. Evaluate this project plan for implementation readiness.
 
 Plan: ${plan.name}
@@ -2029,9 +2090,23 @@ Only return the JSON object, nothing else.`;
                 review.questions_generated = questionsGenerated;
                 review.suggestions_generated = suggestionsGenerated;
                 review.tickets_created = 0;
+                // Update early ticket with review results
+                if (earlyReviewTicket) {
+                    database.updateTicket(earlyReviewTicket.id, {
+                        title: 'Plan Review: ' + plan.name + ' \u2014 Score: ' + (review.readiness_score || 0),
+                        body: 'Readiness: ' + (review.readiness_level || 'unknown') + ' (' + (review.readiness_score || 0) + '/100)\n' + (review.summary || ''),
+                        status: TicketStatus.Resolved,
+                    });
+                }
                 eventBus.emit('ai:plan_reviewed', 'webapp', { planId, score: review.readiness_score });
                 json(res, review);
             } catch (error) {
+                if (earlyReviewTicket) {
+                    database.updateTicket(earlyReviewTicket.id, {
+                        title: 'Plan Review Failed: ' + plan.name,
+                        body: 'Error: ' + String(error),
+                    });
+                }
                 json(res, { error: String(error) }, 500);
             }
             return true;
