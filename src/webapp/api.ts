@@ -89,7 +89,7 @@ function getPlanAiLevel(database: Database, planId: string): string {
         const plan = database.getPlan(planId);
         if (plan) {
             const config = JSON.parse(plan.config_json || '{}');
-            return (config.aiLevel as string) || (config.design?.aiLevel as string) || 'suggestions';
+            return (config.design?.aiLevel as string) || (config.aiLevel as string) || 'suggestions';
         }
     } catch { /* ignore */ }
     return 'suggestions';
@@ -642,7 +642,7 @@ export async function handleApiRequest(
             }
 
             // Create the plan regardless of whether LLM returned valid JSON
-            const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities, description, design }));
+            const plan = database.createPlan(name, JSON.stringify({ scale, focus, priorities, description, design, aiLevel }));
             database.updatePlan(plan.id, { status: PlanStatus.Active });
 
             if (parsed?.tasks && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
@@ -1098,6 +1098,7 @@ export async function handleApiRequest(
             ].filter(Boolean).join('\n');
 
             const validTypes = ['container', 'text', 'button', 'input', 'image', 'card', 'nav', 'modal', 'sidebar', 'header', 'footer', 'list', 'table', 'form', 'divider', 'icon', 'custom'];
+            const designAiLevel = (dsg.aiLevel as string) || getPlanAiLevel(database, planId);
 
             try {
                 const ctx: AgentContext = { conversationHistory: [] };
@@ -1116,13 +1117,22 @@ export async function handleApiRequest(
                 } catch { /* JSON parse failed */ }
 
                 if (!parsed?.pages || !Array.isArray(parsed.pages) || parsed.pages.length === 0) {
-                    const emptyAiLevel = (dsg.aiLevel as string) || 'suggestions';
                     createAutoTicket(database, 'design_change',
                         'Design Generation: No Layout Returned',
                         'AI did not return a valid design layout for plan "' + planName + '".\nThe response did not contain page definitions.',
-                        'P2', emptyAiLevel);
+                        'P2', designAiLevel);
                     json(res, { pages: [], componentCount: 0, error: 'AI did not return a valid design layout', raw_response: response.content });
                     return true;
+                }
+
+                // Clear existing empty pages (wizard pre-created pages with no components)
+                // so AI-generated pages with components can replace them cleanly
+                const existingPages = database.getDesignPagesByPlan(planId);
+                for (const ep of existingPages) {
+                    const pageComps = database.getDesignComponentsByPage(ep.id);
+                    if (pageComps.length === 0) {
+                        database.deleteDesignPage(ep.id);
+                    }
                 }
 
                 const createdPages: unknown[] = [];
@@ -1171,7 +1181,6 @@ export async function handleApiRequest(
                 database.addAuditLog('webapp', 'design_generated', `AI generated ${totalComponents} components across ${createdPages.length} pages for plan "${planName}"`);
 
                 // Auto-create comprehensive tickets for design generation process
-                const designAiLevel = (dsg.aiLevel as string) || 'suggestions';
                 const designParentTicket = createAutoTicket(database, 'design_change',
                     'Design Generated: ' + planName,
                     'Master ticket for AI design generation of "' + planName + '".\n' +
@@ -1263,11 +1272,10 @@ export async function handleApiRequest(
                 return true;
             } catch (err) {
                 // Create ticket for design generation failure
-                const failAiLevel = (dsg.aiLevel as string) || 'suggestions';
                 createAutoTicket(database, 'design_change',
                     'Design Generation Failed: ' + planName,
                     'AI design generation failed for plan "' + planName + '".\nError: ' + String(err),
-                    'P1', failAiLevel);
+                    'P1', designAiLevel);
                 json(res, { pages: [], componentCount: 0, error: 'Design generation failed: ' + String(err) });
                 return true;
             }
@@ -1837,6 +1845,17 @@ Only return the JSON array, nothing else.`;
                     created.push(suggestion);
                 }
                 eventBus.emit('ai:suggestions_generated', 'webapp', { planId, count: created.length });
+
+                // Create auto-ticket for AI suggestion generation
+                const suggestAiLevel = getPlanAiLevel(database, planId);
+                if (created.length > 0) {
+                    createAutoTicket(database, 'suggestion',
+                        'AI Suggestions: ' + created.length + ' generated',
+                        'AI analyzed design for plan and generated ' + created.length + ' suggestions.\n' +
+                        created.map(function(s: any) { return '- [' + s.priority + '] ' + s.title; }).join('\n'),
+                        'P3', suggestAiLevel);
+                }
+
                 json(res, { suggestions: created, count: created.length });
             } catch (error) {
                 json(res, { error: String(error), suggestions: [], count: 0 }, 500);
@@ -2561,7 +2580,7 @@ Only return the JSON object, nothing else.`;
             }
 
             // Create auto-ticket for the coding session
-            const aiLevel = (body.ai_level as string) || 'suggestions';
+            const aiLevel = (body.ai_level as string) || getPlanAiLevel(database, planId);
             createAutoTicket(database, 'coding_session', `Coding session: ${plan.name} v${versionNumber}`,
                 `Started coding from Live branch snapshot. ${pages.length} pages, ${allComponents.length} components, ${generatedTasks.length} tasks generated.`,
                 'P2', aiLevel);
@@ -2654,6 +2673,17 @@ Only return the JSON object, nothing else.`;
                 role: 'system',
                 content: `Design spec loaded for "${plan.name}":\n\`\`\`json\n${JSON.stringify(designSpec, null, 2)}\n\`\`\``,
             });
+
+            // Create auto-ticket for the coding session
+            const codingAiLevel = getPlanAiLevel(database, planId);
+            createAutoTicket(database, 'coding_session',
+                'Coding Session: ' + plan.name,
+                'Design spec exported to coding agent.\nPages: ' + pages.length +
+                ', Components: ' + allComponents.length +
+                ', Data Models: ' + dataModels.length +
+                '\nSession: ' + session.id,
+                'P2', codingAiLevel);
+
             eventBus.emit('coding:design_export', 'webapp', { planId, sessionId: session.id });
             json(res, { session_id: session.id, design_spec: designSpec });
             return true;

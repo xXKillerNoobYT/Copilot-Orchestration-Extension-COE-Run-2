@@ -989,7 +989,10 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <div class="section" id="activePlanSection">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <h2>Active Plan</h2>
-            <button class="btn btn-sm btn-secondary" onclick="showAllPlans()" id="showAllPlansBtn" style="display:none">Show All Plans</button>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-sm btn-secondary" onclick="showAllPlans()" id="showAllPlansBtn" style="display:none">Show All Plans</button>
+                <button class="btn btn-sm btn-secondary" onclick="showCreatePlanWizard()">+ New Plan</button>
+            </div>
         </div>
         <div id="activePlanDisplay"></div>
         <div id="plansList" style="display:none"></div>
@@ -2553,34 +2556,54 @@ async function loadPlans() {
         var display = document.getElementById('activePlanDisplay');
         var listEl = document.getElementById('plansList');
         var showAllBtn = document.getElementById('showAllPlansBtn');
+        var wizSection = document.getElementById('wizardSection');
+        var activePlanSec = document.getElementById('activePlanSection');
 
         if (plans.length === 0) {
-            display.innerHTML = '<div class="empty">No plan yet. Create one using the wizard above.</div>';
+            // No plans — show the wizard, hide active plan section
+            if (wizSection) wizSection.style.display = '';
+            if (activePlanSec) activePlanSec.style.display = 'none';
+            display.innerHTML = '';
             if (showAllBtn) showAllBtn.style.display = 'none';
             return;
         }
+
+        // Has plans — hide the wizard, show the active plan section prominently
+        if (wizSection) wizSection.style.display = 'none';
+        if (activePlanSec) activePlanSec.style.display = '';
 
         // Find active plan (first active, or most recent)
         var active = plans.find(function(p) { return p.status === 'active'; }) || plans[0];
         activePlanId = active.id;
         saveState('activePlanId', activePlanId);
 
+        // Parse config to show plan details
+        var planConfig = {};
+        try { planConfig = JSON.parse(active.config_json || '{}'); } catch(e) { /* ignore */ }
+        var scale = planConfig.scale || '';
+        var focus = planConfig.focus || '';
+        var desc = planConfig.description || '';
+
         var taskBadge = active.has_tasks ? '<span class="badge badge-green">' + active.task_count + ' tasks</span>' : '<span class="badge badge-yellow">No tasks</span>';
         var designBadge = active.has_design ? '<span class="badge badge-blue">' + active.design_component_count + ' components</span>' : '<span class="badge" style="background:rgba(108,112,134,0.15);color:var(--overlay)">No design</span>';
+        var scaleBadge = scale ? '<span class="badge" style="background:rgba(116,199,236,0.15);color:var(--sapphire)">' + esc(scale) + '</span>' : '';
+        var focusBadge = focus ? '<span class="badge" style="background:rgba(203,166,247,0.15);color:var(--mauve)">' + esc(focus) + '</span>' : '';
 
         display.innerHTML = '<div class="card" style="padding:16px">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
             '<div><h3 style="margin:0">' + esc(active.name) + '</h3>' +
-            '<div style="font-size:0.85em;color:var(--subtext);margin-top:4px">Created: ' + esc(active.created_at) + '</div></div>' +
+            (desc ? '<div style="font-size:0.9em;color:var(--subtext);margin-top:4px;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(desc) + '</div>' : '') +
+            '<div style="font-size:0.85em;color:var(--overlay);margin-top:4px">Created: ' + esc(active.created_at) + '</div></div>' +
             '<div style="display:flex;gap:6px">' +
             '<button class="btn btn-sm btn-primary" onclick="openPlanDesignerFromList(\\'' + active.id + '\\')">Open Designer</button>' +
             '<button class="btn btn-sm btn-secondary" onclick="showPlanDetail(\\'' + active.id + '\\')">View Tasks</button>' +
+            '<button class="btn btn-sm btn-secondary" onclick="openStatusView(\\'' + active.id + '\\')">Status</button>' +
             '</div></div>' +
-            '<div style="display:flex;gap:12px;margin-top:8px">' +
-            statusBadge(active.status) + ' ' + taskBadge + ' ' + designBadge +
+            '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">' +
+            statusBadge(active.status) + ' ' + taskBadge + ' ' + designBadge + ' ' + scaleBadge + ' ' + focusBadge +
             '</div></div>';
 
-        // Show "all plans" button only if multiple plans exist
+        // Show "all plans" and "new plan" buttons
         if (showAllBtn) showAllBtn.style.display = plans.length > 1 ? '' : 'none';
 
         // Build full list (hidden by default)
@@ -2604,6 +2627,14 @@ function showAllPlans() {
     list.style.display = list.style.display === 'none' ? '' : 'none';
     var btn = document.getElementById('showAllPlansBtn');
     if (btn) btn.textContent = list.style.display === 'none' ? 'Show All Plans' : 'Hide All Plans';
+}
+
+function showCreatePlanWizard() {
+    var wizSection = document.getElementById('wizardSection');
+    if (wizSection) {
+        wizSection.style.display = '';
+        wizSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 async function setActivePlan(planId) {
@@ -3569,15 +3600,18 @@ async function generateDesignForPlan(planId, design, planName, planDesc, scale, 
         }});
         if (result && result.pages && result.pages.length > 0) {
             var compCount = result.componentCount || 0;
-            showNotification('AI generated ' + compCount + ' components across ' + result.pages.length + ' page(s)', 'success');
-            // If designer is open for this plan, reload pages
+            showNotification('AI generated ' + compCount + ' components across ' + result.pages.length + ' page(s). Tickets created for all design steps.', 'success');
+            // If designer is open for this plan, reload pages and components
             if (dsgPlanId === planId) {
                 await loadDesignerPages();
                 await loadPageComponents();
+                updateLivePreview();
             }
         } else {
             showNotification((result && result.error) || 'AI could not generate a design. Add components manually from the palette.', 'warning');
         }
+        // Refresh ticket badge counts — design generation creates multiple tickets
+        updateTabBadges();
     } catch (err) {
         showNotification('Design generation failed: ' + String(err), 'error');
     }
@@ -3589,8 +3623,10 @@ async function triggerAiDesignGeneration() {
     try {
         var planData = await api('plans/' + dsgPlanId);
         var config = {};
-        try { config = JSON.parse(planData.config || '{}'); } catch(e) {}
+        try { config = JSON.parse(planData.config_json || '{}'); } catch(e) {}
         var design = config.design || {};
+        // Ensure aiLevel is set from plan config or current global setting
+        if (!design.aiLevel) design.aiLevel = currentAiLevel || 'suggestions';
         await generateDesignForPlan(dsgPlanId, design, planData.name || '', config.description || '', config.scale || 'MVP', config.focus || 'Full Stack', planData.tasks || []);
     } catch (err) {
         showNotification('Could not load plan data: ' + String(err), 'error');
