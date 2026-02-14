@@ -169,6 +169,22 @@ describe('EventBus', () => {
         expect(bus.getMetrics().totalErrors).toBe(1);
     });
 
+    // ==================== EMIT ERROR HANDLING (line 122) ====================
+
+    test('increments totalErrors when typed listener throws synchronously (line 122)', () => {
+        bus.on('task:created', () => {
+            throw new Error('Listener exploded');
+        });
+
+        bus.emit('task:created', 'test', { taskId: 'err1' });
+
+        const metrics = bus.getMetrics();
+        expect(metrics.totalErrors).toBe(1);
+        // totalDelivered should NOT be incremented since the emit threw
+        // totalEmitted should still be 1
+        expect(metrics.totalEmitted).toBe(1);
+    });
+
     // ==================== WAIT FOR ====================
 
     test('waitFor resolves when event fires', async () => {

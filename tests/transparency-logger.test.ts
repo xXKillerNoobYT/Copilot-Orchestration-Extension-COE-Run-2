@@ -769,4 +769,256 @@ describe('TransparencyLogger', () => {
             expect(fromDb[0].id).toBe(entry.id);
         });
     });
+
+    // ===================== COVERAGE GAP TESTS =====================
+
+    describe('logAction error handling (lines 184-189)', () => {
+        test('logAction re-throws when database.createActionLog throws', () => {
+            // Spy on the database method and make it throw
+            jest.spyOn(database, 'createActionLog').mockImplementation(() => {
+                throw new Error('DB write failed');
+            });
+
+            expect(() => {
+                logger.logAction('system', 'configuration', 'test_action', 'detail');
+            }).toThrow('DB write failed');
+
+            // Verify the error was logged to the output channel
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('ERROR: Failed to log action "test_action"')
+            );
+
+            // Restore
+            (database.createActionLog as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('getLog with entity filter (lines 281-282)', () => {
+        test('getLog filters by entityType and entityId', () => {
+            logger.logAction('system', 'design_change', 'updated', 'update 1', {
+                entity_type: 'task',
+                entity_id: 'task-001',
+            });
+            logger.logAction('system', 'design_change', 'deleted', 'delete 1', {
+                entity_type: 'task',
+                entity_id: 'task-002',
+            });
+            logger.logAction('system', 'design_change', 'created', 'create 1', {
+                entity_type: 'component',
+                entity_id: 'comp-001',
+            });
+
+            const result = logger.getLog({
+                entityType: 'task',
+                entityId: 'task-001',
+            });
+
+            expect(result.length).toBe(1);
+            expect(result[0].action).toBe('updated');
+            expect(result[0].entity_type).toBe('task');
+            expect(result[0].entity_id).toBe('task-001');
+        });
+    });
+
+    describe('getByEntity (line 319)', () => {
+        test('getByEntity returns entries for a specific entity', () => {
+            logger.logAction('system', 'design_change', 'action1', 'detail', {
+                entity_type: 'design_component',
+                entity_id: 'dc-001',
+            });
+            logger.logAction('system', 'design_change', 'action2', 'detail', {
+                entity_type: 'design_component',
+                entity_id: 'dc-001',
+            });
+            logger.logAction('system', 'design_change', 'action3', 'detail', {
+                entity_type: 'design_component',
+                entity_id: 'dc-002',
+            });
+
+            const result = logger.getByEntity('design_component', 'dc-001');
+            expect(result.length).toBe(2);
+            result.forEach(entry => {
+                expect(entry.entity_type).toBe('design_component');
+                expect(entry.entity_id).toBe('dc-001');
+            });
+        });
+    });
+
+    describe('importLog edge cases (lines 498-548)', () => {
+        test('importLog skips entries with missing required fields', () => {
+            // Create a valid entry first for reference
+            logger.logAction('system', 'configuration', 'existing_action', 'detail');
+
+            const importData = JSON.stringify([
+                { id: 'imp-1', source: 'system', category: 'configuration', action: '' }, // empty action
+                { id: '', source: 'system', category: 'configuration', action: 'valid' }, // empty id
+                { id: 'imp-3', source: '', category: 'configuration', action: 'valid' },  // empty source
+                { id: 'imp-4', source: 'system', category: '', action: 'valid' }, // empty category
+            ]);
+
+            const result = logger.importLog(importData);
+            expect(result.skipped).toBe(4);
+            expect(result.imported).toBe(0);
+        });
+
+        test('importLog detects duplicates by entity', () => {
+            // Create an entry with entity info
+            const existing = logger.logAction('system', 'design_change', 'original', 'detail', {
+                entity_type: 'task',
+                entity_id: 'task-dup',
+            });
+
+            // Import data that has the same ID as the existing entry
+            const importData = JSON.stringify([
+                {
+                    id: existing.id,
+                    source: 'system',
+                    category: 'design_change',
+                    action: 'duplicate',
+                    entity_type: 'task',
+                    entity_id: 'task-dup',
+                },
+            ]);
+
+            const result = logger.importLog(importData);
+            expect(result.skipped).toBe(1);
+            expect(result.imported).toBe(0);
+        });
+
+        test('importLog catches errors for individual entries', () => {
+            // Spy on createActionLog to throw on specific calls
+            const origCreate = database.createActionLog.bind(database);
+            let callCount = 0;
+            jest.spyOn(database, 'createActionLog').mockImplementation((data) => {
+                callCount++;
+                if (callCount === 2) {
+                    throw new Error('Individual entry failed');
+                }
+                return origCreate(data);
+            });
+
+            const importData = JSON.stringify([
+                { id: 'imp-ok-1', source: 'system', category: 'configuration', action: 'first' },
+                { id: 'imp-fail', source: 'system', category: 'configuration', action: 'second' },
+                { id: 'imp-ok-2', source: 'system', category: 'configuration', action: 'third' },
+            ]);
+
+            const result = logger.importLog(importData);
+            expect(result.imported).toBe(2);
+            expect(result.skipped).toBe(1);
+
+            // Verify error was logged
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('ERROR: Failed to import entry imp-fail')
+            );
+
+            (database.createActionLog as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('markSynced with empty array (line 583)', () => {
+        test('markSynced returns early for empty array', () => {
+            // Should not throw and should not log anything
+            outputChannel.appendLine.mockClear();
+            logger.markSynced([]);
+            // Should NOT have logged the "Marked N entries" message
+            const markCalls = outputChannel.appendLine.mock.calls.filter(
+                (call: string[]) => call[0].includes('Marked')
+            );
+            expect(markCalls.length).toBe(0);
+        });
+    });
+
+    describe('emitActionLogged error handling (line 615)', () => {
+        test('event emission failure is caught and logged', () => {
+            // Make eventBus.emit throw
+            jest.spyOn(eventBus, 'emit').mockImplementation(() => {
+                throw new Error('EventBus crashed');
+            });
+
+            // logAction should still succeed despite event emission failure
+            const entry = logger.logAction('system', 'configuration', 'resilient_action', 'detail');
+            expect(entry.id).toBeDefined();
+
+            // Verify the warning was logged
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('WARNING: Failed to emit event')
+            );
+
+            (eventBus.emit as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('ethicsDecisionToSeverity default case (line 637)', () => {
+        test('unknown decision maps to info severity', () => {
+            // Use logEthicsDecision with an unknown decision string
+            // This internally calls ethicsDecisionToSeverity
+            const mockAuditEntry: EthicsAuditEntry = {
+                id: 'audit-unknown',
+                module_id: 'mod-test',
+                rule_id: null,
+                action_description: 'test action',
+                decision: 'some_unknown_decision' as any,
+                requestor: 'test',
+                context_snapshot: '{}',
+                override_by: null,
+                override_reason: null,
+                created_at: new Date().toISOString(),
+            };
+
+            // logEthicsDecision should not throw
+            logger.logEthicsDecision(mockAuditEntry);
+
+            // Verify the entry was created with 'info' severity (default)
+            const logs = logger.getLog({ source: 'ethics_engine', limit: 10 });
+            expect(logs.length).toBe(1);
+            expect(logs[0].severity).toBe('info');
+        });
+    });
+
+    describe('applyInMemoryFilters since filter (line 657)', () => {
+        test('getLog filters by since timestamp', () => {
+            logger.logAction('system', 'configuration', 'old_action', 'old detail');
+            logger.logAction('system', 'configuration', 'new_action', 'new detail');
+
+            const allLogs = logger.getLog({ source: 'system' });
+            expect(allLogs.length).toBe(2);
+
+            // Get the created_at from the actual entries to base our since filter
+            // SQLite uses "YYYY-MM-DD HH:MM:SS" format via datetime('now')
+            const timestamps = allLogs.map(e => e.created_at).sort();
+            const earliest = timestamps[0];
+
+            // Filter with a since timestamp after all entries — should return nothing
+            // Use a date string that sorts after any possible SQLite datetime
+            const filtered = logger.getLog({ source: 'system', since: '9999-12-31 23:59:59' });
+            expect(filtered.length).toBe(0);
+
+            // Filter with a since timestamp before all entries — should return all
+            const allFiltered = logger.getLog({ source: 'system', since: '2000-01-01 00:00:00' });
+            expect(allFiltered.length).toBe(2);
+        });
+    });
+
+    describe('getFilteredForExport since/until filters (lines 677, 681)', () => {
+        test('exportJSON respects since and until filters', () => {
+            logger.logAction('system', 'configuration', 'action1', 'detail1');
+            logger.logAction('system', 'configuration', 'action2', 'detail2');
+
+            // Export with since far in the future — should get empty array
+            const emptyExport = logger.exportJSON({ since: '9999-12-31 23:59:59' });
+            const emptyParsed = JSON.parse(emptyExport);
+            expect(emptyParsed.length).toBe(0);
+
+            // Export with until far in the past — should get empty array
+            const pastExport = logger.exportJSON({ until: '1970-01-01 00:00:00' });
+            const pastParsed = JSON.parse(pastExport);
+            expect(pastParsed.length).toBe(0);
+
+            // Export with broad range — should get all entries
+            const fullExport = logger.exportJSON({ since: '2000-01-01 00:00:00', until: '9999-12-31 23:59:59' });
+            const fullParsed = JSON.parse(fullExport);
+            expect(fullParsed.length).toBe(2);
+        });
+    });
 });

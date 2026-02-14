@@ -294,6 +294,42 @@ export class MyService {
             tracker.addItem(budget, 'big', 'x'.repeat(targetChars), ContextPriority.Mandatory, ContentType.NaturalText);
             expect(budget.warningLevel).toBe('warning');
         });
+
+        it('sets warningLevel to exceeded when consumed >= availableForInput (line 351)', () => {
+            // To trigger 'exceeded', we need consumed/availableForInput >= 100%.
+            // updateWarningLevel is called only when item.included = true (fits).
+            // An item fits when estimatedTokens <= budget.remaining.
+            // For the first item, remaining = availableForInput.
+            // So we need an item whose estimatedTokens >= availableForInput.
+            // estimatedTokens = ceil(content.length / charsPerToken) + overheadPerMessage
+            // For NaturalText: charsPerToken = 4.0, overhead = 4
+            // Need: ceil(len / 4.0) + 4 >= availableForInput
+            // So len >= (availableForInput - 4) * 4
+
+            const budget = tracker.createBudget(AgentType.Planning);
+            const targetTokens = budget.availableForInput; // Need estimatedTokens >= this
+            // ceil(len/4) + 4 >= targetTokens  =>  len >= (targetTokens - 4) * 4
+            const charCount = (targetTokens - 4) * 4;
+
+            const item = tracker.addItem(budget, 'massive', 'x'.repeat(charCount), ContextPriority.Mandatory, ContentType.NaturalText);
+
+            expect(item.included).toBe(true);
+            expect(budget.consumed).toBeGreaterThanOrEqual(budget.availableForInput);
+            expect(budget.warningLevel).toBe('exceeded');
+        });
+
+        it('getRemaining returns budget.remaining (line 214)', () => {
+            const budget = tracker.createBudget(AgentType.Planning);
+            const initial = tracker.getRemaining(budget);
+            expect(initial).toBe(budget.remaining);
+            expect(initial).toBeGreaterThan(0);
+
+            // Add an item and verify remaining decreases
+            tracker.addItem(budget, 'some-item', 'Hello world', ContextPriority.Supplementary, ContentType.NaturalText);
+            const after = tracker.getRemaining(budget);
+            expect(after).toBeLessThan(initial);
+            expect(after).toBe(budget.remaining);
+        });
     });
 
     // --- Model Profiles ---

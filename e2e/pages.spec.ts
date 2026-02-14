@@ -55,22 +55,24 @@ test.describe('COE Webapp — Coding Page', () => {
     });
 });
 
-test.describe('COE Webapp — Designer Page', () => {
+test.describe('COE Webapp — Designer (within Planning & Design)', () => {
     let app: AppPage;
 
     test.beforeEach(async ({ page }) => {
         app = new AppPage(page);
         await app.goto();
-        await app.navigateToTab('designer');
+        await app.navigateToTab('planning');
     });
 
-    test('designer page is visible', async () => {
-        await expect(app.designerPage).toBeVisible();
+    test('designer section exists within planning page', async () => {
+        // The designer section is embedded in the planning page (hidden until a plan is opened)
+        const designerSection = app.page.locator('#designerSection');
+        await expect(designerSection).toBeAttached();
     });
 
-    test('has designer layout structure', async () => {
-        const designerLayout = app.page.locator('.designer-layout');
-        await expect(designerLayout).toBeAttached();
+    test('planning tab is labeled Planning & Design', async () => {
+        const planningTab = app.page.locator('.tab[data-page="planning"]');
+        await expect(planningTab).toHaveText('Planning & Design');
     });
 });
 

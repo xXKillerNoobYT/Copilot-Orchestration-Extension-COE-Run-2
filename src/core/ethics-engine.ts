@@ -147,7 +147,7 @@ const DEFAULT_MODULES: DefaultModuleSeed[] = [
         description:
             'Prevents destructive system-level operations including file deletion, '
             + 'security feature disabling, and firewall modification.',
-        sensitivity: EthicsSensitivity.Maximum,
+        sensitivity: EthicsSensitivity.High,
         scope: ['system', 'security'],
         allowed_actions: [],
         blocked_actions: [

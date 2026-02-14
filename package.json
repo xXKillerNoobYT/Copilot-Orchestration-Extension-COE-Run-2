@@ -246,6 +246,26 @@
       {
         "command": "coe.exportPlanAsMarkdown",
         "title": "COE: Export Plan as Markdown"
+      },
+      {
+        "command": "coe.openProjectStatus",
+        "title": "COE: Open Project Status"
+      },
+      {
+        "command": "coe.openDesigner",
+        "title": "COE: Open Visual Designer"
+      },
+      {
+        "command": "coe.quickReport",
+        "title": "COE: Quick Report Issue"
+      },
+      {
+        "command": "coe.showPlanVersions",
+        "title": "COE: Show Plan Versions"
+      },
+      {
+        "command": "coe.generateCode",
+        "title": "COE: Generate Code from Design"
       }
     ],
     "viewsWelcome": [

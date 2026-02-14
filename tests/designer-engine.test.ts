@@ -401,6 +401,12 @@ describe("DesignerEngine", () => {
             expect(result.files[0].name).toBe("design.json");
         });
 
+        test("export with unknown format falls back to HTML (line 340)", () => {
+            const result = engine.exportToCode(components, { format: "unknown-format" as any });
+            expect(result.language).toBe("html");
+            expect(result.code).toContain("<!DOCTYPE html>");
+        });
+
         test("export with custom prefix", () => {
             const result = engine.exportToCode(components, { format: "react", componentPrefix: "My" });
             expect(result.code).toContain("MyPage");
@@ -600,6 +606,225 @@ describe("DesignerEngine", () => {
             const e = new DesignerEngine(16, 10);
             expect(e.getGridSize()).toBe(16);
             expect(e.getSnapThreshold()).toBe(10);
+        });
+    });
+
+    // ==================== BRANCH COVERAGE GAPS ====================
+
+    describe("Export with empty/missing component names (line 354, 425, 443, 472)", () => {
+        test("React export uses comp.id when comp.name is empty", () => {
+            const components = [
+                {
+                    id: "myBtn", type: "button", name: "",
+                    x: 10, y: 20, width: 100, height: 40,
+                    styles: { backgroundColor: "blue" },
+                    content: "Click",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "react" });
+            // Should use comp.id "myBtn" since name is empty
+            expect(result.code).toContain("myBtn");
+        });
+
+        test("HTML export uses comp.id when comp.name is empty", () => {
+            const components = [
+                {
+                    id: "myDiv", type: "container", name: "",
+                    x: 0, y: 0, width: 100, height: 100,
+                    styles: { border: "1px solid" },
+                    content: "Hello",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "html" });
+            expect(result.code).toContain("myDiv");
+        });
+
+        test("CSS export uses comp.id when comp.name is empty", () => {
+            const components = [
+                {
+                    id: "myElement", type: "text", name: "",
+                    x: 10, y: 20, width: 200, height: 30,
+                    styles: { color: "red" },
+                    content: "Text",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "css" });
+            expect(result.code).toContain("myElement");
+        });
+    });
+
+    describe("Export with undefined/null styles (line 378, 427, 485)", () => {
+        test("React export handles undefined styles", () => {
+            const components = [
+                {
+                    id: "btn1", type: "button", name: "TestBtn",
+                    x: 10, y: 20, width: 100, height: 40,
+                    styles: undefined as any,
+                    content: "Click",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "react" });
+            expect(result.code).toBeDefined();
+            // toCamelCase converts "TestBtn" to "testBtn"
+            expect(result.code).toContain("testBtn");
+        });
+
+        test("HTML export handles undefined styles in loop", () => {
+            const components = [
+                {
+                    id: "div1", type: "container", name: "Container",
+                    x: 0, y: 0, width: 100, height: 100,
+                    styles: undefined as any,
+                    content: "",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "html" });
+            // toCamelCase converts "Container" to "container"
+            expect(result.code).toContain("container");
+        });
+
+        test("CSS export handles undefined styles in loop", () => {
+            const components = [
+                {
+                    id: "txt1", type: "text", name: "TextBlock",
+                    x: 10, y: 20, width: 200, height: 30,
+                    styles: undefined as any,
+                    content: "Hello",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "css" });
+            expect(result.code).toContain("textBlock");
+        });
+    });
+
+    describe("Export with empty style values (falsy value check)", () => {
+        test("React export skips empty style values", () => {
+            const components = [
+                {
+                    id: "btn1", type: "button", name: "TestBtn",
+                    x: 10, y: 20, width: 100, height: 40,
+                    styles: { backgroundColor: "", color: "red" },
+                    content: "Click",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "react" });
+            // Should include color: red but not backgroundColor (empty string)
+            const cssFile = result.files.find(f => f.name === "styles.css");
+            expect(cssFile).toBeDefined();
+            expect(cssFile!.content).toContain("color: red");
+            expect(cssFile!.content).not.toContain("background-color: ;");
+        });
+
+        test("HTML export skips empty style values", () => {
+            const components = [
+                {
+                    id: "div1", type: "container", name: "TestDiv",
+                    x: 0, y: 0, width: 100, height: 100,
+                    styles: { margin: "", padding: "10px" },
+                    content: "",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "html" });
+            expect(result.code).toContain("padding: 10px");
+            expect(result.code).not.toContain("margin: ;");
+        });
+
+        test("CSS export skips empty style values", () => {
+            const components = [
+                {
+                    id: "txt1", type: "text", name: "TestText",
+                    x: 10, y: 20, width: 200, height: 30,
+                    styles: { fontSize: "", fontWeight: "bold" },
+                    content: "Hello",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "css" });
+            expect(result.code).toContain("font-weight: bold");
+            expect(result.code).not.toContain("font-size: ;");
+        });
+    });
+
+    describe("toPascalCase and toCamelCase edge cases (lines 538-542)", () => {
+        test("toPascalCase with trailing separator", () => {
+            // Trailing separator: "my-" => "My" (the captured c is undefined)
+            expect(engine.toPascalCase("my-")).toBe("My");
+        });
+
+        test("toCamelCase with trailing separator", () => {
+            expect(engine.toCamelCase("my-")).toBe("my");
+        });
+
+        test("toPascalCase with multiple trailing separators", () => {
+            expect(engine.toPascalCase("test--")).toBe("Test");
+        });
+
+        test("toCamelCase with single word", () => {
+            expect(engine.toCamelCase("button")).toBe("button");
+        });
+
+        test("toPascalCase with single word", () => {
+            expect(engine.toPascalCase("button")).toBe("Button");
+        });
+    });
+
+    describe("React export non-text/button component (line 354 else branch)", () => {
+        test("React export uses self-closing tag for non-text non-button types", () => {
+            const components = [
+                {
+                    id: "img1", type: "image", name: "MyImage",
+                    x: 10, y: 20, width: 100, height: 100,
+                    styles: {},
+                    content: "some content that should be ignored",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "react" });
+            // image type should use self-closing tag since type is not "text" or "button"
+            expect(result.code).toContain("/>");
+        });
+
+        test("React export uses opening/closing tag for text with content", () => {
+            const components = [
+                {
+                    id: "txt1", type: "text", name: "MyText",
+                    x: 10, y: 20, width: 200, height: 30,
+                    styles: {},
+                    content: "Hello World",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "react" });
+            expect(result.code).toContain(">Hello World</p>");
+        });
+    });
+
+    describe("exportToCode with default options (line 324)", () => {
+        test("exportToCode with no options uses defaults", () => {
+            const components = [
+                {
+                    id: "btn1", type: "button", name: "Btn",
+                    x: 0, y: 0, width: 100, height: 40,
+                    styles: {},
+                    content: "Click",
+                },
+            ];
+            // Call with no options at all — the default {} param
+            const result = engine.exportToCode(components);
+            expect(result.language).toBe("tsx"); // default is react
+        });
+    });
+
+    describe("HTML export without styles (line 419 false branch)", () => {
+        test("HTML export omits style block when includeStyles is false", () => {
+            const components = [
+                {
+                    id: "div1", type: "container", name: "MyDiv",
+                    x: 0, y: 0, width: 100, height: 100,
+                    styles: { border: "1px solid" },
+                    content: "",
+                },
+            ];
+            const result = engine.exportToCode(components, { format: "html", includeStyles: false });
+            expect(result.code).not.toContain("<style>");
+            expect(result.code).toContain("<div");
         });
     });
 });

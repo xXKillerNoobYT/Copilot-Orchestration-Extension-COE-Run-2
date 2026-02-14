@@ -20,10 +20,10 @@ export type COEEventType =
     | 'task:reordered' | 'task:decomposed'
     // Plan lifecycle
     | 'plan:created' | 'plan:activated' | 'plan:completed' | 'plan:archived'
-    | 'plan:updated' | 'plan:drift_detected'
+    | 'plan:updated' | 'plan:deleted' | 'plan:drift_detected'
     // Ticket lifecycle
-    | 'ticket:created' | 'ticket:updated' | 'ticket:resolved' | 'ticket:escalated'
-    | 'ticket:replied'
+    | 'ticket:created' | 'ticket:updated' | 'ticket:deleted' | 'ticket:resolved' | 'ticket:escalated'
+    | 'ticket:replied' | 'ticket:priority_changed' | 'ticket:status_changed' | 'ticket:message_added'
     // Agent lifecycle
     | 'agent:started' | 'agent:completed' | 'agent:error' | 'agent:idle'
     | 'agent:routed' | 'agent:registered'
@@ -40,7 +40,7 @@ export type COEEventType =
     | 'design:flow_created' | 'design:flow_deleted'
     // Coding
     | 'coding:session_created' | 'coding:message_sent' | 'coding:session_completed'
-    | 'coding:agent_responded'
+    | 'coding:agent_responded' | 'coding:design_export'
     // Coding Agent (v2.0)
     | 'coding_agent:command_received' | 'coding_agent:generating' | 'coding_agent:completed'
     | 'coding_agent:diff_pending' | 'coding_agent:diff_approved' | 'coding_agent:diff_rejected'
@@ -53,6 +53,21 @@ export type COEEventType =
     | 'sync:device_connected' | 'sync:device_disconnected'
     // Transparency (v2.0)
     | 'transparency:action_logged' | 'transparency:log_exported' | 'transparency:log_queried'
+    // AI (v3.0 — Planning enhancement)
+    | 'ai:suggestions_generated' | 'ai:suggestion_accepted' | 'ai:suggestion_dismissed'
+    | 'ai:question_answered' | 'ai:autofill_completed' | 'ai:plan_reviewed'
+    | 'ai:bug_check_completed'
+    // Status (v3.0)
+    | 'status:issue_created' | 'status:issue_resolved' | 'status:element_updated'
+    // Plan Versions (v3.0)
+    | 'plan:version_created' | 'plan:version_restored'
+    | 'plan:branch_switched' | 'plan:version_merged'
+    // Notifications (v3.0)
+    | 'notification:badge_update'
+    // Element Chat (v3.0)
+    | 'element:chat_message' | 'element:change_confirmed' | 'element:change_rejected'
+    // AI Chat Overlay (v3.0)
+    | 'ai_chat:session_created' | 'ai_chat:message_sent' | 'ai_chat:session_archived'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

@@ -19,7 +19,10 @@ import {
     EthicsModule, EthicsRule, EthicsAuditEntry, EthicsSensitivity,
     ActionLog, CodeDiff, CodeDiffStatus,
     LogicBlock, LogicBlockType,
-    DeviceInfo, ComponentSchema
+    DeviceInfo, ComponentSchema,
+    // v3.0 types
+    ElementIssue, AISuggestion, AIQuestion, PlanVersion, DataModel,
+    AIChatSession, AIChatMessage, DesignChangeLog
 } from '../types';
 
 export class Database {
@@ -80,6 +83,7 @@ export class Database {
                 creator TEXT NOT NULL DEFAULT 'system',
                 assignee TEXT,
                 task_id TEXT,
+                parent_ticket_id TEXT DEFAULT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (task_id) REFERENCES tasks(id)
@@ -200,20 +204,40 @@ export class Database {
             // Column already exists — ignore
         }
 
+        // Migration: add parent_page_id, depth, requirements to design_pages
+        try {
+            this.db.exec('ALTER TABLE design_pages ADD COLUMN parent_page_id TEXT');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec('ALTER TABLE design_pages ADD COLUMN depth INTEGER NOT NULL DEFAULT 0');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec("ALTER TABLE design_pages ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'");
+        } catch { /* already exists */ }
+
+        // Migration: add requirements to design_components props
+        try {
+            this.db.exec("ALTER TABLE design_components ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'");
+        } catch { /* already exists */ }
+
         // ===== New tables for Visual Designer, Coding Conversations, Design Tokens =====
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS design_pages (
                 id TEXT PRIMARY KEY,
                 plan_id TEXT NOT NULL,
+                parent_page_id TEXT,
+                depth INTEGER NOT NULL DEFAULT 0,
                 name TEXT NOT NULL DEFAULT 'Untitled Page',
                 route TEXT NOT NULL DEFAULT '/',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 width INTEGER NOT NULL DEFAULT 1440,
                 height INTEGER NOT NULL DEFAULT 900,
                 background TEXT NOT NULL DEFAULT '#1e1e2e',
+                requirements TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (plan_id) REFERENCES plans(id)
+                FOREIGN KEY (plan_id) REFERENCES plans(id),
+                FOREIGN KEY (parent_page_id) REFERENCES design_pages(id)
             );
 
             CREATE TABLE IF NOT EXISTS design_components (
@@ -231,6 +255,7 @@ export class Database {
                 styles TEXT NOT NULL DEFAULT '{}',
                 content TEXT NOT NULL DEFAULT '',
                 props TEXT NOT NULL DEFAULT '{}',
+                requirements TEXT NOT NULL DEFAULT '[]',
                 responsive TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -530,6 +555,192 @@ export class Database {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_component_schemas_type ON component_schemas(type);
             CREATE INDEX IF NOT EXISTS idx_component_schemas_category ON component_schemas(category);
         `);
+
+        // ===== v3.0 Tables: Element Issues, AI Suggestions, AI Questions, Plan Versions, Data Models =====
+        this.db.exec(`
+            -- ==================== ELEMENT ISSUES ====================
+            CREATE TABLE IF NOT EXISTS element_issues (
+                id TEXT PRIMARY KEY,
+                element_id TEXT NOT NULL,
+                element_type TEXT NOT NULL DEFAULT 'component',
+                plan_id TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                severity TEXT NOT NULL DEFAULT 'bug',
+                mode TEXT NOT NULL DEFAULT 'fullstack',
+                reported_by TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                resolved_at TEXT,
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_element_issues_plan ON element_issues(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_element_issues_element ON element_issues(element_id, element_type);
+            CREATE INDEX IF NOT EXISTS idx_element_issues_status ON element_issues(status);
+
+            -- ==================== AI SUGGESTIONS ====================
+            CREATE TABLE IF NOT EXISTS ai_suggestions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                component_id TEXT,
+                page_id TEXT,
+                type TEXT NOT NULL DEFAULT 'general',
+                title TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                reasoning TEXT NOT NULL DEFAULT '',
+                action_type TEXT,
+                action_payload TEXT NOT NULL DEFAULT '{}',
+                priority TEXT NOT NULL DEFAULT 'P2',
+                status TEXT NOT NULL DEFAULT 'pending',
+                ticket_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_suggestions_plan ON ai_suggestions(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_suggestions_status ON ai_suggestions(status);
+
+            -- ==================== AI QUESTIONS ====================
+            CREATE TABLE IF NOT EXISTS ai_questions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                component_id TEXT,
+                page_id TEXT,
+                category TEXT NOT NULL DEFAULT 'general',
+                question TEXT NOT NULL DEFAULT '',
+                question_type TEXT NOT NULL DEFAULT 'text',
+                options TEXT NOT NULL DEFAULT '[]',
+                ai_reasoning TEXT NOT NULL DEFAULT '',
+                ai_suggested_answer TEXT,
+                user_answer TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                ticket_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_questions_plan ON ai_questions(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_questions_status ON ai_questions(status);
+
+            -- ==================== PLAN VERSIONS ====================
+            CREATE TABLE IF NOT EXISTS plan_versions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                snapshot TEXT NOT NULL DEFAULT '{}',
+                change_summary TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_versions_plan ON plan_versions(plan_id);
+
+            -- ==================== DESIGN CHANGE LOG ====================
+            CREATE TABLE IF NOT EXISTS design_change_log (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                branch_type TEXT NOT NULL DEFAULT 'live',
+                change_type TEXT NOT NULL DEFAULT 'update',
+                entity_type TEXT NOT NULL DEFAULT 'component',
+                entity_id TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                session_change_number INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_design_change_log_plan ON design_change_log(plan_id);
+
+            -- ==================== DATA MODELS ====================
+            CREATE TABLE IF NOT EXISTS data_models (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                fields TEXT NOT NULL DEFAULT '[]',
+                relationships TEXT NOT NULL DEFAULT '[]',
+                bound_components TEXT NOT NULL DEFAULT '[]',
+                ai_backend_suggestion TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_data_models_plan ON data_models(plan_id);
+
+            -- ==================== AI CHAT SESSIONS ====================
+            CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                ticket_id TEXT,
+                session_name TEXT NOT NULL DEFAULT 'Chat Session',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_plan ON ai_chat_sessions(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_status ON ai_chat_sessions(status);
+
+            -- ==================== AI CHAT MESSAGES ====================
+            CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                ticket_reply_id TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                content TEXT NOT NULL,
+                context_page TEXT NOT NULL DEFAULT '',
+                context_element_id TEXT,
+                context_element_type TEXT,
+                ai_level TEXT NOT NULL DEFAULT 'suggestions',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session ON ai_chat_messages(session_id);
+        `);
+
+        // Migration: add meta column to design_pages
+        try {
+            this.db.exec("ALTER TABLE design_pages ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'");
+        } catch { /* already exists */ }
+
+        // Migration: add parent_ticket_id to tickets for hierarchical tickets
+        try {
+            this.db.exec('ALTER TABLE tickets ADD COLUMN parent_ticket_id TEXT DEFAULT NULL');
+        } catch { /* already exists */ }
+
+        // Migration: add auto_created and operation_type to tickets for auto-ticket system
+        try {
+            this.db.exec('ALTER TABLE tickets ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec("ALTER TABLE tickets ADD COLUMN operation_type TEXT NOT NULL DEFAULT 'user_created'");
+        } catch { /* already exists */ }
+
+        // Migration: add version_snapshot_id and branch_type to coding_sessions
+        try {
+            this.db.exec('ALTER TABLE coding_sessions ADD COLUMN version_snapshot_id TEXT');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec('ALTER TABLE coding_sessions ADD COLUMN branch_type TEXT');
+        } catch { /* already exists */ }
+
+        // Migration: add branch_type, is_active, change_count, merge_diff to plan_versions
+        try {
+            this.db.exec("ALTER TABLE plan_versions ADD COLUMN branch_type TEXT NOT NULL DEFAULT 'live'");
+        } catch { /* already exists */ }
+        try {
+            this.db.exec('ALTER TABLE plan_versions ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec('ALTER TABLE plan_versions ADD COLUMN change_count INTEGER NOT NULL DEFAULT 0');
+        } catch { /* already exists */ }
+        try {
+            this.db.exec('ALTER TABLE plan_versions ADD COLUMN merge_diff TEXT');
+        } catch { /* already exists */ }
+
+        // Migration: add task_requirements column to tasks
+        try {
+            this.db.exec('ALTER TABLE tasks ADD COLUMN task_requirements TEXT');
+        } catch { /* already exists */ }
     }
 
     private genId(): string {
@@ -548,8 +759,8 @@ export class Database {
         const id = data.id || this.genId();
         const now = new Date().toISOString();
         const stmt = this.db.prepare(`
-            INSERT INTO tasks (id, title, description, status, priority, dependencies, acceptance_criteria, plan_id, parent_task_id, estimated_minutes, files_modified, context_bundle, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (id, title, description, status, priority, dependencies, acceptance_criteria, plan_id, parent_task_id, estimated_minutes, files_modified, context_bundle, task_requirements, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         stmt.run(
             id,
@@ -564,6 +775,7 @@ export class Database {
             data.estimated_minutes || 30,
             JSON.stringify(data.files_modified || []),
             data.context_bundle || null,
+            data.task_requirements || null,
             data.sort_order ?? 0,
             now,
             now
@@ -632,6 +844,7 @@ export class Database {
         if (updates.estimated_minutes !== undefined) { fields.push('estimated_minutes = ?'); values.push(updates.estimated_minutes); }
         if (updates.files_modified !== undefined) { fields.push('files_modified = ?'); values.push(JSON.stringify(updates.files_modified)); }
         if (updates.context_bundle !== undefined) { fields.push('context_bundle = ?'); values.push(updates.context_bundle); }
+        if (updates.task_requirements !== undefined) { fields.push('task_requirements = ?'); values.push(updates.task_requirements); }
         if (updates.sort_order !== undefined) { fields.push('sort_order = ?'); values.push(updates.sort_order); }
         if (updates.parent_task_id !== undefined) { fields.push('parent_task_id = ?'); values.push(updates.parent_task_id); }
 
@@ -673,6 +886,7 @@ export class Database {
             estimated_minutes: row.estimated_minutes as number,
             files_modified: JSON.parse((row.files_modified as string) || '[]'),
             context_bundle: row.context_bundle as string | null,
+            task_requirements: row.task_requirements as string | null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -685,8 +899,8 @@ export class Database {
         const ticketNumber = this.nextTicketNumber();
         const now = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO tickets (id, ticket_number, title, body, status, priority, creator, assignee, task_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tickets (id, ticket_number, title, body, status, priority, creator, assignee, task_id, parent_ticket_id, auto_created, operation_type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id,
             ticketNumber,
@@ -697,6 +911,9 @@ export class Database {
             data.creator || 'system',
             data.assignee || null,
             data.task_id || null,
+            data.parent_ticket_id || null,
+            data.auto_created ? 1 : 0,
+            data.operation_type || 'user_created',
             now,
             now
         );
@@ -742,6 +959,7 @@ export class Database {
         if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
         if (updates.priority !== undefined) { fields.push('priority = ?'); values.push(updates.priority); }
         if (updates.assignee !== undefined) { fields.push('assignee = ?'); values.push(updates.assignee); }
+        if (updates.parent_ticket_id !== undefined) { fields.push('parent_ticket_id = ?'); values.push(updates.parent_ticket_id); }
 
         if (fields.length === 0) return existing;
 
@@ -751,6 +969,16 @@ export class Database {
 
         this.db.prepare(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`).run(...values);
         return this.getTicket(id);
+    }
+
+    deleteTicket(id: string): boolean {
+        const existing = this.getTicket(id);
+        if (!existing) return false;
+        // Promote child tickets to root level (set parent_ticket_id to NULL)
+        this.db.prepare('UPDATE tickets SET parent_ticket_id = NULL WHERE parent_ticket_id = ?').run(id);
+        this.db.prepare('DELETE FROM ticket_replies WHERE ticket_id = ?').run(id);
+        this.db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
+        return true;
     }
 
     private rowToTicket(row: Record<string, unknown>): Ticket {
@@ -764,9 +992,35 @@ export class Database {
             creator: row.creator as string,
             assignee: row.assignee as string | null,
             task_id: row.task_id as string | null,
+            parent_ticket_id: (row.parent_ticket_id as string | null) ?? null,
+            auto_created: !!(row.auto_created as number),
+            operation_type: (row.operation_type as string) || 'user_created',
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
+    }
+
+    // ==================== HIERARCHICAL TICKETS ====================
+
+    getChildTickets(parentTicketId: string): Ticket[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM tickets WHERE parent_ticket_id = ? ORDER BY created_at ASC'
+        ).all(parentTicketId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
+    }
+
+    getChildTicketCount(parentTicketId: string): number {
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM tickets WHERE parent_ticket_id = ?'
+        ).get(parentTicketId) as { cnt: number };
+        return row.cnt;
+    }
+
+    getRootTickets(): Ticket[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM tickets WHERE parent_ticket_id IS NULL ORDER BY created_at DESC'
+        ).all() as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
     }
 
     // ==================== TICKET REPLIES ====================
@@ -835,7 +1089,14 @@ export class Database {
         const fields: string[] = [];
         const values: unknown[] = [];
         if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
-        if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+        if (updates.status !== undefined) {
+            fields.push('status = ?'); values.push(updates.status);
+            // Single-plan architecture: deactivate all other plans when activating one
+            if (updates.status === 'active') {
+                this.db.prepare("UPDATE plans SET status = 'completed', updated_at = ? WHERE status = 'active' AND id != ?")
+                    .run(new Date().toISOString(), id);
+            }
+        }
         if (updates.config_json !== undefined) { fields.push('config_json = ?'); values.push(updates.config_json); }
         if (fields.length === 0) return this.getPlan(id);
         fields.push('updated_at = ?');
@@ -843,6 +1104,15 @@ export class Database {
         values.push(id);
         this.db.prepare(`UPDATE plans SET ${fields.join(', ')} WHERE id = ?`).run(...values);
         return this.getPlan(id);
+    }
+
+    deletePlan(id: string): boolean {
+        const existing = this.getPlan(id);
+        if (!existing) return false;
+        // Remove tasks associated with this plan
+        this.db.prepare('DELETE FROM tasks WHERE plan_id = ?').run(id);
+        this.db.prepare('DELETE FROM plans WHERE id = ?').run(id);
+        return true;
     }
 
     // ==================== AGENTS ====================
@@ -862,6 +1132,7 @@ export class Database {
 
     getAllAgents(): Agent[] {
         const result = this.db.prepare('SELECT * FROM agents ORDER BY type ASC, name ASC').all();
+        /* istanbul ignore next -- SQLite .all() always returns an array */
         return Array.isArray(result) ? result as Agent[] : [];
     }
 
@@ -1059,19 +1330,46 @@ export class Database {
     createDesignPage(data: Partial<DesignPage> & { plan_id: string }): DesignPage {
         const id = this.genId();
         const now = new Date().toISOString();
+        const depth = data.depth ?? 0;
+        if (depth > 10) throw new Error('Maximum sub-page depth of 10 exceeded');
         this.db.prepare(`
-            INSERT INTO design_pages (id, plan_id, name, route, sort_order, width, height, background, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, data.plan_id, data.name || 'Untitled Page', data.route || '/', data.sort_order ?? 0, data.width ?? 1440, data.height ?? 900, data.background || '#1e1e2e', now, now);
-        return this.db.prepare('SELECT * FROM design_pages WHERE id = ?').get(id) as DesignPage;
+            INSERT INTO design_pages (id, plan_id, parent_page_id, depth, name, route, sort_order, width, height, background, requirements, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id, data.parent_page_id || null, depth, data.name || 'Untitled Page', data.route || '/', data.sort_order ?? 0, data.width ?? 1440, data.height ?? 900, data.background || '#1e1e2e', JSON.stringify(data.requirements || []), now, now);
+        return this.parsePageRow(this.db.prepare('SELECT * FROM design_pages WHERE id = ?').get(id) as Record<string, unknown>);
     }
 
     getDesignPage(id: string): DesignPage | null {
-        return this.db.prepare('SELECT * FROM design_pages WHERE id = ?').get(id) as DesignPage | undefined || null;
+        const row = this.db.prepare('SELECT * FROM design_pages WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.parsePageRow(row) : null;
     }
 
     getDesignPagesByPlan(planId: string): DesignPage[] {
-        return this.db.prepare('SELECT * FROM design_pages WHERE plan_id = ? ORDER BY sort_order ASC').all(planId) as DesignPage[];
+        const rows = this.db.prepare('SELECT * FROM design_pages WHERE plan_id = ? ORDER BY depth ASC, sort_order ASC').all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.parsePageRow(r));
+    }
+
+    getChildPages(parentPageId: string): DesignPage[] {
+        const rows = this.db.prepare('SELECT * FROM design_pages WHERE parent_page_id = ? ORDER BY sort_order ASC').all(parentPageId) as Record<string, unknown>[];
+        return rows.map(r => this.parsePageRow(r));
+    }
+
+    private parsePageRow(row: Record<string, unknown>): DesignPage {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            parent_page_id: (row.parent_page_id as string) || null,
+            depth: (row.depth as number) ?? 0,
+            name: row.name as string,
+            route: (row.route as string) || '/',
+            sort_order: (row.sort_order as number) ?? 0,
+            width: (row.width as number) ?? 1440,
+            height: (row.height as number) ?? 900,
+            background: (row.background as string) || '#1e1e2e',
+            requirements: JSON.parse((row.requirements as string) || '[]'),
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
     }
 
     updateDesignPage(id: string, updates: Partial<DesignPage>): DesignPage | null {
@@ -1079,8 +1377,13 @@ export class Database {
         const values: unknown[] = [];
         for (const [key, val] of Object.entries(updates)) {
             if (key === 'id' || key === 'created_at') continue;
-            fields.push(`${key} = ?`);
-            values.push(val);
+            if (key === 'requirements') {
+                fields.push(`${key} = ?`);
+                values.push(JSON.stringify(val));
+            } else {
+                fields.push(`${key} = ?`);
+                values.push(val);
+            }
         }
         if (fields.length === 0) return this.getDesignPage(id);
         fields.push('updated_at = ?');
@@ -1091,6 +1394,12 @@ export class Database {
     }
 
     deleteDesignPage(id: string): void {
+        const page = this.getDesignPage(id);
+        // Re-parent child pages to the deleted page's parent
+        if (page) {
+            const newDepth = page.depth > 0 ? page.depth - 1 : 0;
+            this.db.prepare('UPDATE design_pages SET parent_page_id = ?, depth = ? WHERE parent_page_id = ?').run(page.parent_page_id, newDepth, id);
+        }
         this.db.prepare('DELETE FROM design_components WHERE page_id = ?').run(id);
         this.db.prepare('DELETE FROM page_flows WHERE from_page_id = ? OR to_page_id = ?').run(id, id);
         this.db.prepare('DELETE FROM design_pages WHERE id = ?').run(id);
@@ -1102,14 +1411,15 @@ export class Database {
         const id = this.genId();
         const now = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO design_components (id, plan_id, page_id, type, name, parent_id, sort_order, x, y, width, height, styles, content, props, responsive, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO design_components (id, plan_id, page_id, type, name, parent_id, sort_order, x, y, width, height, styles, content, props, requirements, responsive, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id, data.plan_id, data.page_id || null, data.type, data.name || 'Component',
             data.parent_id || null, data.sort_order ?? 0,
             data.x ?? 0, data.y ?? 0, data.width ?? 200, data.height ?? 100,
             JSON.stringify(data.styles || {}), data.content || '',
-            JSON.stringify(data.props || {}), JSON.stringify(data.responsive || {}),
+            JSON.stringify(data.props || {}), JSON.stringify(data.requirements || []),
+            JSON.stringify(data.responsive || {}),
             now, now
         );
         return this.getDesignComponent(id)!;
@@ -1135,7 +1445,7 @@ export class Database {
         const values: unknown[] = [];
         for (const [key, val] of Object.entries(updates)) {
             if (key === 'id' || key === 'created_at') continue;
-            if (key === 'styles' || key === 'props' || key === 'responsive') {
+            if (key === 'styles' || key === 'props' || key === 'responsive' || key === 'requirements') {
                 fields.push(`${key} = ?`);
                 values.push(JSON.stringify(val));
             } else {
@@ -1184,6 +1494,7 @@ export class Database {
             styles: JSON.parse((row.styles as string) || '{}'),
             content: (row.content as string) || '',
             props: JSON.parse((row.props as string) || '{}'),
+            requirements: JSON.parse((row.requirements as string) || '[]'),
             responsive: JSON.parse((row.responsive as string) || '{}'),
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
@@ -2099,6 +2410,629 @@ export class Database {
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
+    }
+
+    // ==================== ELEMENT ISSUES ====================
+
+    createElementIssue(data: Omit<ElementIssue, 'id' | 'created_at' | 'resolved_at'>): ElementIssue {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO element_issues (id, element_id, element_type, plan_id, description, status, severity, mode, reported_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(id, data.element_id, data.element_type, data.plan_id,
+            data.description, data.status || 'open', data.severity || 'bug',
+            data.mode || 'fullstack', data.reported_by || 'user');
+        return this.getElementIssue(id)!;
+    }
+
+    getElementIssue(id: string): ElementIssue | null {
+        const row = this.db.prepare('SELECT * FROM element_issues WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToElementIssue(row) : null;
+    }
+
+    getElementIssuesByPlan(planId: string, status?: string): ElementIssue[] {
+        if (status) {
+            const rows = this.db.prepare(
+                'SELECT * FROM element_issues WHERE plan_id = ? AND status = ? ORDER BY created_at DESC'
+            ).all(planId, status) as Record<string, unknown>[];
+            return rows.map(r => this.rowToElementIssue(r));
+        }
+        const rows = this.db.prepare(
+            'SELECT * FROM element_issues WHERE plan_id = ? ORDER BY created_at DESC'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToElementIssue(r));
+    }
+
+    getElementIssuesByElement(elementId: string, elementType: string): ElementIssue[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM element_issues WHERE element_id = ? AND element_type = ? ORDER BY created_at DESC'
+        ).all(elementId, elementType) as Record<string, unknown>[];
+        return rows.map(r => this.rowToElementIssue(r));
+    }
+
+    updateElementIssue(id: string, updates: Partial<ElementIssue>): ElementIssue | null {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+        if (updates.status !== undefined) {
+            fields.push('status = ?'); values.push(updates.status);
+            if (updates.status === 'resolved') {
+                fields.push('resolved_at = ?'); values.push(new Date().toISOString());
+            }
+        }
+        if (updates.severity !== undefined) { fields.push('severity = ?'); values.push(updates.severity); }
+        if (updates.mode !== undefined) { fields.push('mode = ?'); values.push(updates.mode); }
+        if (fields.length === 0) return this.getElementIssue(id);
+        values.push(id);
+        this.db.prepare(`UPDATE element_issues SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.getElementIssue(id);
+    }
+
+    deleteElementIssue(id: string): void {
+        this.db.prepare('DELETE FROM element_issues WHERE id = ?').run(id);
+    }
+
+    countElementIssuesByPlan(planId: string): { open: number; resolved: number; total: number } {
+        const rows = this.db.prepare(
+            'SELECT status, COUNT(*) as cnt FROM element_issues WHERE plan_id = ? GROUP BY status'
+        ).all(planId) as Array<{ status: string; cnt: number }>;
+        let open = 0, resolved = 0;
+        for (const r of rows) {
+            if (r.status === 'open') open = r.cnt;
+            else if (r.status === 'resolved') resolved = r.cnt;
+        }
+        return { open, resolved, total: open + resolved };
+    }
+
+    private rowToElementIssue(row: Record<string, unknown>): ElementIssue {
+        return {
+            id: row.id as string,
+            element_id: row.element_id as string,
+            element_type: row.element_type as ElementIssue['element_type'],
+            plan_id: row.plan_id as string,
+            description: row.description as string,
+            status: row.status as ElementIssue['status'],
+            severity: row.severity as ElementIssue['severity'],
+            mode: row.mode as ElementIssue['mode'],
+            reported_by: row.reported_by as string,
+            created_at: row.created_at as string,
+            resolved_at: (row.resolved_at as string) ?? null,
+        };
+    }
+
+    // ==================== AI SUGGESTIONS ====================
+
+    createAISuggestion(data: Omit<AISuggestion, 'id' | 'created_at' | 'updated_at'>): AISuggestion {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO ai_suggestions (id, plan_id, component_id, page_id, type, title, description, reasoning, action_type, action_payload, priority, status, ticket_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
+            data.type || 'general', data.title, data.description, data.reasoning || '',
+            data.action_type ?? null, JSON.stringify(data.action_payload || {}),
+            data.priority || 'P2', data.status || 'pending', data.ticket_id ?? null,
+            now, now);
+        return this.getAISuggestion(id)!;
+    }
+
+    getAISuggestion(id: string): AISuggestion | null {
+        const row = this.db.prepare('SELECT * FROM ai_suggestions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToAISuggestion(row) : null;
+    }
+
+    getAISuggestionsByPlan(planId: string, status?: string): AISuggestion[] {
+        if (status) {
+            const rows = this.db.prepare(
+                'SELECT * FROM ai_suggestions WHERE plan_id = ? AND status = ? ORDER BY created_at DESC'
+            ).all(planId, status) as Record<string, unknown>[];
+            return rows.map(r => this.rowToAISuggestion(r));
+        }
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_suggestions WHERE plan_id = ? ORDER BY created_at DESC'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAISuggestion(r));
+    }
+
+    getAISuggestionsByComponent(componentId: string): AISuggestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_suggestions WHERE component_id = ? ORDER BY created_at DESC'
+        ).all(componentId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAISuggestion(r));
+    }
+
+    getAISuggestionsByPage(pageId: string): AISuggestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_suggestions WHERE page_id = ? ORDER BY created_at DESC'
+        ).all(pageId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAISuggestion(r));
+    }
+
+    updateAISuggestion(id: string, updates: Partial<AISuggestion>): AISuggestion | null {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+        if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
+        if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+        if (updates.reasoning !== undefined) { fields.push('reasoning = ?'); values.push(updates.reasoning); }
+        if (updates.action_type !== undefined) { fields.push('action_type = ?'); values.push(updates.action_type); }
+        if (updates.action_payload !== undefined) { fields.push('action_payload = ?'); values.push(JSON.stringify(updates.action_payload)); }
+        if (updates.priority !== undefined) { fields.push('priority = ?'); values.push(updates.priority); }
+        if (updates.ticket_id !== undefined) { fields.push('ticket_id = ?'); values.push(updates.ticket_id); }
+        if (fields.length === 0) return this.getAISuggestion(id);
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(id);
+        this.db.prepare(`UPDATE ai_suggestions SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.getAISuggestion(id);
+    }
+
+    deleteAISuggestion(id: string): void {
+        this.db.prepare('DELETE FROM ai_suggestions WHERE id = ?').run(id);
+    }
+
+    countAISuggestionsByPlan(planId: string): { pending: number; accepted: number; dismissed: number; total: number } {
+        const rows = this.db.prepare(
+            'SELECT status, COUNT(*) as cnt FROM ai_suggestions WHERE plan_id = ? GROUP BY status'
+        ).all(planId) as Array<{ status: string; cnt: number }>;
+        let pending = 0, accepted = 0, dismissed = 0, applied = 0;
+        for (const r of rows) {
+            if (r.status === 'pending') pending = r.cnt;
+            else if (r.status === 'accepted') accepted = r.cnt;
+            else if (r.status === 'dismissed') dismissed = r.cnt;
+            else if (r.status === 'applied') applied = r.cnt;
+        }
+        return { pending, accepted: accepted + applied, dismissed, total: pending + accepted + dismissed + applied };
+    }
+
+    private rowToAISuggestion(row: Record<string, unknown>): AISuggestion {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            component_id: (row.component_id as string) ?? null,
+            page_id: (row.page_id as string) ?? null,
+            type: row.type as AISuggestion['type'],
+            title: row.title as string,
+            description: row.description as string,
+            reasoning: row.reasoning as string,
+            action_type: (row.action_type as AISuggestion['action_type']) ?? null,
+            action_payload: JSON.parse((row.action_payload as string) || '{}'),
+            priority: row.priority as AISuggestion['priority'],
+            status: row.status as AISuggestion['status'],
+            ticket_id: (row.ticket_id as string) ?? null,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== AI QUESTIONS ====================
+
+    createAIQuestion(data: Omit<AIQuestion, 'id' | 'created_at' | 'updated_at'>): AIQuestion {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO ai_questions (id, plan_id, component_id, page_id, category, question, question_type, options, ai_reasoning, ai_suggested_answer, user_answer, status, ticket_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
+            data.category || 'general', data.question, data.question_type || 'text',
+            JSON.stringify(data.options || []), data.ai_reasoning || '',
+            data.ai_suggested_answer ?? null, data.user_answer ?? null,
+            data.status || 'pending', data.ticket_id ?? null, now, now);
+        return this.getAIQuestion(id)!;
+    }
+
+    getAIQuestion(id: string): AIQuestion | null {
+        const row = this.db.prepare('SELECT * FROM ai_questions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToAIQuestion(row) : null;
+    }
+
+    getAIQuestionsByPlan(planId: string, status?: string): AIQuestion[] {
+        if (status) {
+            const rows = this.db.prepare(
+                'SELECT * FROM ai_questions WHERE plan_id = ? AND status = ? ORDER BY created_at DESC'
+            ).all(planId, status) as Record<string, unknown>[];
+            return rows.map(r => this.rowToAIQuestion(r));
+        }
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_questions WHERE plan_id = ? ORDER BY created_at DESC'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAIQuestion(r));
+    }
+
+    getAIQuestionsByComponent(componentId: string): AIQuestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_questions WHERE component_id = ? ORDER BY created_at DESC'
+        ).all(componentId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAIQuestion(r));
+    }
+
+    getAIQuestionsByPage(pageId: string): AIQuestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_questions WHERE page_id = ? ORDER BY created_at DESC'
+        ).all(pageId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAIQuestion(r));
+    }
+
+    answerAIQuestion(id: string, answer: string): AIQuestion | null {
+        this.db.prepare(
+            'UPDATE ai_questions SET user_answer = ?, status = ?, updated_at = ? WHERE id = ?'
+        ).run(answer, 'answered', new Date().toISOString(), id);
+        return this.getAIQuestion(id);
+    }
+
+    autofillAIQuestion(id: string, answer: string): AIQuestion | null {
+        this.db.prepare(
+            'UPDATE ai_questions SET ai_suggested_answer = ?, user_answer = ?, status = ?, updated_at = ? WHERE id = ?'
+        ).run(answer, answer, 'autofilled', new Date().toISOString(), id);
+        return this.getAIQuestion(id);
+    }
+
+    dismissAIQuestion(id: string): AIQuestion | null {
+        this.db.prepare(
+            'UPDATE ai_questions SET status = ?, updated_at = ? WHERE id = ?'
+        ).run('dismissed', new Date().toISOString(), id);
+        return this.getAIQuestion(id);
+    }
+
+    updateAIQuestion(id: string, updates: Partial<AIQuestion>): AIQuestion | null {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.question !== undefined) { fields.push('question = ?'); values.push(updates.question); }
+        if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
+        if (updates.question_type !== undefined) { fields.push('question_type = ?'); values.push(updates.question_type); }
+        if (updates.options !== undefined) { fields.push('options = ?'); values.push(JSON.stringify(updates.options)); }
+        if (updates.ai_reasoning !== undefined) { fields.push('ai_reasoning = ?'); values.push(updates.ai_reasoning); }
+        if (updates.ai_suggested_answer !== undefined) { fields.push('ai_suggested_answer = ?'); values.push(updates.ai_suggested_answer); }
+        if (updates.user_answer !== undefined) { fields.push('user_answer = ?'); values.push(updates.user_answer); }
+        if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+        if (updates.ticket_id !== undefined) { fields.push('ticket_id = ?'); values.push(updates.ticket_id); }
+        if (fields.length === 0) return this.getAIQuestion(id);
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(id);
+        this.db.prepare(`UPDATE ai_questions SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.getAIQuestion(id);
+    }
+
+    deleteAIQuestion(id: string): void {
+        this.db.prepare('DELETE FROM ai_questions WHERE id = ?').run(id);
+    }
+
+    countAIQuestionsByPlan(planId: string): { pending: number; answered: number; autofilled: number; total: number } {
+        const rows = this.db.prepare(
+            'SELECT status, COUNT(*) as cnt FROM ai_questions WHERE plan_id = ? GROUP BY status'
+        ).all(planId) as Array<{ status: string; cnt: number }>;
+        let pending = 0, answered = 0, autofilled = 0, dismissed = 0;
+        for (const r of rows) {
+            if (r.status === 'pending') pending = r.cnt;
+            else if (r.status === 'answered') answered = r.cnt;
+            else if (r.status === 'autofilled') autofilled = r.cnt;
+            else if (r.status === 'dismissed') dismissed = r.cnt;
+        }
+        return { pending, answered, autofilled, total: pending + answered + autofilled + dismissed };
+    }
+
+    private rowToAIQuestion(row: Record<string, unknown>): AIQuestion {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            component_id: (row.component_id as string) ?? null,
+            page_id: (row.page_id as string) ?? null,
+            category: row.category as AIQuestion['category'],
+            question: row.question as string,
+            question_type: row.question_type as AIQuestion['question_type'],
+            options: JSON.parse((row.options as string) || '[]'),
+            ai_reasoning: row.ai_reasoning as string,
+            ai_suggested_answer: (row.ai_suggested_answer as string) ?? null,
+            user_answer: (row.user_answer as string) ?? null,
+            status: row.status as AIQuestion['status'],
+            ticket_id: (row.ticket_id as string) ?? null,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== PLAN VERSIONS ====================
+
+    createPlanVersion(data: Omit<PlanVersion, 'id' | 'created_at'>): PlanVersion {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO plan_versions (id, plan_id, version_number, label, snapshot, change_summary, created_by, branch_type, is_active, change_count, merge_diff, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(id, data.plan_id, data.version_number, data.label || '',
+            data.snapshot || '{}', data.change_summary || '', data.created_by || 'user',
+            data.branch_type || 'live', data.is_active ? 1 : 0, data.change_count ?? 0,
+            data.merge_diff ?? null);
+        return this.getPlanVersion(id)!;
+    }
+
+    getPlanVersion(id: string): PlanVersion | null {
+        const row = this.db.prepare('SELECT * FROM plan_versions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToPlanVersion(row) : null;
+    }
+
+    getPlanVersionsByPlan(planId: string): PlanVersion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM plan_versions WHERE plan_id = ? ORDER BY version_number DESC'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToPlanVersion(r));
+    }
+
+    getLatestPlanVersion(planId: string): PlanVersion | null {
+        const row = this.db.prepare(
+            'SELECT * FROM plan_versions WHERE plan_id = ? ORDER BY version_number DESC LIMIT 1'
+        ).get(planId) as Record<string, unknown> | undefined;
+        return row ? this.rowToPlanVersion(row) : null;
+    }
+
+    getNextPlanVersionNumber(planId: string): number {
+        const row = this.db.prepare(
+            'SELECT MAX(version_number) as max_ver FROM plan_versions WHERE plan_id = ?'
+        ).get(planId) as { max_ver: number | null };
+        return (row.max_ver ?? 0) + 1;
+    }
+
+    deletePlanVersion(id: string): void {
+        this.db.prepare('DELETE FROM plan_versions WHERE id = ?').run(id);
+    }
+
+    private rowToPlanVersion(row: Record<string, unknown>): PlanVersion {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            version_number: row.version_number as number,
+            label: row.label as string,
+            snapshot: row.snapshot as string,
+            change_summary: row.change_summary as string,
+            created_by: row.created_by as string,
+            branch_type: (row.branch_type as string || 'live') as 'live' | 'features',
+            is_active: !!(row.is_active as number),
+            change_count: (row.change_count as number) ?? 0,
+            merge_diff: (row.merge_diff as string) ?? null,
+            created_at: row.created_at as string,
+        };
+    }
+
+    getActiveBranchVersion(planId: string, branchType: 'live' | 'features'): PlanVersion | null {
+        const row = this.db.prepare(
+            'SELECT * FROM plan_versions WHERE plan_id = ? AND branch_type = ? AND is_active = 1 ORDER BY version_number DESC LIMIT 1'
+        ).get(planId, branchType) as Record<string, unknown> | undefined;
+        return row ? this.rowToPlanVersion(row) : null;
+    }
+
+    getPlanVersionsByBranch(planId: string, branchType: 'live' | 'features'): PlanVersion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM plan_versions WHERE plan_id = ? AND branch_type = ? ORDER BY version_number DESC'
+        ).all(planId, branchType) as Record<string, unknown>[];
+        return rows.map(r => this.rowToPlanVersion(r));
+    }
+
+    setActiveBranchVersion(planId: string, branchType: 'live' | 'features', versionId: string): void {
+        this.db.exec('BEGIN');
+        try {
+            this.db.prepare(
+                'UPDATE plan_versions SET is_active = 0 WHERE plan_id = ? AND branch_type = ?'
+            ).run(planId, branchType);
+            this.db.prepare(
+                'UPDATE plan_versions SET is_active = 1 WHERE id = ?'
+            ).run(versionId);
+            this.db.exec('COMMIT');
+        } catch (err) {
+            this.db.exec('ROLLBACK');
+            throw err;
+        }
+    }
+
+    updatePlanVersionChangeCount(versionId: string, changeCount: number): void {
+        this.db.prepare(
+            'UPDATE plan_versions SET change_count = ? WHERE id = ?'
+        ).run(changeCount, versionId);
+    }
+
+    // ==================== DESIGN CHANGE LOG ====================
+
+    addDesignChangeLog(data: Omit<DesignChangeLog, 'id' | 'created_at'>): DesignChangeLog {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO design_change_log (id, plan_id, branch_type, change_type, entity_type, entity_id, description, session_change_number, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(id, data.plan_id, data.branch_type, data.change_type, data.entity_type,
+            data.entity_id, data.description || '', data.session_change_number ?? 0);
+        return this.db.prepare('SELECT * FROM design_change_log WHERE id = ?').get(id) as DesignChangeLog;
+    }
+
+    getDesignChangeLog(planId: string, branchType?: 'live' | 'features'): DesignChangeLog[] {
+        if (branchType) {
+            return this.db.prepare(
+                'SELECT * FROM design_change_log WHERE plan_id = ? AND branch_type = ? ORDER BY created_at DESC'
+            ).all(planId, branchType) as DesignChangeLog[];
+        }
+        return this.db.prepare(
+            'SELECT * FROM design_change_log WHERE plan_id = ? ORDER BY created_at DESC'
+        ).all(planId) as DesignChangeLog[];
+    }
+
+    getDesignChangeCount(planId: string, branchType: 'live' | 'features'): number {
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM design_change_log WHERE plan_id = ? AND branch_type = ?'
+        ).get(planId, branchType) as { cnt: number };
+        return row.cnt;
+    }
+
+    clearDesignChangeLog(planId: string, branchType: 'live' | 'features'): void {
+        this.db.prepare(
+            'DELETE FROM design_change_log WHERE plan_id = ? AND branch_type = ?'
+        ).run(planId, branchType);
+    }
+
+    // ==================== DATA MODELS ====================
+
+    createDataModel(data: Omit<DataModel, 'id' | 'created_at' | 'updated_at'>): DataModel {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO data_models (id, plan_id, name, description, fields, relationships, bound_components, ai_backend_suggestion, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id, data.name, data.description || '',
+            JSON.stringify(data.fields || []), JSON.stringify(data.relationships || []),
+            JSON.stringify(data.bound_components || []),
+            data.ai_backend_suggestion ?? null, now, now);
+        return this.getDataModel(id)!;
+    }
+
+    getDataModel(id: string): DataModel | null {
+        const row = this.db.prepare('SELECT * FROM data_models WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToDataModel(row) : null;
+    }
+
+    getDataModelsByPlan(planId: string): DataModel[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM data_models WHERE plan_id = ? ORDER BY name ASC'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToDataModel(r));
+    }
+
+    getDataModelByName(planId: string, name: string): DataModel | null {
+        const row = this.db.prepare(
+            'SELECT * FROM data_models WHERE plan_id = ? AND name = ?'
+        ).get(planId, name) as Record<string, unknown> | undefined;
+        return row ? this.rowToDataModel(row) : null;
+    }
+
+    updateDataModel(id: string, updates: Partial<DataModel>): DataModel | null {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
+        if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+        if (updates.fields !== undefined) { fields.push('fields = ?'); values.push(JSON.stringify(updates.fields)); }
+        if (updates.relationships !== undefined) { fields.push('relationships = ?'); values.push(JSON.stringify(updates.relationships)); }
+        if (updates.bound_components !== undefined) { fields.push('bound_components = ?'); values.push(JSON.stringify(updates.bound_components)); }
+        if (updates.ai_backend_suggestion !== undefined) { fields.push('ai_backend_suggestion = ?'); values.push(updates.ai_backend_suggestion); }
+        if (fields.length === 0) return this.getDataModel(id);
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(id);
+        this.db.prepare(`UPDATE data_models SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.getDataModel(id);
+    }
+
+    deleteDataModel(id: string): void {
+        this.db.prepare('DELETE FROM data_models WHERE id = ?').run(id);
+    }
+
+    deleteDataModelsByPlan(planId: string): void {
+        this.db.prepare('DELETE FROM data_models WHERE plan_id = ?').run(planId);
+    }
+
+    private rowToDataModel(row: Record<string, unknown>): DataModel {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            name: row.name as string,
+            description: row.description as string,
+            fields: JSON.parse((row.fields as string) || '[]'),
+            relationships: JSON.parse((row.relationships as string) || '[]'),
+            bound_components: JSON.parse((row.bound_components as string) || '[]'),
+            ai_backend_suggestion: (row.ai_backend_suggestion as string) ?? null,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== AI CHAT SESSIONS ====================
+
+    createAiChatSession(data: { plan_id?: string | null; ticket_id?: string | null; session_name?: string }): AIChatSession {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO ai_chat_sessions (id, plan_id, ticket_id, session_name, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
+        `).run(id, data.plan_id ?? null, data.ticket_id ?? null, data.session_name || 'Chat Session', now, now);
+        return this.getAiChatSession(id)!;
+    }
+
+    getAiChatSession(id: string): AIChatSession | null {
+        const row = this.db.prepare('SELECT * FROM ai_chat_sessions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToAiChatSession(row) : null;
+    }
+
+    getAiChatSessions(planId?: string | null, status?: string): AIChatSession[] {
+        let query = 'SELECT * FROM ai_chat_sessions';
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+        if (planId) { conditions.push('plan_id = ?'); params.push(planId); }
+        if (status) { conditions.push('status = ?'); params.push(status); }
+        if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+        query += ' ORDER BY updated_at DESC';
+        const rows = this.db.prepare(query).all(...params) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAiChatSession(r));
+    }
+
+    getLatestActiveAiChatSession(planId?: string | null): AIChatSession | null {
+        let query = "SELECT * FROM ai_chat_sessions WHERE status = 'active'";
+        const params: unknown[] = [];
+        if (planId) { query += ' AND plan_id = ?'; params.push(planId); }
+        query += ' ORDER BY updated_at DESC LIMIT 1';
+        const row = this.db.prepare(query).get(...params) as Record<string, unknown> | undefined;
+        return row ? this.rowToAiChatSession(row) : null;
+    }
+
+    updateAiChatSession(id: string, updates: Partial<AIChatSession>): void {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.session_name !== undefined) { fields.push('session_name = ?'); values.push(updates.session_name); }
+        if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+        if (updates.ticket_id !== undefined) { fields.push('ticket_id = ?'); values.push(updates.ticket_id); }
+        if (fields.length === 0) return;
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(id);
+        this.db.prepare(`UPDATE ai_chat_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    private rowToAiChatSession(row: Record<string, unknown>): AIChatSession {
+        return {
+            id: row.id as string,
+            plan_id: (row.plan_id as string) ?? null,
+            ticket_id: (row.ticket_id as string) ?? null,
+            session_name: row.session_name as string,
+            status: row.status as 'active' | 'archived',
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== AI CHAT MESSAGES ====================
+
+    addAiChatMessage(data: {
+        session_id: string;
+        role: string;
+        content: string;
+        context_page?: string;
+        context_element_id?: string | null;
+        context_element_type?: string | null;
+        ai_level?: string;
+        ticket_reply_id?: string | null;
+    }): AIChatMessage {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO ai_chat_messages (id, session_id, ticket_reply_id, role, content, context_page, context_element_id, context_element_type, ai_level, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(
+            id, data.session_id, data.ticket_reply_id ?? null,
+            data.role, data.content,
+            data.context_page || '', data.context_element_id ?? null,
+            data.context_element_type ?? null, data.ai_level || 'suggestions'
+        );
+        // Update session timestamp
+        this.db.prepare("UPDATE ai_chat_sessions SET updated_at = datetime('now') WHERE id = ?").run(data.session_id);
+        return this.db.prepare('SELECT * FROM ai_chat_messages WHERE id = ?').get(id) as AIChatMessage;
+    }
+
+    getAiChatMessages(sessionId: string, limit: number = 100): AIChatMessage[] {
+        return this.db.prepare(
+            'SELECT * FROM ai_chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?'
+        ).all(sessionId, limit) as AIChatMessage[];
     }
 
     close(): void {

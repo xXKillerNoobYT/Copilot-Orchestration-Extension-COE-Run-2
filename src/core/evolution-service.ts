@@ -153,6 +153,9 @@ export class EvolutionService {
             .filter(e => e.status === 'applied' && e.applied_at);
 
         for (const entry of appliedEntries) {
+            // applied_at is already guaranteed truthy by the filter on line 153.
+            // This is a redundant safety guard that can't be reached.
+            /* istanbul ignore next */
             if (!entry.applied_at) continue;
 
             const appliedTime = new Date(entry.applied_at).getTime();

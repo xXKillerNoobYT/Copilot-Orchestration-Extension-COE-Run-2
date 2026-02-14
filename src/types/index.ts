@@ -25,6 +25,7 @@ export enum TaskPriority {
 export enum TicketStatus {
     Open = 'open',
     InReview = 'in_review',
+    OnHold = 'on_hold',
     Resolved = 'resolved',
     Escalated = 'escalated',
     Blocked = 'blocked'
@@ -44,7 +45,9 @@ export enum AgentType {
     Research = 'research',
     Clarity = 'clarity',
     Boss = 'boss',
-    Custom = 'custom'
+    Custom = 'custom',
+    UITesting = 'ui_testing',
+    Observation = 'observation'
 }
 
 export enum AgentStatus {
@@ -75,6 +78,38 @@ export enum ConversationRole {
     System = 'system'
 }
 
+// --- Intelligent Task Management (Agent Enhancement) ---
+
+/** A structured checklist item with verification method */
+export interface TaskChecklistItem {
+    item: string;
+    required: boolean;
+    verification?: string;  // How to verify this item is done
+}
+
+/** Structured passing criteria for task verification */
+export interface PassingCriterion {
+    criterion: string;
+    verification_method: 'unit_test' | 'integration_test' | 'manual_check' | 'code_review' | 'build_check';
+    must_pass: boolean;
+}
+
+/** Intelligent task requirements — designed to let a small LLM outperform larger models */
+export interface TaskRequirements {
+    /** Non-negotiable items that MUST be done for this task to be considered complete */
+    minimum_requirements: TaskChecklistItem[];
+    /** Structured pass/fail criteria with verification methods */
+    passing_criteria: PassingCriterion[];
+    /** Common pitfalls and things to check for this type of task */
+    gotchas: string[];
+    /** Explicit completion signals — what "done" looks like */
+    definition_of_done: string;
+    /** Step-by-step implementation guide */
+    implementation_steps: string[];
+    /** Things to verify before marking complete */
+    pre_completion_checklist: string[];
+}
+
 // --- Core Data Models ---
 
 export interface Task {
@@ -91,6 +126,8 @@ export interface Task {
     estimated_minutes: number;
     files_modified: string[];
     context_bundle: string | null; // JSON string of context for coding AI
+    /** Intelligent task requirements — structured checklists, passing criteria, gotchas */
+    task_requirements: string | null; // JSON string of TaskRequirements
     created_at: string;
     updated_at: string;
 }
@@ -105,6 +142,9 @@ export interface Ticket {
     creator: string;
     assignee: string | null;
     task_id: string | null;
+    parent_ticket_id: string | null;
+    auto_created: boolean;
+    operation_type: string;
     created_at: string;
     updated_at: string;
 }
@@ -385,6 +425,8 @@ export interface DesignComponent {
     // Content
     content: string;
     props: Record<string, unknown>;
+    // Requirements (user stories for this component)
+    requirements: DesignRequirement[];
     // Responsive overrides
     responsive: {
         tablet?: Partial<ComponentStyles & { x: number; y: number; width: number; height: number; visible: boolean }>;
@@ -420,15 +462,24 @@ export interface ComponentStyles {
     cursor?: string;
 }
 
+export interface DesignRequirement {
+    role: string;
+    action: string;
+    benefit: string;
+}
+
 export interface DesignPage {
     id: string;
     plan_id: string;
+    parent_page_id: string | null;
+    depth: number;
     name: string;
     route: string;
     sort_order: number;
     width: number;
     height: number;
     background: string;
+    requirements: DesignRequirement[];
     created_at: string;
     updated_at: string;
 }
@@ -468,6 +519,8 @@ export interface CodingSession {
     plan_id: string | null;
     name: string;
     status: 'active' | 'completed' | 'paused';
+    version_snapshot_id: string | null;
+    branch_type: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -1175,4 +1228,172 @@ export interface ResolutionSuggestion {
     confidence: number;
     reason: string;
     preview: string;
+}
+
+// --- Enhanced Planning Types (Phase 3) ---
+
+export type ImplementationStatus = 'not_started' | 'planned' | 'in_progress' | 'implemented' | 'verified' | 'has_issues';
+export type IssueSeverity = 'bug' | 'improvement' | 'question';
+export type IssueStatus = 'open' | 'resolved' | 'wontfix';
+export type PlanMode = 'frontend' | 'backend' | 'fullstack';
+export type SuggestionType = 'layout' | 'missing_component' | 'ux_issue' | 'implementation_blocker' | 'plan_update' | 'architecture' | 'review_request' | 'general';
+export type SuggestionActionType = 'add_component' | 'modify_component' | 'create_ticket' | 'update_task' | 'add_task' | 'modify_plan' | null;
+export type SuggestionStatus = 'pending' | 'accepted' | 'dismissed' | 'applied';
+export type QuestionCategory = 'frontend' | 'backend' | 'ux' | 'architecture' | 'data' | 'general';
+export type QuestionType = 'yes_no' | 'choice' | 'text' | 'confirm';
+export type QuestionStatus = 'pending' | 'answered' | 'autofilled' | 'dismissed';
+export type ReadinessLevel = 'not_ready' | 'needs_work' | 'almost_ready' | 'ready';
+
+export interface ElementStatusData {
+    implementation_status: ImplementationStatus;
+    has_questions: boolean;
+    checklist: Array<{ item: string; done: boolean; mode: PlanMode }>;
+}
+
+export interface ElementIssue {
+    id: string;
+    element_id: string;
+    element_type: 'component' | 'page';
+    plan_id: string;
+    description: string;
+    status: IssueStatus;
+    severity: IssueSeverity;
+    mode: PlanMode;
+    reported_by: string;
+    created_at: string;
+    resolved_at: string | null;
+}
+
+export interface AISuggestion {
+    id: string;
+    plan_id: string;
+    component_id: string | null;
+    page_id: string | null;
+    type: SuggestionType;
+    title: string;
+    description: string;
+    reasoning: string;
+    action_type: SuggestionActionType;
+    action_payload: Record<string, unknown>;
+    priority: TicketPriority;
+    status: SuggestionStatus;
+    ticket_id: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AIQuestion {
+    id: string;
+    plan_id: string;
+    component_id: string | null;
+    page_id: string | null;
+    category: QuestionCategory;
+    question: string;
+    question_type: QuestionType;
+    options: string[];
+    ai_reasoning: string;
+    ai_suggested_answer: string | null;
+    user_answer: string | null;
+    status: QuestionStatus;
+    ticket_id: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface PlanVersion {
+    id: string;
+    plan_id: string;
+    version_number: number;
+    label: string;
+    snapshot: string;
+    change_summary: string;
+    created_by: string;
+    branch_type: 'live' | 'features';
+    is_active: boolean;
+    change_count: number;
+    merge_diff: string | null;
+    created_at: string;
+}
+
+export interface DesignChangeLog {
+    id: string;
+    plan_id: string;
+    branch_type: 'live' | 'features';
+    change_type: 'add' | 'update' | 'delete';
+    entity_type: 'page' | 'component' | 'token' | 'data_model';
+    entity_id: string;
+    description: string;
+    session_change_number: number;
+    created_at: string;
+}
+
+export interface PlanReviewResult {
+    readiness_score: number;
+    readiness_level: ReadinessLevel;
+    summary: string;
+    missing_details: Array<{ area: string; description: string; priority: string }>;
+    questions_generated: number;
+    suggestions_generated: number;
+    tickets_created: number;
+}
+
+export interface DataModelField {
+    name: string;
+    type: string;
+    required: boolean;
+    visible: boolean;
+    description: string;
+    default_value?: unknown;
+    validation?: string;
+    display_hint?: string;
+    enum_values?: string[];
+    ref_model_id?: string;
+    formula?: string;
+}
+
+export interface DataModelRelationship {
+    target_model_id: string;
+    type: 'one_to_one' | 'one_to_many' | 'many_to_many';
+    field_name: string;
+    description: string;
+    cascade_delete: boolean;
+    display_as: 'inline' | 'link' | 'expandable' | 'count_badge';
+}
+
+export interface DataModel {
+    id: string;
+    plan_id: string;
+    name: string;
+    description: string;
+    fields: DataModelField[];
+    relationships: DataModelRelationship[];
+    bound_components: string[];
+    ai_backend_suggestion: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// --- AI Chat Types (v3.0) ---
+
+export interface AIChatSession {
+    id: string;
+    plan_id: string | null;
+    ticket_id: string | null;
+    session_name: string;
+    status: 'active' | 'archived';
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AIChatMessage {
+    id: string;
+    session_id: string;
+    ticket_reply_id: string | null;
+    role: 'user' | 'ai' | 'system';
+    content: string;
+    context_page: string;
+    context_element_id: string | null;
+    context_element_type: string | null;
+    ai_level: string;
+    created_at: string;
 }

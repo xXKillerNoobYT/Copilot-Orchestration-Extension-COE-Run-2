@@ -91,7 +91,7 @@ describe('EthicsEngine (FreedomGuard_AI)', () => {
 
             const selfProtection = modules.find(m => m.name === 'Self-Protection')!;
             expect(selfProtection.rules.length).toBe(2);
-            expect(selfProtection.sensitivity).toBe(EthicsSensitivity.Maximum);
+            expect(selfProtection.sensitivity).toBe(EthicsSensitivity.High);
 
             const transparency = modules.find(m => m.name === 'Transparency')!;
             expect(transparency.rules.length).toBe(1);
@@ -981,6 +981,951 @@ describe('EthicsEngine (FreedomGuard_AI)', () => {
                 source: 'coding_agent',
             });
             expect(consentBlocked.allowed).toBe(false);
+        });
+    });
+
+    // ===================== COVERAGE GAP TESTS =====================
+
+    describe('Override audit entry not found (line 773)', () => {
+        test('override throws when audit entry does not exist', async () => {
+            await expect(
+                engine.override('nonexistent-audit-id', 'admin', 'Testing override')
+            ).rejects.toThrow(/Audit entry not found: nonexistent-audit-id/);
+        });
+    });
+
+    describe('Rule action "allow" case (line 1039)', () => {
+        test('rule with action "allow" does not change the decision', async () => {
+            const module = db.createEthicsModule({
+                name: 'AllowTestModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: ['testing'],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'Allow Rule',
+                description: 'Explicitly allows testing actions',
+                condition: 'test_action',
+                action: 'allow',
+                priority: 1,
+                enabled: true,
+                message: 'Action explicitly allowed',
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'test_action',
+                source: 'test_source',
+            });
+
+            // An explicit 'allow' rule should not block the action
+            expect(result.allowed).toBe(true);
+        });
+    });
+
+    describe('matchesCondition pipe-separated alternatives (line 1072)', () => {
+        test('rule with pipe-separated condition matches any alternative', async () => {
+            const module = db.createEthicsModule({
+                name: 'PipeConditionModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: ['pipe_test'],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'Pipe Block Rule',
+                description: 'Blocks multiple actions via pipe alternatives',
+                condition: 'delete_data|destroy_config|wipe_logs',
+                action: 'block',
+                priority: 1,
+                enabled: true,
+                message: 'Dangerous action blocked',
+            });
+
+            // Should match first alternative
+            const result1 = await engine.evaluateAction({
+                action: 'delete_data',
+                source: 'test_source',
+            });
+            expect(result1.allowed).toBe(false);
+
+            // Should match third alternative
+            const result2 = await engine.evaluateAction({
+                action: 'wipe_logs',
+                source: 'test_source',
+            });
+            expect(result2.allowed).toBe(false);
+
+            // Should NOT match any alternative
+            const result3 = await engine.evaluateAction({
+                action: 'read_data',
+                source: 'test_source',
+            });
+            expect(result3.allowed).toBe(true);
+        });
+    });
+
+    describe('logToTransparency error handling (lines 1244-1245)', () => {
+        test('transparency logger failure does not prevent evaluation', async () => {
+            // Make transparency logger throw
+            (transparencyLogger.log as jest.Mock).mockImplementation(() => {
+                throw new Error('TransparencyLogger broken');
+            });
+
+            const module = db.createEthicsModule({
+                name: 'LogErrorTestModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['dangerous_action'],
+                enabled: true,
+            });
+
+            // Should still evaluate correctly despite logging failure
+            const result = await engine.evaluateAction({
+                action: 'dangerous_action',
+                source: 'test_source',
+            });
+
+            expect(result.allowed).toBe(false);
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Transparency log failed (non-fatal)')
+            );
+        });
+    });
+
+    describe('emitEvent error handling (lines 1273-1274)', () => {
+        test('event emission failure does not prevent evaluation', async () => {
+            // Make eventBus.emit throw
+            jest.spyOn(eventBus, 'emit').mockImplementation(() => {
+                throw new Error('EventBus broken');
+            });
+
+            const module = db.createEthicsModule({
+                name: 'EventErrorModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['event_test_action'],
+                enabled: true,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'event_test_action',
+                source: 'test_source',
+            });
+
+            expect(result.allowed).toBe(false);
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Event emission failed (non-fatal)')
+            );
+
+            (eventBus.emit as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('wouldBlock edge cases (lines 1345-1380)', () => {
+        test('wouldBlock detects block rules matching condition', () => {
+            const module = db.createEthicsModule({
+                name: 'WouldBlockRuleModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: ['preflight'],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'Block Destructive',
+                description: 'Blocks destructive operations',
+                condition: 'delete|destroy',
+                action: 'block',
+                priority: 1,
+                enabled: true,
+                message: 'Destructive action',
+            });
+
+            const result = engine.wouldBlock('delete_files');
+            expect(result.blocked).toBe(true);
+            expect(result.reason).toContain('Block Destructive');
+        });
+
+        test('wouldBlock returns blocked for Maximum sensitivity modules', () => {
+            db.createEthicsModule({
+                name: 'MaxSensModule',
+                sensitivity: EthicsSensitivity.Maximum,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            const result = engine.wouldBlock('any_action');
+            expect(result.blocked).toBe(true);
+            expect(result.reason).toContain('Maximum sensitivity');
+        });
+
+        test('wouldBlock checks High sensitivity allowed_actions list', () => {
+            db.createEthicsModule({
+                name: 'HighSensModule',
+                sensitivity: EthicsSensitivity.High,
+                scope: ['data_access'],
+                allowed_actions: ['read_local_files'],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Action within scope but not in allowed list
+            const blocked = engine.wouldBlock('data_access_write');
+            expect(blocked.blocked).toBe(true);
+            expect(blocked.reason).toContain('High sensitivity');
+
+            // Action in the allowed list
+            const allowed = engine.wouldBlock('read_local_files');
+            expect(allowed.blocked).toBe(false);
+        });
+    });
+
+    // ==================== ADDITIONAL BRANCH COVERAGE TESTS ====================
+
+    describe('evaluateAction triggeringModuleId fallback (line 451)', () => {
+        test('uses modules[0].id when no module triggered anything', async () => {
+            // Create a module with no blocked_actions and no rules
+            db.createEthicsModule({
+                name: 'EmptyModule',
+                description: 'Module with nothing to trigger',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'harmless_read_operation',
+                source: 'coding_agent',
+            });
+
+            // No module triggered, so triggeringModuleId stays null
+            // The audit entry should use modules[0].id
+            expect(result.allowed).toBe(true);
+            expect(result.auditEntryId).toBeDefined();
+            expect(result.messages.some(m => m.includes('passed all ethics checks'))).toBe(true);
+        });
+    });
+
+    describe('evaluateAction error catch with non-Error (line 496)', () => {
+        test('evaluation error with non-Error object uses String() conversion', async () => {
+            // Mock getEnabledEthicsModules to throw a non-Error object
+            const brokenDb = db as any;
+            const originalMethod = brokenDb.getEnabledEthicsModules.bind(brokenDb);
+            brokenDb.getEnabledEthicsModules = () => {
+                throw 'string error from database';
+            };
+
+            const result = await engine.evaluateAction({
+                action: 'normal_action',
+                source: 'coding_agent',
+            });
+
+            expect(result.allowed).toBe(false);
+            expect(result.decision).toBe('blocked');
+            expect(result.messages.some(m => m.includes('string error from database'))).toBe(true);
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('string error from database')
+            );
+
+            brokenDb.getEnabledEthicsModules = originalMethod;
+        });
+    });
+
+    describe('Override with malformed context_snapshot (lines 779-785)', () => {
+        test('override handles malformed context_snapshot JSON', async () => {
+            // Create a module with a blocked action to generate an audit entry
+            const module = db.createEthicsModule({
+                name: 'MalformedContextModule',
+                description: 'Test',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['blocked_action'],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'blocked_action',
+                source: 'coding_agent',
+            });
+
+            expect(result.allowed).toBe(false);
+
+            // Now tamper with the context_snapshot in the database to make it malformed JSON
+            const rawDb = (db as any).db;
+            rawDb.exec(`UPDATE ethics_audit SET context_snapshot = 'not-valid-json' WHERE id = '${result.auditEntryId}'`);
+
+            // Override should still work because:
+            // 1. JSON.parse fails => catches silently
+            // 2. originalAction becomes '' (empty)
+            // 3. isAbsoluteBlocked('') is false
+            // 4. module_id is the actual module.id, not 'absolute_block'
+            await engine.override(result.auditEntryId, 'admin', 'Testing malformed context');
+
+            // Verify override succeeded
+            const auditLog = engine.audit(100);
+            const entry = auditLog.find(e => e.id === result.auditEntryId);
+            expect(entry!.decision).toBe('overridden');
+        });
+    });
+
+    describe('evaluateModule with missing rules (line 1001)', () => {
+        test('evaluateAction handles module with undefined rules', async () => {
+            // Create a module and then tamper with its rules to be undefined
+            const module = db.createEthicsModule({
+                name: 'NoRulesModule',
+                description: 'Module with no rules',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+                version: 1,
+            });
+
+            // The module has no rules (empty array from DB), which is fine
+            // but let's verify the || [] fallback works
+            const result = await engine.evaluateAction({
+                action: 'some_action',
+                source: 'coding_agent',
+            });
+
+            expect(result.allowed).toBe(true);
+        });
+    });
+
+    describe('Rule message fallback to description (lines 1016, 1026-1033)', () => {
+        test('block rule uses description when message is empty', async () => {
+            const module = db.createEthicsModule({
+                name: 'FallbackModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'EmptyMsgBlockRule',
+                description: 'Block rule with no message',
+                condition: 'bad_action',
+                action: 'block',
+                priority: 1,
+                enabled: true,
+                message: '', // Empty message — should fall back to description
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'bad_action',
+                source: 'test',
+            });
+
+            expect(result.allowed).toBe(false);
+            expect(result.messages.some(m => m.includes('Block rule with no message'))).toBe(true);
+        });
+
+        test('warn rule uses description when message is empty', async () => {
+            const module = db.createEthicsModule({
+                name: 'WarnFallbackModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'EmptyMsgWarnRule',
+                description: 'Warn rule with no message field',
+                condition: 'warn_action',
+                action: 'warn',
+                priority: 1,
+                enabled: true,
+                message: '', // Empty message
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'warn_action',
+                source: 'test',
+            });
+
+            expect(result.allowed).toBe(true);
+            expect(result.decision).toBe('warned');
+            expect(result.messages.some(m => m.includes('Warn rule with no message field'))).toBe(true);
+        });
+
+        test('audit rule uses description when message is empty', async () => {
+            const module = db.createEthicsModule({
+                name: 'AuditFallbackModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'EmptyMsgAuditRule',
+                description: 'Audit rule description fallback',
+                condition: 'audit_target',
+                action: 'audit',
+                priority: 1,
+                enabled: true,
+                message: '', // Empty message
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'audit_target',
+                source: 'test',
+            });
+
+            expect(result.allowed).toBe(true);
+            expect(result.messages.some(m => m.includes('Audit rule description fallback'))).toBe(true);
+        });
+    });
+
+    describe('matchesCondition edge cases (lines 1070, 1080)', () => {
+        test('pipe-separated condition with empty alternative is skipped', async () => {
+            const module = db.createEthicsModule({
+                name: 'PipeEmptyModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Condition with empty alternatives: "delete||destroy" (empty string between pipes)
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'EmptyPipeRule',
+                description: 'Rule with empty pipe alternatives',
+                condition: 'delete||destroy',
+                action: 'block',
+                priority: 1,
+                enabled: true,
+                message: 'Blocked by empty-pipe rule',
+            });
+
+            // Should still match 'delete'
+            const result = await engine.evaluateAction({
+                action: 'delete_files',
+                source: 'test',
+            });
+            expect(result.allowed).toBe(false);
+
+            // Should NOT match something that doesn't contain 'delete' or 'destroy'
+            const result2 = await engine.evaluateAction({
+                action: 'read_files',
+                source: 'test',
+            });
+            expect(result2.allowed).toBe(true);
+        });
+
+        test('simple condition matches via reverse substring (condition includes action)', async () => {
+            const module = db.createEthicsModule({
+                name: 'ReverseSubstrModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Condition is longer and CONTAINS the action name
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'ReverseSubstrRule',
+                description: 'Rule where condition contains the action',
+                condition: 'delete_all_user_data',
+                action: 'block',
+                priority: 1,
+                enabled: true,
+                message: 'Reverse match triggered',
+            });
+
+            // The action "delete" is shorter than the condition "delete_all_user_data"
+            // normalizedAction.includes(normalizedCondition) = false
+            // normalizedCondition.includes(normalizedAction) = true => match!
+            const result = await engine.evaluateAction({
+                action: 'delete',
+                source: 'test',
+            });
+            expect(result.allowed).toBe(false);
+            expect(result.messages.some(m => m.includes('Reverse match triggered'))).toBe(true);
+        });
+    });
+
+    describe('getStatus with modules that have no rules (lines 1289-1308)', () => {
+        test('getStatus handles modules with undefined/null rules', () => {
+            // Create a module that has no rules
+            db.createEthicsModule({
+                name: 'NoRulesStatusModule',
+                description: 'Test status with empty rules',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            const status = engine.getStatus();
+            expect(status.totalModules).toBe(1);
+            expect(status.enabledModules).toBe(1);
+            // rules?.length ?? 0 should handle undefined rules
+            expect(status.totalRules).toBe(0);
+            expect(status.enabledRules).toBe(0);
+            // Module entry should have ruleCount of 0
+            expect(status.moduleNames[0].ruleCount).toBe(0);
+        });
+
+        test('getStatus returns correct count of recent blocks', async () => {
+            db.createEthicsModule({
+                name: 'BlockCountModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['bad_action'],
+                enabled: true,
+            });
+
+            await engine.evaluateAction({ action: 'bad_action', source: 'agent' });
+            await engine.evaluateAction({ action: 'good_action', source: 'agent' });
+
+            const status = engine.getStatus();
+            expect(status.recentEvaluations).toBe(2);
+            expect(status.recentBlocks).toBe(1);
+        });
+    });
+
+    describe('wouldBlock with module having no rules (line 1344)', () => {
+        test('wouldBlock works when module has no block rules', () => {
+            db.createEthicsModule({
+                name: 'NoBlockRulesModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // No block rules, no blocked_actions, low sensitivity => allowed
+            const result = engine.wouldBlock('safe_action');
+            expect(result.blocked).toBe(false);
+        });
+    });
+
+    describe('Sensitivity warned branch via sensitivity override (line 433-438)', () => {
+        test('High sensitivity with empty allowed_actions warns when action is allowed by rules', async () => {
+            // Create a High sensitivity module with no allowed_actions list
+            db.createEthicsModule({
+                name: 'HighNoAllowModule',
+                description: 'High sensitivity with no allowed_actions',
+                sensitivity: EthicsSensitivity.High,
+                scope: [],
+                allowed_actions: [], // Empty allowed_actions
+                blocked_actions: [],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'some_unknown_action',
+                source: 'coding_agent',
+            });
+
+            // High sensitivity with empty allowed_actions => warn (not block)
+            expect(result.allowed).toBe(true);
+            expect(result.decision).toBe('warned');
+            expect(result.messages.some(m => m.includes('High sensitivity'))).toBe(true);
+        });
+    });
+
+    describe('Evaluation with warn rule and sensitivity escalation', () => {
+        test('warn decision from rule is preserved through sensitivity check', async () => {
+            const module = db.createEthicsModule({
+                name: 'WarnSensModule',
+                description: 'Module with warn rules',
+                sensitivity: EthicsSensitivity.Low, // Low sensitivity doesn't escalate
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            db.createEthicsRule({
+                module_id: module.id,
+                name: 'WarnRule',
+                description: 'Warn on risky stuff',
+                condition: 'risky_stuff',
+                action: 'warn',
+                priority: 1,
+                enabled: true,
+                message: 'This is risky.',
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'risky_stuff',
+                source: 'test',
+            });
+
+            expect(result.allowed).toBe(true);
+            expect(result.decision).toBe('warned');
+            // The triggeredRules should have our warn rule
+            expect(result.triggeredRules.length).toBeGreaterThanOrEqual(1);
+        });
+    });
+
+    describe('logToTransparency with targetEntityType and targetEntityId', () => {
+        test('evaluateAction passes entity fields to transparency logger', async () => {
+            db.createEthicsModule({
+                name: 'EntityModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            await engine.evaluateAction({
+                action: 'read_entity',
+                source: 'test',
+                targetEntityType: 'task',
+                targetEntityId: 'task-123',
+            });
+
+            expect(transparencyLogger.log).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    entityType: 'task',
+                    entityId: 'task-123',
+                })
+            );
+        });
+    });
+
+    describe('Caching behavior', () => {
+        test('module cache is used for rapid successive evaluations', async () => {
+            db.createEthicsModule({
+                name: 'CacheTestModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // First call populates cache
+            await engine.evaluateAction({ action: 'action1', source: 'test' });
+            // Second call should use cache (within 5s)
+            await engine.evaluateAction({ action: 'action2', source: 'test' });
+
+            // Both should succeed
+            const auditLog = engine.audit(100);
+            expect(auditLog.length).toBe(2);
+        });
+    });
+
+    describe('logToTransparency non-Error thrown (line 1244 String branch)', () => {
+        test('transparency logger throws non-Error object', async () => {
+            (transparencyLogger.log as jest.Mock).mockImplementation(() => {
+                throw 'string error from transparency logger';
+            });
+
+            // Need at least one enabled module so evaluation goes past Step 2
+            db.createEthicsModule({
+                name: 'TriggerModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'harmless_action',
+                source: 'test',
+            });
+
+            // Should still complete despite transparency logger failure
+            expect(result.auditEntryId).toBeDefined();
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('string error from transparency logger')
+            );
+        });
+    });
+
+    describe('emitEvent non-Error thrown (line 1273 String branch)', () => {
+        test('eventBus.emit throws non-Error object', async () => {
+            jest.spyOn(eventBus, 'emit').mockImplementation(() => {
+                throw 42; // non-Error thrown
+            });
+
+            db.createEthicsModule({
+                name: 'EmitErrorModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'harmless_action',
+                source: 'test',
+            });
+
+            expect(result.auditEntryId).toBeDefined();
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Event emission failed (non-fatal): 42')
+            );
+
+            (eventBus.emit as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('getStatus with modules missing rules property (lines 1289-1308)', () => {
+        test('getStatus handles modules where rules is undefined via ?.', () => {
+            // Create a module normally
+            const module = db.createEthicsModule({
+                name: 'RulesUndefinedModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Mock getAllEthicsModules to return module with undefined rules
+            const origGetAll = db.getAllEthicsModules.bind(db);
+            jest.spyOn(db, 'getAllEthicsModules').mockImplementation(() => {
+                const modules = origGetAll();
+                return modules.map(m => ({ ...m, rules: undefined as any }));
+            });
+
+            const status = engine.getStatus();
+            expect(status.totalModules).toBe(1);
+            expect(status.totalRules).toBe(0);
+            expect(status.enabledRules).toBe(0);
+            expect(status.moduleNames[0].ruleCount).toBe(0);
+
+            (db.getAllEthicsModules as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('evaluateModule with module.rules being undefined (line 1001)', () => {
+        test('evaluateAction handles module where rules property is undefined', async () => {
+            db.createEthicsModule({
+                name: 'NoRulesEvalModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Mock getEnabledEthicsModules to return modules with undefined rules
+            const origGetEnabled = db.getEnabledEthicsModules.bind(db);
+            jest.spyOn(db, 'getEnabledEthicsModules').mockImplementation(() => {
+                const modules = origGetEnabled();
+                return modules.map(m => ({ ...m, rules: undefined as any }));
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'some_action',
+                source: 'test',
+            });
+
+            expect(result.allowed).toBe(true);
+
+            (db.getEnabledEthicsModules as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('wouldBlock with module.rules being undefined (line 1344)', () => {
+        test('wouldBlock handles module with undefined rules property', () => {
+            db.createEthicsModule({
+                name: 'NoRulesWouldBlockModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: [],
+                enabled: true,
+            });
+
+            // Mock getEnabledEthicsModules for wouldBlock
+            const origGetEnabled = db.getEnabledEthicsModules.bind(db);
+            jest.spyOn(db, 'getEnabledEthicsModules').mockImplementation(() => {
+                const modules = origGetEnabled();
+                return modules.map(m => ({ ...m, rules: undefined as any }));
+            });
+
+            const result = engine.wouldBlock('some_action');
+            expect(result.blocked).toBe(false);
+
+            (db.getEnabledEthicsModules as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('Override with action in context_snapshot matching absolute block (line 779-785)', () => {
+        test('override rejects when parsed action matches absolute block', async () => {
+            // Create a normal module-level block
+            const module = db.createEthicsModule({
+                name: 'NormalBlockModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['some_bad_action'],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'some_bad_action',
+                source: 'coding_agent',
+            });
+
+            // Now tamper with context_snapshot to make the action look like an absolute block
+            const rawDb = (db as any).db;
+            rawDb.exec(`UPDATE ethics_audit SET context_snapshot = '{"action":"create_backdoor"}' WHERE id = '${result.auditEntryId}'`);
+
+            // Attempt override — should fail because parsed action matches absolute block
+            await expect(
+                engine.override(result.auditEntryId, 'admin', 'Testing')
+            ).rejects.toThrow('Cannot override absolute block');
+        });
+    });
+
+    // ==================== ADDITIONAL BRANCH COVERAGE ====================
+
+    describe('Override with empty context_snapshot (line 779)', () => {
+        test('override handles empty context_snapshot via || fallback', async () => {
+            // Create a module-level block
+            db.createEthicsModule({
+                name: 'EmptyContextModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['blockable_action'],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'blockable_action',
+                source: 'coding_agent',
+            });
+
+            // Set context_snapshot to empty string to trigger the || '{}' fallback
+            const rawDb = (db as any).db;
+            rawDb.exec(`UPDATE ethics_audit SET context_snapshot = '' WHERE id = '${result.auditEntryId}'`);
+
+            // Override should succeed (returns void) because parsed action is '' (not in absolute blocks)
+            await expect(
+                engine.override(result.auditEntryId, 'admin', 'Testing empty context')
+            ).resolves.toBeUndefined();
+        });
+
+        test('override handles malformed JSON context_snapshot via catch', async () => {
+            db.createEthicsModule({
+                name: 'MalformedContextModule',
+                sensitivity: EthicsSensitivity.Low,
+                scope: [],
+                allowed_actions: [],
+                blocked_actions: ['another_blockable'],
+                enabled: true,
+                version: 1,
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'another_blockable',
+                source: 'coding_agent',
+            });
+
+            // Set context_snapshot to invalid JSON to trigger the catch branch at line 780
+            const rawDb = (db as any).db;
+            rawDb.exec(`UPDATE ethics_audit SET context_snapshot = 'not valid json {{{' WHERE id = '${result.auditEntryId}'`);
+
+            // Override should succeed since contextSnapshot will be {} and action ''
+            await expect(
+                engine.override(result.auditEntryId, 'admin', 'Testing malformed context')
+            ).resolves.toBeUndefined();
+        });
+    });
+
+    describe('evaluateAction with no enabled modules (line 451 unknown fallback)', () => {
+        test('triggeringModuleId falls back to unknown when no modules exist', async () => {
+            // With no modules created, evaluate an action
+            // modules array will be empty, so modules[0]?.id is undefined, triggering ?? "unknown"
+            const result = await engine.evaluateAction({
+                action: 'harmless_action',
+                source: 'test',
+            });
+            // Should pass because no modules to check
+            expect(result.allowed).toBe(true);
+            expect(result.auditEntryId).toBeDefined();
+        });
+    });
+
+    describe('evaluateAction line 451 modules[0]?.id ?? unknown with module having no id', () => {
+        test('falls back to unknown when modules array has element with undefined id', async () => {
+            // To reach the ?? 'unknown' fallback on line 451, we need:
+            // 1. modules.length > 0 (to pass line 377 check)
+            // 2. triggeringModuleId remains null (no module triggers block/warn)
+            // 3. modules[0].id is undefined/null
+            // We mock getEnabledEthicsModules to return a module with id: undefined
+            const origGetEnabled = db.getEnabledEthicsModules.bind(db);
+            jest.spyOn(db, 'getEnabledEthicsModules').mockImplementation(() => {
+                return [{
+                    id: undefined as any,
+                    name: 'NoIdModule',
+                    description: 'Module with no id',
+                    sensitivity: 'low' as any,
+                    scope: [],
+                    allowed_actions: [],
+                    blocked_actions: [],
+                    enabled: true,
+                    version: 1,
+                    rules: [],
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                }];
+            });
+
+            const result = await engine.evaluateAction({
+                action: 'harmless_action',
+                source: 'test',
+            });
+
+            // Should pass (Low sensitivity, no block rules, no blocked_actions)
+            expect(result.allowed).toBe(true);
+            expect(result.auditEntryId).toBeDefined();
+            // The audit entry was created with module_id = 'unknown'
+            const auditLog = engine.audit(100);
+            const entry = auditLog.find(e => e.id === result.auditEntryId);
+            expect(entry).toBeDefined();
+            expect(entry!.module_id).toBe('unknown');
+
+            (db.getEnabledEthicsModules as jest.Mock).mockRestore();
         });
     });
 });

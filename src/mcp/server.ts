@@ -64,6 +64,29 @@ export class MCPServer {
             const conversations = this.database.getConversationsByTask(task.id);
             const depTasks = task.dependencies.map(id => this.database.getTask(id)).filter(Boolean);
 
+            // v3.0: Build enhanced context with design + data model references
+            const planConfig = plan ? JSON.parse(plan.config_json || '{}') : {};
+            let designContext: Record<string, unknown> | null = null;
+            if (task.plan_id) {
+                const pages = this.database.getDesignPagesByPlan(task.plan_id);
+                const dataModels = this.database.getDataModelsByPlan(task.plan_id);
+                const answeredQuestions = this.database.getAIQuestionsByPlan(task.plan_id, 'answered');
+                const autofilledQuestions = this.database.getAIQuestionsByPlan(task.plan_id, 'autofilled');
+                designContext = {
+                    pages: pages.map(p => ({ name: p.name, route: p.route })),
+                    data_models: dataModels.map(m => ({ name: m.name, fields: m.fields.length, relationships: m.relationships.length })),
+                    answered_questions: [...answeredQuestions, ...autofilledQuestions].map(q => ({ question: q.question, answer: q.user_answer })),
+                    tech_stack: planConfig.techStack || null,
+                    features: planConfig.features || [],
+                };
+            }
+
+            // Parse intelligent task requirements if available
+            let taskReqs: Record<string, unknown> | null = null;
+            if (task.task_requirements) {
+                try { taskReqs = JSON.parse(task.task_requirements); } catch { /* ignore */ }
+            }
+
             return {
                 success: true,
                 data: {
@@ -73,9 +96,11 @@ export class MCPServer {
                     priority: task.priority,
                     acceptance_criteria: task.acceptance_criteria,
                     estimated_minutes: task.estimated_minutes,
+                    // Intelligent task requirements — structured guidance for coding agents
+                    task_requirements: taskReqs,
                     context_bundle: {
                         plan_name: plan?.name || null,
-                        plan_config: plan ? JSON.parse(plan.config_json) : null,
+                        plan_config: planConfig,
                         completed_dependencies: depTasks.map(t => ({
                             title: t!.title,
                             files_modified: t!.files_modified,
@@ -84,6 +109,7 @@ export class MCPServer {
                             role: c.role,
                             content: c.content,
                         })),
+                        design_context: designContext,
                     },
                     related_files: task.files_modified,
                 },
@@ -361,7 +387,7 @@ export class MCPServer {
                 return;
             }
 
-            const url = new URL(req.url || '/', `http://localhost:${this.port}`);
+            const url = new URL(req.url!, `http://localhost:${this.port}`);
 
             // GET /tools — list available tools
             if (req.method === 'GET' && url.pathname === '/tools') {
@@ -428,12 +454,15 @@ export class MCPServer {
 
                         // Handle MCP protocol methods
                         if (rpc.method === 'initialize') {
+                            const clientVersion = rpc.params?.protocolVersion || '2024-11-05';
+                            // Support both legacy and streamable HTTP protocol versions
+                            const serverVersion = clientVersion === '2025-03-26' ? '2025-03-26' : '2024-11-05';
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({
                                 jsonrpc: '2.0',
                                 id: rpc.id,
                                 result: {
-                                    protocolVersion: '2024-11-05',
+                                    protocolVersion: serverVersion,
                                     capabilities: {
                                         tools: { listChanged: false },
                                     },
@@ -443,6 +472,13 @@ export class MCPServer {
                                     },
                                 },
                             }));
+                            return;
+                        }
+
+                        // Handle notifications (no response needed)
+                        if (rpc.method === 'notifications/initialized') {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end();
                             return;
                         }
 
@@ -526,7 +562,10 @@ export class MCPServer {
 
                 // Keep connection alive with periodic pings
                 const pingInterval = setInterval(() => {
-                    try { res.write(': ping\n\n'); } catch { clearInterval(pingInterval); }
+                    try { res.write(': ping\n\n'); } catch {
+                        /* istanbul ignore next -- race: SSE connection drops mid-ping */
+                        clearInterval(pingInterval);
+                    }
                 }, 30000);
 
                 req.on('close', () => {

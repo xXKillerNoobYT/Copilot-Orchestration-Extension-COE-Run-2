@@ -64,7 +64,37 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
       ],
       "files_to_create": ["src/new-file.ts"],
       "files_to_modify": ["src/existing-file.ts"],
-      "testing_instructions": "Run 'npm test -- --testPathPattern=example' and verify all tests pass"
+      "testing_instructions": "Run 'npm test -- --testPathPattern=example' and verify all tests pass",
+      "task_requirements": {
+        "minimum_requirements": [
+          {"item": "Function handleExample exists in src/example.ts", "required": true, "verification": "grep for 'function handleExample' in file"},
+          {"item": "Function accepts string input and returns Result type", "required": true, "verification": "Check function signature"}
+        ],
+        "passing_criteria": [
+          {"criterion": "Unit tests pass without errors", "verification_method": "unit_test", "must_pass": true},
+          {"criterion": "No TypeScript compilation errors", "verification_method": "build_check", "must_pass": true},
+          {"criterion": "Function handles edge cases (empty string, null)", "verification_method": "unit_test", "must_pass": false}
+        ],
+        "gotchas": [
+          "Don't forget to export the function",
+          "Handle the case where input is undefined"
+        ],
+        "definition_of_done": "handleExample function exists, is exported, has types, passes all tests",
+        "implementation_steps": [
+          "Open src/example.ts",
+          "Add import for Result type",
+          "Create and export handleExample function",
+          "Write unit test in tests/example.test.ts",
+          "Run npx tsc --noEmit to verify types",
+          "Run npm test to verify tests pass"
+        ],
+        "pre_completion_checklist": [
+          "Function is exported (not just defined)",
+          "TypeScript types are correct (no 'any')",
+          "All unit tests pass",
+          "No lint warnings in modified files"
+        ]
+      }
     }
   ]
 }
@@ -79,6 +109,13 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
 - **files_to_create**: Array of file paths that will be created from scratch.
 - **files_to_modify**: Array of existing file paths that will be edited.
 - **testing_instructions**: Exact shell command or manual steps to verify the task is done.
+- **task_requirements**: Structured intelligence for the coding agent:
+  - **minimum_requirements**: Array of {item, required, verification}. Non-negotiable items that MUST be done.
+  - **passing_criteria**: Array of {criterion, verification_method, must_pass}. Methods: unit_test, integration_test, manual_check, code_review, build_check.
+  - **gotchas**: Array of strings. Common pitfalls specific to this task type.
+  - **definition_of_done**: One sentence — what "done" looks like.
+  - **implementation_steps**: Same as step_by_step_implementation but more detailed with verification after each step.
+  - **pre_completion_checklist**: Array of things to verify BEFORE marking the task complete.
 
 ## Example (3-task plan)
 {
@@ -171,6 +208,7 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
                             plan_id: plan.id,
                             dependencies: [],
                             context_bundle: taskDef.context || null,
+                            task_requirements: taskDef.task_requirements ? JSON.stringify(taskDef.task_requirements) : null,
                         });
                         taskIdMap[taskDef.title] = task.id;
                     }

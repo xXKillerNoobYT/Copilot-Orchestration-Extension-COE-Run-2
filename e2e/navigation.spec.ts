@@ -23,8 +23,8 @@ test.describe('COE Webapp — App Shell & Navigation', () => {
         await expect(app.statusText).toContainText('MCP');
     });
 
-    test('renders all 10 navigation tabs', async () => {
-        await expect(app.navTabs).toHaveCount(10);
+    test('renders all 9 navigation tabs', async () => {
+        await expect(app.navTabs).toHaveCount(9);
     });
 
     test('dashboard tab is active by default', async () => {

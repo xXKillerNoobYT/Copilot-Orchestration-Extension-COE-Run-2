@@ -477,7 +477,64 @@ describe('GitHubSyncService', () => {
     });
 
     // =====================================================================
-    // Test 5: Edge cases and configuration
+    // Test 5: Empty issues response (lines 32-33)
+    // =====================================================================
+
+    describe('importIssues empty first page', () => {
+        test('returns zero counts when first page is empty (lines 32-33)', async () => {
+            // Return an empty array on the first page — this triggers hasMore = false immediately
+            globalThis.fetch = jest.fn()
+                .mockResolvedValueOnce(jsonResponse([]));
+
+            const result = await syncService.importIssues();
+
+            expect(result.imported).toBe(0);
+            expect(result.updated).toBe(0);
+            expect(result.errors).toBe(0);
+        });
+    });
+
+    // =====================================================================
+    // Test 5b: Individual issue import error (lines 62-63)
+    // =====================================================================
+
+    describe('importIssues individual issue error', () => {
+        test('counts error when a single issue fails to import (lines 62-63)', async () => {
+            // Create a scenario where upsertGitHubIssue throws for one specific issue.
+            // The easiest way is to provide an issue with data that causes the DB to fail.
+            // We can spy on upsertGitHubIssue and have it throw for a specific call.
+            const issues: GitHubIssueData[] = [
+                makeGitHubIssue({ id: 11001, number: 110, title: 'Good issue' }),
+                makeGitHubIssue({ id: 11002, number: 111, title: 'Bad issue' }),
+                makeGitHubIssue({ id: 11003, number: 112, title: 'Another good issue' }),
+            ];
+
+            globalThis.fetch = jest.fn()
+                .mockResolvedValueOnce(jsonResponse(issues));
+
+            // Mock upsertGitHubIssue to throw on the second call
+            const originalUpsert = db.upsertGitHubIssue.bind(db);
+            let callNum = 0;
+            jest.spyOn(db, 'upsertGitHubIssue').mockImplementation((data: any) => {
+                callNum++;
+                if (callNum === 2) {
+                    throw new Error('Database constraint violation');
+                }
+                return originalUpsert(data);
+            });
+
+            const result = await syncService.importIssues();
+
+            expect(result.imported).toBe(2);
+            expect(result.errors).toBe(1);
+            expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Failed to import issue #111')
+            );
+        });
+    });
+
+    // =====================================================================
+    // Test 6: Edge cases and configuration
     // =====================================================================
 
     describe('edge cases', () => {

@@ -19,7 +19,6 @@ export class AppPage {
     readonly ticketsTab: Locator;
     readonly planningTab: Locator;
     readonly agentsTab: Locator;
-    readonly designerTab: Locator;
     readonly codingTab: Locator;
     readonly githubTab: Locator;
     readonly settingsTab: Locator;
@@ -31,7 +30,6 @@ export class AppPage {
     readonly ticketsPage: Locator;
     readonly planningPage: Locator;
     readonly agentsPage: Locator;
-    readonly designerPage: Locator;
     readonly codingPage: Locator;
     readonly githubPage: Locator;
     readonly settingsPage: Locator;
@@ -52,7 +50,6 @@ export class AppPage {
         this.ticketsTab = page.locator('.tab[data-page="tickets"]');
         this.planningTab = page.locator('.tab[data-page="planning"]');
         this.agentsTab = page.locator('.tab[data-page="agents"]');
-        this.designerTab = page.locator('.tab[data-page="designer"]');
         this.codingTab = page.locator('.tab[data-page="coding"]');
         this.githubTab = page.locator('.tab[data-page="github"]');
         this.settingsTab = page.locator('.tab[data-page="settings"]');
@@ -64,7 +61,6 @@ export class AppPage {
         this.ticketsPage = page.locator('#page-tickets');
         this.planningPage = page.locator('#page-planning');
         this.agentsPage = page.locator('#page-agents');
-        this.designerPage = page.locator('#page-designer');
         this.codingPage = page.locator('#page-coding');
         this.githubPage = page.locator('#page-github');
         this.settingsPage = page.locator('#page-settings');
@@ -138,7 +134,6 @@ export type TabName =
     | 'tickets'
     | 'planning'
     | 'agents'
-    | 'designer'
     | 'coding'
     | 'github'
     | 'settings'
@@ -146,5 +141,5 @@ export type TabName =
 
 export const ALL_TABS: TabName[] = [
     'dashboard', 'tasks', 'tickets', 'planning', 'agents',
-    'designer', 'coding', 'github', 'settings', 'system',
+    'coding', 'github', 'settings', 'system',
 ];

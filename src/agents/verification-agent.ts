@@ -34,6 +34,16 @@ Compare completed work against acceptance criteria and real test results. Produc
 - Each follow-up task MUST specify which criterion was not met and what needs to change
 - For UI tasks: check colors, spacing, fonts, and responsive breakpoints against the design system
 
+## Intelligent Task Requirements
+If the task includes a "task_requirements" object, use it for enhanced verification:
+1. **minimum_requirements**: Check each required item. ALL must be satisfied for "passed".
+2. **passing_criteria**: Verify each criterion using its specified verification_method. Items with must_pass=true are mandatory.
+3. **gotchas**: Review each gotcha and verify the implementation avoids these pitfalls.
+4. **definition_of_done**: Use as the ultimate pass/fail benchmark.
+5. **pre_completion_checklist**: Verify every checklist item has been addressed.
+
+Add these to your criteria_results output — each requirement becomes a criterion to check.
+
 ## Required JSON Output Format
 Respond with ONLY valid JSON. No markdown, no explanation, no text before or after.
 
@@ -126,7 +136,44 @@ Respond with ONLY valid JSON. No markdown, no explanation, no text before or aft
             testResultAppendix = '\n\n--- TEST RUNNER OUTPUT ---\nNo test runner configured. Set test_results to null in your response.\n--- END TEST OUTPUT ---';
         }
 
-        const enhancedMessage = message + testResultAppendix;
+        // Inject intelligent task requirements into the verification prompt
+        let requirementsAppendix = '';
+        if (context.task?.task_requirements) {
+            try {
+                const reqs = JSON.parse(context.task.task_requirements);
+                requirementsAppendix = '\n\n--- INTELLIGENT TASK REQUIREMENTS ---\n';
+                if (reqs.minimum_requirements?.length) {
+                    requirementsAppendix += 'MINIMUM REQUIREMENTS (ALL must be met):\n';
+                    for (const req of reqs.minimum_requirements) {
+                        requirementsAppendix += `  - [${req.required ? 'REQUIRED' : 'OPTIONAL'}] ${req.item}${req.verification ? ' (verify: ' + req.verification + ')' : ''}\n`;
+                    }
+                }
+                if (reqs.passing_criteria?.length) {
+                    requirementsAppendix += '\nPASSING CRITERIA:\n';
+                    for (const pc of reqs.passing_criteria) {
+                        requirementsAppendix += `  - [${pc.must_pass ? 'MUST PASS' : 'OPTIONAL'}] ${pc.criterion} (method: ${pc.verification_method})\n`;
+                    }
+                }
+                if (reqs.gotchas?.length) {
+                    requirementsAppendix += '\nGOTCHAS TO CHECK:\n';
+                    for (const g of reqs.gotchas) {
+                        requirementsAppendix += `  - ${g}\n`;
+                    }
+                }
+                if (reqs.definition_of_done) {
+                    requirementsAppendix += `\nDEFINITION OF DONE: ${reqs.definition_of_done}\n`;
+                }
+                if (reqs.pre_completion_checklist?.length) {
+                    requirementsAppendix += '\nPRE-COMPLETION CHECKLIST:\n';
+                    for (const item of reqs.pre_completion_checklist) {
+                        requirementsAppendix += `  - ${item}\n`;
+                    }
+                }
+                requirementsAppendix += '--- END REQUIREMENTS ---';
+            } catch { /* ignore parse errors */ }
+        }
+
+        const enhancedMessage = message + testResultAppendix + requirementsAppendix;
         return super.processMessage(enhancedMessage, context);
     }
 

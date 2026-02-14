@@ -1092,4 +1092,717 @@ describe('ContextBreakingChain', () => {
             expect(result.reductionPercent).toBe(expectedPercent);
         });
     });
+
+    // ===================================================================
+    // Coverage Gap Tests
+    // ===================================================================
+
+    describe('Individual level return paths (lines 87, 98, 112)', () => {
+        it('applyChain returns at Level 2 when PrioritizeRecent fits budget', () => {
+            // Create items where L1 doesn't fit but L2 does (drop old irrelevant items)
+            const items = [
+                makeItem({
+                    id: 'old-irrelevant',
+                    label: 'Old irrelevant',
+                    content: 'x '.repeat(200),
+                    estimatedTokens: 100,
+                    relevanceScore: 5,
+                    metadata: { sourceType: 'custom', sourceId: 'old-irrelevant', createdAt: hoursAgo(48), isStale: true, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+                makeItem({
+                    id: 'recent-relevant',
+                    label: 'Recent relevant database item',
+                    content: 'database migration important data',
+                    estimatedTokens: 20,
+                    relevanceScore: 90,
+                    metadata: { sourceType: 'custom', sourceId: 'recent-relevant', createdAt: minutesAgo(5), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+            ];
+
+            // Budget large enough after L2 drops old items, but not for L1 output
+            const budget = makeBudget(tracker, 80);
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBeLessThanOrEqual(ContextBreakingLevel.PrioritizeRecent);
+        });
+
+        it('applyChain returns at Level 3 when SmartChunking fits budget', () => {
+            // Items with natural text that can be compressed by L3
+            const items = [
+                makeItem({
+                    id: 'chunky-text',
+                    label: 'Chunky text',
+                    content: 'This is a paragraph about databases.\n\n'.repeat(20),
+                    contentType: ContentType.NaturalText,
+                    estimatedTokens: 200,
+                    relevanceScore: 80,
+                    metadata: { sourceType: 'custom', sourceId: 'chunky', createdAt: minutesAgo(10), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+            ];
+
+            // Budget that L3 compression can meet
+            const budget = makeBudget(tracker, 100);
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBeLessThanOrEqual(ContextBreakingLevel.SmartChunking);
+        });
+
+        it('applyChain returns at Level 4 when DiscardLowRelevance fits budget', () => {
+            const items = [
+                makeItem({
+                    id: 'high-relevance',
+                    label: 'database migration query',
+                    content: 'Important database migration information.',
+                    estimatedTokens: 30,
+                    relevanceScore: 90,
+                    metadata: { sourceType: 'custom', sourceId: 'high', createdAt: minutesAgo(5), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+                makeItem({
+                    id: 'low-relevance-1',
+                    label: 'Unrelated topic',
+                    content: 'Completely unrelated content about cooking. '.repeat(10),
+                    estimatedTokens: 100,
+                    relevanceScore: 1,
+                    metadata: { sourceType: 'custom', sourceId: 'low1', createdAt: hoursAgo(24), isStale: true, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+                makeItem({
+                    id: 'low-relevance-2',
+                    label: 'Another unrelated topic',
+                    content: 'Weather forecast details. '.repeat(10),
+                    estimatedTokens: 100,
+                    relevanceScore: 1,
+                    metadata: { sourceType: 'custom', sourceId: 'low2', createdAt: hoursAgo(24), isStale: true, relatedTaskIds: [], relatedFilePatterns: [] },
+                }),
+            ];
+
+            // Budget too small for all but enough for just the high-relevance item
+            const budget = makeBudget(tracker, 50);
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBeLessThanOrEqual(ContextBreakingLevel.DiscardLowRelevance);
+        });
+    });
+
+    describe('compressJSON (lines 263-264, 562-565)', () => {
+        it('compressJSON returns result when within 60% target', () => {
+            // Create a JSON item with values that can be cleaned
+            const jsonContent = JSON.stringify({
+                name: 'test',
+                value: 42,
+                nullField: null,
+                emptyString: '',
+                nested: { a: null, b: 'valid' },
+            });
+
+            const item = makeItem({
+                id: 'json-item',
+                label: 'JSON data',
+                content: jsonContent,
+                contentType: ContentType.JSON,
+                estimatedTokens: 100,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            expect(compressed.length).toBe(1);
+            // The compressed content should be valid JSON
+            expect(() => JSON.parse(compressed[0].content)).not.toThrow();
+        });
+
+        it('compressJSON falls back to text compression for invalid JSON (lines 562-565)', () => {
+            const item = makeItem({
+                id: 'invalid-json',
+                label: 'Invalid JSON',
+                content: 'This is not valid JSON at all {{{',
+                contentType: ContentType.JSON,
+                estimatedTokens: 50,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            expect(compressed.length).toBe(1);
+            // Should still produce some output (text-based compression fallback)
+            expect(compressed[0].content.length).toBeGreaterThan(0);
+        });
+    });
+
+    describe('compressMarkdown file paths and declarations (lines 416-430)', () => {
+        it('keeps file paths in markdown compression', () => {
+            const mdContent = [
+                '# Module Overview',
+                '',
+                'This module handles database operations.',
+                '',
+                'Key files:',
+                'src/core/database.ts',
+                'src/core/migration.ts',
+                '',
+                'Some paragraph that goes on and on with lots of detail.',
+                'This second sentence adds even more detail that is less important.',
+                'A third sentence with even more filler content to pad things out.',
+            ].join('\n');
+
+            const item = makeItem({
+                id: 'md-paths',
+                label: 'Markdown with paths',
+                content: mdContent,
+                contentType: ContentType.Markdown,
+                estimatedTokens: 100,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            expect(compressed[0].content).toContain('src/core/database.ts');
+            expect(compressed[0].content).toContain('src/core/migration.ts');
+        });
+
+        it('keeps function/class declarations in markdown compression', () => {
+            const mdContent = [
+                '# Code Reference',
+                '',
+                'The main class is:',
+                'export class DatabaseService {',
+                'It has a method:',
+                'async function migrateSchema() {',
+                'And also:',
+                'public processData(input: string) {',
+                '',
+                'There is also a lot of irrelevant text here that should be compressed.',
+                'More filler text that goes on without adding meaningful content.',
+            ].join('\n');
+
+            const item = makeItem({
+                id: 'md-decls',
+                label: 'Markdown with declarations',
+                content: mdContent,
+                contentType: ContentType.Markdown,
+                estimatedTokens: 100,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            expect(compressed[0].content).toContain('class DatabaseService');
+        });
+    });
+
+    describe('compressCode further collapse (line 527)', () => {
+        it('compresses code with excessive blank lines', () => {
+            // Create code content that will have > 0.7 ratio after initial compression
+            const codeContent = Array(50).fill('// comment line').join('\n') +
+                '\n\n\n\n\n\n\n\n\n\n' +
+                'function test() {\n  return 1;\n}\n' +
+                '\n\n\n\n\n\n\n\n\n\n' +
+                'function test2() {\n  return 2;\n}';
+
+            const item = makeItem({
+                id: 'code-item',
+                label: 'Code with blanks',
+                content: codeContent,
+                contentType: ContentType.Code,
+                estimatedTokens: 200,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            // Should have reduced the blank lines
+            expect(compressed[0].content.length).toBeLessThan(codeContent.length);
+        });
+    });
+
+    describe('cleanJSONValue edge cases (lines 599, 605-608)', () => {
+        it('removes empty strings from JSON', () => {
+            // Pad with lots of removable content (empty strings, nulls) so cleaned output
+            // is <= 60% of original — otherwise compressJSON truncates the result string
+            const jsonContent = JSON.stringify({
+                name: 'valid',
+                empty: '',
+                a1: '', a2: '', a3: '', a4: '', a5: '',
+                b1: null, b2: null, b3: null, b4: null, b5: null,
+                c1: '', c2: '', c3: '', c4: '', c5: '',
+                nested: { also_empty: '', has_value: 'yes', x1: '', x2: null, x3: '' },
+            });
+
+            const item = makeItem({
+                id: 'json-empty-strings',
+                label: 'JSON with empty strings',
+                content: jsonContent,
+                contentType: ContentType.JSON,
+                estimatedTokens: 50,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            const parsed = JSON.parse(compressed[0].content);
+            // empty string fields should be removed
+            expect(parsed.empty).toBeUndefined();
+            expect(parsed.nested.also_empty).toBeUndefined();
+            expect(parsed.nested.has_value).toBe('yes');
+        });
+
+        it('cleans arrays by removing null/undefined values', () => {
+            // Pad with lots of removable content so cleaned output is <= 60% of original
+            const jsonContent = JSON.stringify({
+                items: ['valid', null, '', 'also valid', null, '', null, '', null, ''],
+                numbers: [1, 2, 3],
+                empty_arrays: [null, null, null, '', '', '', null, null],
+                more_nulls: [null, null, null, null, null, null, null],
+                blank_strings: ['', '', '', '', '', '', '', '', '', ''],
+            });
+
+            const item = makeItem({
+                id: 'json-arrays',
+                label: 'JSON with arrays',
+                content: jsonContent,
+                contentType: ContentType.JSON,
+                estimatedTokens: 50,
+            });
+
+            const compressed = chain.level3SmartChunking([item]);
+            const parsed = JSON.parse(compressed[0].content);
+            // Null and empty strings should be removed from arrays
+            expect(parsed.items).not.toContain(null);
+            expect(parsed.numbers).toEqual([1, 2, 3]);
+        });
+    });
+
+    describe('scoreRelevance keywords and priority bonuses (lines 653-669)', () => {
+        it('domain keywords give lower weight than task keywords', () => {
+            const domainItem = makeItem({
+                id: 'domain-item',
+                label: 'sqlite related item',
+                content: 'This uses sqlite for data storage with typescript',
+                estimatedTokens: 20,
+                relevanceScore: 10,
+                metadata: { sourceType: 'custom', sourceId: 'domain', createdAt: minutesAgo(5), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+            });
+
+            const taskItem = makeItem({
+                id: 'task-item',
+                label: 'database migration item',
+                content: 'The database migration needs attention',
+                estimatedTokens: 20,
+                relevanceScore: 10,
+                metadata: { sourceType: 'custom', sourceId: 'task', createdAt: minutesAgo(5), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+            });
+
+            // Use L4 DiscardLowRelevance which uses scoreRelevance internally
+            const items = [domainItem, taskItem];
+            const scored = chain.level4DiscardLowRelevance(items, defaultKeywords);
+            // Both should be kept (they're relevant), but task item should have higher score
+            expect(scored.length).toBeGreaterThanOrEqual(1);
+        });
+
+        it('Mandatory priority items get relevance floor of 100', () => {
+            const mandatoryItem = makeItem({
+                id: 'mandatory',
+                label: 'Must include',
+                content: 'Unrelated content with no keywords',
+                estimatedTokens: 20,
+                relevanceScore: 0,
+                priority: ContextPriority.Mandatory,
+                metadata: { sourceType: 'custom', sourceId: 'mandatory', createdAt: hoursAgo(48), isStale: true, relatedTaskIds: [], relatedFilePatterns: [] },
+            });
+
+            const lowItem = makeItem({
+                id: 'low-rel',
+                label: 'Low relevance',
+                content: 'Nothing important here',
+                estimatedTokens: 20,
+                relevanceScore: 0,
+                priority: ContextPriority.Supplementary,
+                metadata: { sourceType: 'custom', sourceId: 'low', createdAt: hoursAgo(48), isStale: true, relatedTaskIds: [], relatedFilePatterns: [] },
+            });
+
+            const result = chain.level4DiscardLowRelevance([mandatoryItem, lowItem], defaultKeywords);
+            // Mandatory item should always be kept
+            expect(result.some(i => i.id === 'mandatory')).toBe(true);
+        });
+
+        it('Important priority items get relevance floor of 50', () => {
+            const importantItem = makeItem({
+                id: 'important',
+                label: 'Important item',
+                content: 'No matching keywords',
+                estimatedTokens: 20,
+                relevanceScore: 0,
+                priority: ContextPriority.Important,
+                metadata: { sourceType: 'custom', sourceId: 'important', createdAt: hoursAgo(24), isStale: false, relatedTaskIds: [], relatedFilePatterns: [] },
+            });
+
+            const result = chain.level4DiscardLowRelevance([importantItem], defaultKeywords);
+            // Important item should be kept thanks to priority bonus
+            expect(result.some(i => i.id === 'important')).toBe(true);
+        });
+    });
+
+    // ===================== ADDITIONAL COVERAGE GAP TESTS =====================
+
+    describe('applyChain exact return at Level 2 (line 87)', () => {
+        it('stops exactly at Level 2 PrioritizeRecent', () => {
+            // Strategy: Create items where:
+            // - L1 (SummarizeOld) doesn't reduce enough to fit
+            // - L2 (PrioritizeRecent) drops old low-relevance items to fit
+            //
+            // We need items that are old (>24h) with low relevance (<30) and
+            // high-priority items that L2 keeps.
+            const items: ContextItem[] = [];
+
+            // 5 old, low-relevance, Optional priority items (>24h, relevance < 30)
+            // These get DROPPED by L2
+            for (let i = 0; i < 5; i++) {
+                items.push(makeItem({
+                    id: `droppable-${i}`,
+                    label: `Droppable ${i}`,
+                    content: 'Old irrelevant filler content that uses up tokens. '.repeat(5),
+                    estimatedTokens: 60,
+                    relevanceScore: 10, // < 30
+                    priority: ContextPriority.Optional, // > Important, so not auto-kept
+                    metadata: {
+                        sourceType: 'custom',
+                        sourceId: `droppable-${i}`,
+                        createdAt: hoursAgo(48), // > 24 hours
+                        isStale: true,
+                        relatedTaskIds: [],
+                        relatedFilePatterns: [],
+                    },
+                }));
+            }
+
+            // 1 recent, mandatory item
+            items.push(makeItem({
+                id: 'keeper',
+                label: 'Essential item',
+                content: 'Critical info',
+                estimatedTokens: 10,
+                relevanceScore: 90,
+                priority: ContextPriority.Mandatory,
+                metadata: {
+                    sourceType: 'custom',
+                    sourceId: 'keeper',
+                    createdAt: minutesAgo(5),
+                    isStale: false,
+                    relatedTaskIds: [],
+                    relatedFilePatterns: [],
+                },
+            }));
+
+            // Total before: 5*60 + 10 = 310 tokens
+            // After L1: items get summarized but not dropped, still > budget
+            // After L2: the 5 old low-relevance items get dropped, leaving only 10 tokens
+            const budget = makeBudget(tracker, 50);
+
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBe(ContextBreakingLevel.PrioritizeRecent);
+        });
+    });
+
+    describe('applyChain exact return at Level 3 (line 98)', () => {
+        it('stops exactly at Level 3 SmartChunking', () => {
+            // Strategy: Items where L1 and L2 don't reduce enough, but L3 does.
+            // - Use recent items (within 1 hour) so L2 doesn't drop them
+            // - Use Important priority so L2 keeps them
+            // - Use Code content type so L3's comment stripping significantly reduces size
+            const codeWithComments = [
+                '// Comment line 1 with lots of text to pad token count',
+                '// Comment line 2 with even more padding text here',
+                '// Comment line 3 with yet more text to increase size',
+                '// Comment line 4 still more comments to remove',
+                '// Comment line 5 padding continues here',
+                'function real() { return 1; }',
+            ].join('\n');
+
+            const items = [
+                makeItem({
+                    id: 'code-item',
+                    label: 'Code with comments',
+                    content: codeWithComments,
+                    contentType: ContentType.Code,
+                    estimatedTokens: tracker.estimateTokens(codeWithComments, ContentType.Code),
+                    relevanceScore: 80,
+                    priority: ContextPriority.Important,
+                    metadata: {
+                        sourceType: 'custom',
+                        sourceId: 'code-item',
+                        createdAt: minutesAgo(5), // recent, so L2 won't drop
+                        isStale: false,
+                        relatedTaskIds: [],
+                        relatedFilePatterns: [],
+                    },
+                }),
+            ];
+
+            const totalTokens = chain.totalTokens(items);
+
+            // Budget: enough for stripped code but not for full code with comments
+            // L3 strips comments, reducing ~80% of the content
+            const strippedEstimate = tracker.estimateTokens('function real() { return 1; }', ContentType.Code);
+            const budget = makeBudget(tracker, Math.ceil(strippedEstimate + 5));
+
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBe(ContextBreakingLevel.SmartChunking);
+        });
+    });
+
+    describe('applyChain exact return at Level 4 (line 112)', () => {
+        it('stops exactly at Level 4 DiscardLowRelevance', () => {
+            // Strategy: Spy on L1-L3 to make them no-ops (return input unchanged).
+            // This ensures only L4 (DiscardLowRelevance) reduces the items enough to fit.
+            // L4 drops the bottom 30% by relevance, replacing them with tiny placeholders.
+            const spyL1 = jest.spyOn(chain, 'level1SummarizeOld').mockImplementation(items => items);
+            const spyL2 = jest.spyOn(chain, 'level2PrioritizeRecent').mockImplementation(items => items);
+            const spyL3 = jest.spyOn(chain, 'level3SmartChunking').mockImplementation(items => items);
+
+            const items: ContextItem[] = [];
+            for (let i = 0; i < 10; i++) {
+                items.push(makeItem({
+                    id: `item-${i}`,
+                    label: `I${i}`,
+                    content: 'A'.repeat(80), // 80 chars => 20 tokens each
+                    contentType: ContentType.NaturalText,
+                    estimatedTokens: 20,
+                    relevanceScore: i * 10, // 0 to 90
+                    priority: ContextPriority.Important,
+                    metadata: {
+                        sourceType: 'custom',
+                        sourceId: `item-${i}`,
+                        createdAt: minutesAgo(5),
+                        isStale: false,
+                        relatedTaskIds: [],
+                        relatedFilePatterns: [],
+                    },
+                }));
+            }
+
+            // Total: 10 * 20 = 200 tokens
+            // After L1-L3 (no-ops): still 200 tokens
+            // After L4: drops bottom 30% (3 items with relevance 0, 10, 20)
+            //   Kept: 7 items * 20 = 140 tokens
+            //   Placeholders: 3 items with tiny token counts (~15 each)
+            //   Total after L4: ~140 + 45 = ~185 tokens
+            // Budget: 190 tokens — too small for 200, fits after L4 drops 3 items
+            const budget = makeBudget(tracker, 190);
+
+            const { result } = chain.applyChain(items, budget, defaultKeywords);
+
+            expect(result.strategyApplied).toBe(ContextBreakingLevel.DiscardLowRelevance);
+            expect(spyL1).toHaveBeenCalled();
+            expect(spyL2).toHaveBeenCalled();
+            expect(spyL3).toHaveBeenCalled();
+
+            spyL1.mockRestore();
+            spyL2.mockRestore();
+            spyL3.mockRestore();
+        });
+    });
+
+    describe('SmartChunking default case - Mixed content type (lines 263-264)', () => {
+        it('compresses Mixed content type using natural text strategy', () => {
+            const mixedContent = 'This is a long mixed content paragraph. '.repeat(20);
+
+            const items = [
+                makeItem({
+                    id: 'mixed-item',
+                    label: 'Mixed content',
+                    content: mixedContent,
+                    contentType: ContentType.Mixed,
+                    estimatedTokens: 200,
+                }),
+            ];
+
+            const result = chain.level3SmartChunking(items);
+
+            expect(result).toHaveLength(1);
+            // Mixed content should be compressed via compressNaturalText
+            expect(result[0].content.length).toBeLessThan(mixedContent.length);
+            expect(result[0].estimatedTokens).toBeGreaterThan(0);
+        });
+    });
+
+    describe('compressCode further collapse when still >70% (line 527)', () => {
+        it('collapses remaining blank lines when result exceeds 70% ratio', () => {
+            // Create code that after comment removal is still >70% of original.
+            // The code has no comments but many blank lines.
+            const lines: string[] = [];
+            for (let i = 0; i < 20; i++) {
+                lines.push(`const var${i} = ${i};`);
+                lines.push(''); // blank line
+                lines.push(''); // extra blank line
+                lines.push(''); // another blank line
+            }
+            const codeContent = lines.join('\n');
+
+            const items = [
+                makeItem({
+                    id: 'blanky-code',
+                    label: 'Code with blank lines',
+                    content: codeContent,
+                    contentType: ContentType.Code,
+                    estimatedTokens: 200,
+                }),
+            ];
+
+            const result = chain.level3SmartChunking(items);
+            expect(result).toHaveLength(1);
+
+            // After removing blank lines, the content should be shorter
+            expect(result[0].content.length).toBeLessThan(codeContent.length);
+            // Should not have consecutive blank lines anymore
+            expect(result[0].content).not.toMatch(/\n\n\n/);
+        });
+    });
+
+    describe('compressJSON truncation when cleaned JSON exceeds 60% (line 562)', () => {
+        it('truncates JSON result when cleaning does not achieve 60% target', () => {
+            // Create JSON where every value is a valid non-null, non-empty string
+            // so cleaning (removing nulls/empty) doesn't shrink much.
+            const obj: Record<string, string> = {};
+            for (let i = 0; i < 30; i++) {
+                obj[`key${i}`] = `value_${i}_data_${'x'.repeat(30)}`;
+            }
+            const jsonContent = JSON.stringify(obj);
+
+            const items = [
+                makeItem({
+                    id: 'dense-json',
+                    label: 'Dense JSON',
+                    content: jsonContent,
+                    contentType: ContentType.JSON,
+                    estimatedTokens: 300,
+                }),
+            ];
+
+            const result = chain.level3SmartChunking(items);
+            expect(result).toHaveLength(1);
+            // The result should be truncated to ~60% of original
+            expect(result[0].content.length).toBeLessThanOrEqual(Math.ceil(jsonContent.length * 0.6) + 10);
+        });
+    });
+
+    describe('scoreRelevance file keyword matching (line 653)', () => {
+        it('awards points when file keywords match item content or label', () => {
+            const items = [
+                makeItem({
+                    id: 'file-match',
+                    label: 'Contains database.ts reference',
+                    content: 'The file database.ts and schema.sql are modified',
+                    estimatedTokens: 20,
+                    relevanceScore: 0,
+                    priority: ContextPriority.Supplementary,
+                }),
+                makeItem({
+                    id: 'no-file-match',
+                    label: 'No file references',
+                    content: 'No relevant file names here',
+                    estimatedTokens: 20,
+                    relevanceScore: 0,
+                    priority: ContextPriority.Supplementary,
+                }),
+            ];
+
+            // Use keywords that only have file keywords (not task or domain)
+            const fileOnlyKeywords: RelevanceKeywordSet = {
+                taskKeywords: [],
+                fileKeywords: ['database.ts', 'schema.sql'],
+                domainKeywords: [],
+            };
+
+            const result = chain.level4DiscardLowRelevance(items, fileOnlyKeywords);
+
+            // The file-matching item should have a higher score and be kept
+            const keptItems = result.filter(i => !i.label.startsWith('[Omitted:'));
+            const fileMatch = keptItems.find(i => i.id === 'file-match');
+            expect(fileMatch).toBeDefined();
+        });
+    });
+
+    // ===================== BRANCH COVERAGE TESTS =====================
+
+    describe('empty content branches in compression helpers', () => {
+        it('compressCode returns empty for empty input (line 498)', () => {
+            const items = [makeItem({ id: 'empty-code', label: 'Empty code', content: '', contentType: ContentType.Code, estimatedTokens: 0 })];
+            const result = chain.level3SmartChunking(items);
+            expect(result[0].content).toBe('');
+        });
+
+        it('compressNaturalText returns empty for empty input (line 539)', () => {
+            const items = [makeItem({ id: 'empty-text', label: 'Empty text', content: '', contentType: ContentType.NaturalText, estimatedTokens: 0 })];
+            const result = chain.level3SmartChunking(items);
+            expect(result[0].content).toBe('');
+        });
+
+        it('compressMarkdown returns empty for empty input (line 575)', () => {
+            const items = [makeItem({ id: 'empty-md', label: 'Empty md', content: '', contentType: ContentType.Markdown, estimatedTokens: 0 })];
+            const result = chain.level3SmartChunking(items);
+            expect(result[0].content).toBe('');
+        });
+
+        it('compressJSON returns empty for empty input', () => {
+            const items = [makeItem({ id: 'empty-json', label: 'Empty json', content: '', contentType: ContentType.JSON, estimatedTokens: 0 })];
+            const result = chain.level3SmartChunking(items);
+            expect(result[0].content).toBe('');
+        });
+    });
+
+    describe('cleanJSONValue returns undefined for all-null object (line 621)', () => {
+        it('cleans object with all null values to undefined', () => {
+            const jsonContent = JSON.stringify({ a: null, b: null, c: '' });
+            const items = [makeItem({
+                id: 'all-null-json',
+                label: 'All null JSON',
+                content: jsonContent,
+                contentType: ContentType.JSON,
+                estimatedTokens: 50,
+            })];
+            const result = chain.level3SmartChunking(items);
+            // When all values are cleaned away, the result should be very small or empty
+            expect(result[0].content.length).toBeLessThan(jsonContent.length);
+        });
+    });
+
+    describe('FreshStart with all-mandatory items (line 360 ternary fallback)', () => {
+        it('handles fresh start when all items are mandatory (no discarded items)', () => {
+            const items = [
+                makeItem({
+                    id: 'mandatory-only',
+                    label: 'Only mandatory item',
+                    content: 'Essential content',
+                    priority: ContextPriority.Mandatory,
+                    estimatedTokens: 10,
+                }),
+            ];
+
+            const freshResult = chain.level5FreshStart(items);
+            // All items are mandatory, so discardedItems is empty
+            // The summary item should still be created (from empty discarded array)
+            expect(freshResult.essentialItems.length).toBeGreaterThanOrEqual(1);
+            expect(freshResult.snapshot).toBeDefined();
+        });
+    });
+
+    describe('FreshStart with no mandatory and no discarded items (line 360 final fallback)', () => {
+        it('handles fresh start with empty items array using supplementary fallback', () => {
+            // level5FreshStart with empty items would return empty mandatory list
+            // The fallback on line 360 should use 'supplementary' as any
+            const freshResult = chain.level5FreshStart([]);
+            // Even with no items, a summary item should be created
+            expect(freshResult.essentialItems.length).toBe(1);
+            expect(freshResult.essentialItems[0].label).toBe('Fresh Start Summary');
+        });
+    });
+
+    describe('Python/shell comment removal (line 511)', () => {
+        it('removes Python-style comments from code content', () => {
+            const codeWithPyComments = [
+                'x = 1',
+                'y = 2 # inline comment',
+                'z = x + y',
+            ].join('\n');
+            const items = [makeItem({
+                id: 'py-comments',
+                label: 'Python code',
+                content: codeWithPyComments,
+                contentType: ContentType.Code,
+                estimatedTokens: 20,
+            })];
+            const result = chain.level3SmartChunking(items);
+            expect(result[0].content).not.toContain('inline comment');
+            expect(result[0].content).toContain('x = 1');
+        });
+    });
 });

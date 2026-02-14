@@ -10,6 +10,8 @@ import { ResearchAgent } from './research-agent';
 import { ClarityAgent } from './clarity-agent';
 import { BossAgent } from './boss-agent';
 import { CustomAgentRunner } from './custom-agent';
+import { UITestingAgent } from './ui-testing-agent';
+import { ObservationAgent } from './observation-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
@@ -19,7 +21,7 @@ import {
     ConversationRole, Task, TaskStatus
 } from '../types';
 
-const INTENT_CATEGORIES = ['planning', 'verification', 'question', 'research', 'custom', 'general'] as const;
+const INTENT_CATEGORIES = ['planning', 'verification', 'ui_testing', 'observation', 'question', 'research', 'custom', 'general'] as const;
 
 /**
  * Priority order for tie-breaking: lower index = higher priority.
@@ -27,11 +29,13 @@ const INTENT_CATEGORIES = ['planning', 'verification', 'question', 'research', '
  */
 const INTENT_PRIORITY: Record<string, number> = {
     verification: 0,
-    planning: 1,
-    question: 2,
-    research: 3,
-    custom: 4,
-    general: 5,
+    ui_testing: 1,
+    observation: 2,
+    planning: 3,
+    question: 4,
+    research: 5,
+    custom: 6,
+    general: 7,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -58,6 +62,20 @@ const KEYWORD_MAP: Record<string, string[]> = {
         'study', 'compare', 'benchmark', 'evaluate', 'assess',
         'pros and cons', 'trade-off', 'alternative', 'best practice',
         'performance', 'scalability', 'security audit',
+    ],
+    ui_testing: [
+        'ui test', 'visual test', 'layout test', 'component test',
+        'click test', 'navigation test', 'test ui', 'test layout',
+        'test design', 'manual test', 'test page', 'e2e test',
+        'test components', 'test visual', 'functional test',
+        'check layout', 'check ui', 'check design',
+    ],
+    observation: [
+        'observe', 'observation', 'review system', 'system health',
+        'improvement', 'improve', 'optimize', 'technical debt',
+        'code quality', 'agent performance', 'health check',
+        'system review', 'find improvements', 'suggest fix',
+        'recurring issue', 'pattern detection', 'architecture review',
     ],
     custom: [
         'custom agent', 'run agent', 'specialist', 'domain expert',
@@ -118,6 +136,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
     private clarityAgent!: ClarityAgent;
     private bossAgent!: BossAgent;
     private customAgentRunner!: CustomAgentRunner;
+    private uiTestingAgent!: UITestingAgent;
+    private observationAgent!: ObservationAgent;
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
 
@@ -148,6 +168,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.clarityAgent = new ClarityAgent(this.database, this.llm, this.config, this.outputChannel);
         this.bossAgent = new BossAgent(this.database, this.llm, this.config, this.outputChannel);
         this.customAgentRunner = new CustomAgentRunner(this.database, this.llm, this.config, this.outputChannel);
+        this.uiTestingAgent = new UITestingAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.observationAgent = new ObservationAgent(this.database, this.llm, this.config, this.outputChannel);
 
         await Promise.all([
             this.planningAgent.initialize(),
@@ -157,6 +179,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.clarityAgent.initialize(),
             this.bossAgent.initialize(),
             this.customAgentRunner.initialize(),
+            this.uiTestingAgent.initialize(),
+            this.observationAgent.initialize(),
         ]);
 
         this.outputChannel.appendLine('All agents initialized.');
@@ -237,6 +261,9 @@ When classifying, respond with ONLY the category name as a single lowercase word
         if (scoredIntents.length > 0) {
             scoredIntents.sort((a, b) => {
                 if (b[1] !== a[1]) return b[1] - a[1]; // higher score first
+                // KEYWORD_MAP and INTENT_PRIORITY always use the same known keys,
+                // so the ?? 5 fallback is a defensive guard that can't be reached.
+                /* istanbul ignore next */
                 return (INTENT_PRIORITY[a[0]] ?? 5) - (INTENT_PRIORITY[b[0]] ?? 5); // lower priority index wins ties
             });
             return scoredIntents[0][0];
@@ -260,6 +287,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
         switch (intent) {
             case 'planning': return this.planningAgent;
             case 'verification': return this.verificationAgent;
+            case 'ui_testing': return this.uiTestingAgent;
+            case 'observation': return this.observationAgent;
             case 'question': return this.answerAgent;
             case 'research': return this.researchAgent;
             case 'custom': return this.customAgentRunner;
@@ -274,6 +303,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
             planning: this.planningAgent,
             answer: this.answerAgent,
             verification: this.verificationAgent,
+            ui_testing: this.uiTestingAgent,
+            observation: this.observationAgent,
             research: this.researchAgent,
             clarity: this.clarityAgent,
             boss: this.bossAgent,

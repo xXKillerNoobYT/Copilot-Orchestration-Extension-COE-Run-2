@@ -423,5 +423,122 @@ describe('ComponentSchemaService', () => {
             expect(unknownType.valid).toBe(false);
             expect(unknownType.errors[0]).toContain("Unknown component type");
         });
+
+        test('validateComponentProps checks max_length constraint (line 168)', () => {
+            // Register a component with a max_length validation
+            service.registerSchema({
+                type: 'max_len_test',
+                display_name: 'MaxLenTest',
+                properties: [
+                    {
+                        name: 'title',
+                        type: 'string',
+                        default_value: '',
+                        required: false,
+                        description: 'Title with max length',
+                        validation: { max_length: 10 },
+                    },
+                ],
+            });
+
+            // String within length limit
+            const valid = service.validateComponentProps('max_len_test', {
+                title: 'Short',
+            });
+            expect(valid.valid).toBe(true);
+
+            // String exceeding max_length
+            const invalid = service.validateComponentProps('max_len_test', {
+                title: 'This string is way too long',
+            });
+            expect(invalid.valid).toBe(false);
+            expect(invalid.errors.some(e => e.includes("'title'") && e.includes('max_length'))).toBe(true);
+        });
+
+        test('validateComponentProps checks pattern constraint (lines 171-173)', () => {
+            // Register a component with a pattern validation
+            service.registerSchema({
+                type: 'pattern_test',
+                display_name: 'PatternTest',
+                properties: [
+                    {
+                        name: 'email',
+                        type: 'string',
+                        default_value: '',
+                        required: false,
+                        description: 'Email with pattern',
+                        validation: { pattern: '^[a-z]+@[a-z]+\\.[a-z]+$' },
+                    },
+                ],
+            });
+
+            // Matching pattern
+            const valid = service.validateComponentProps('pattern_test', {
+                email: 'test@example.com',
+            });
+            expect(valid.valid).toBe(true);
+
+            // Non-matching pattern
+            const invalid = service.validateComponentProps('pattern_test', {
+                email: 'INVALID',
+            });
+            expect(invalid.valid).toBe(false);
+            expect(invalid.errors.some(e => e.includes("'email'") && e.includes('pattern'))).toBe(true);
+        });
+    });
+
+    // ===================== COVERAGE GAP TESTS =====================
+
+    describe('Seed error handling (line 201)', () => {
+        test('seedDefaultSchemas logs error for individual schema failures', () => {
+            // Spy on createComponentSchema to fail for one specific type
+            const origCreate = db.createComponentSchema.bind(db);
+            let callCount = 0;
+            jest.spyOn(db, 'createComponentSchema').mockImplementation((data) => {
+                callCount++;
+                if (callCount === 3) {
+                    throw new Error('Schema insert failed');
+                }
+                return origCreate(data);
+            });
+
+            service.seedDefaultSchemas();
+
+            // Verify error was logged
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Seed error')
+            );
+
+            // Should have seeded all except the one that failed
+            const all = service.getAllSchemas();
+            expect(all.length).toBe(36); // 37 - 1 failed
+
+            (db.createComponentSchema as jest.Mock).mockRestore();
+        });
+    });
+
+    describe('checkPropType default case (lines 234-236)', () => {
+        test('unknown property type defaults to true', () => {
+            // Register a component with a property of unknown type
+            service.registerSchema({
+                type: 'unknown_type_test',
+                display_name: 'UnknownTypeTest',
+                properties: [
+                    {
+                        name: 'custom',
+                        type: 'custom_type' as any,
+                        default_value: null,
+                        required: false,
+                        description: 'A property with unknown type',
+                    },
+                ],
+            });
+
+            // Any value should pass validation for unknown type
+            const result = service.validateComponentProps('unknown_type_test', {
+                custom: 12345,
+            });
+            expect(result.valid).toBe(true);
+        });
     });
 });

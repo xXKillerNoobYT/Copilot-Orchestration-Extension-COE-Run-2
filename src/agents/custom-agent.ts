@@ -188,7 +188,7 @@ export class CustomAgentRunner extends BaseAgent {
         const words2 = new Set(prev.split(/\s+/));
         const intersection = new Set([...words1].filter(w => words2.has(w)));
         const union = new Set([...words1, ...words2]);
-        return union.size > 0 ? intersection.size / union.size : 0;
+        return union.size > 0 ? intersection.size / union.size : /* istanbul ignore next */ 0;
     }
 
     listCustomAgents(): string[] {

@@ -871,4 +871,90 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
             }),
         );
     }
+
+    // --- v3.0: Project Status & Design Commands ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.openProjectStatus', () => {
+            const port = mcpServer.getPort();
+            const url = vscode.Uri.parse(`http://localhost:${port}/app#status`);
+            vscode.env.openExternal(url);
+        }),
+
+        vscode.commands.registerCommand('coe.openDesigner', () => {
+            const port = mcpServer.getPort();
+            const url = vscode.Uri.parse(`http://localhost:${port}/app#designer`);
+            vscode.env.openExternal(url);
+        }),
+
+        vscode.commands.registerCommand('coe.quickReport', async () => {
+            const description = await vscode.window.showInputBox({
+                prompt: 'Describe the issue or correction',
+                placeHolder: 'e.g., Button alignment is off on the login page',
+            });
+            if (!description) return;
+
+            const plans = database.getAllPlans();
+            const activePlan = plans.find(p => p.status === 'active') ?? plans[0];
+            if (!activePlan) {
+                vscode.window.showWarningMessage('No plans found. Create a plan first.');
+                return;
+            }
+
+            const issue = database.createElementIssue({
+                element_id: 'quick-report',
+                element_type: 'page',
+                plan_id: activePlan.id,
+                description,
+                status: 'open',
+                severity: 'bug',
+                mode: 'fullstack',
+                reported_by: 'vscode-command',
+            } as any);
+
+            database.addAuditLog('vscode', 'quick_report', `Issue reported: ${description}`);
+            vscode.window.showInformationMessage(`Issue reported: ${issue.id}`);
+            refreshAll();
+        }),
+
+        vscode.commands.registerCommand('coe.showPlanVersions', async () => {
+            const plans = database.getAllPlans();
+            if (plans.length === 0) {
+                vscode.window.showWarningMessage('No plans found.');
+                return;
+            }
+            const items = plans.map(p => ({ label: p.name, description: p.status, planId: p.id }));
+            const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a plan to view versions' });
+            if (!picked) return;
+
+            const versions = database.getPlanVersionsByPlan(picked.planId);
+            if (versions.length === 0) {
+                vscode.window.showInformationMessage('No versions saved for this plan.');
+                return;
+            }
+
+            const content = versions.map(v =>
+                `v${v.version_number}: ${v.label}\n  Created: ${v.created_at} by ${v.created_by}\n  Summary: ${v.change_summary || 'N/A'}\n`
+            ).join('\n');
+
+            const doc = await vscode.workspace.openTextDocument({
+                content: `Plan Versions: ${picked.label}\n${'='.repeat(40)}\n\n${content}`,
+                language: 'markdown',
+            });
+            await vscode.window.showTextDocument(doc, { preview: true });
+        }),
+
+        vscode.commands.registerCommand('coe.generateCode', async () => {
+            const plans = database.getAllPlans();
+            const activePlan = plans.find(p => p.status === 'active') ?? plans[0];
+            if (!activePlan) {
+                vscode.window.showWarningMessage('No active plan found.');
+                return;
+            }
+
+            vscode.window.showInformationMessage(`Generating code from design for "${activePlan.name}"...`);
+            const port = mcpServer.getPort();
+            const url = vscode.Uri.parse(`http://localhost:${port}/app#coding`);
+            vscode.env.openExternal(url);
+        }),
+    );
 }

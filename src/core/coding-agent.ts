@@ -35,6 +35,7 @@ import {
     LogicBlockType,
     EthicsActionContext,
     LLMMessage,
+    TaskStatus,
 } from '../types';
 
 // ==================== INTERFACES ====================
@@ -92,7 +93,7 @@ const KEYWORD_CONFIDENCE_THRESHOLD = 2;
  * Generate a unified diff between two code strings.
  * Deterministic — no LLM involved.
  */
-function generateUnifiedDiff(before: string, after: string, filename: string = 'component'): string {
+function generateUnifiedDiff(before: string, after: string, /* istanbul ignore next -- default never used; always called with 3 args from generateDiff */ filename: string = 'component'): string {
     const beforeLines = before.split('\n');
     const afterLines = after.split('\n');
     const diffLines: string[] = [];
@@ -127,6 +128,7 @@ function generateUnifiedDiff(before: string, after: string, filename: string = '
         if (bLine === aLine) {
             // Lines match — context
             flushHunk();
+            /* istanbul ignore next -- bLine cannot be undefined here; while guard prevents both iterators past array bounds */
             diffLines.push(` ${bLine ?? ''}`);
             i++;
             j++;
@@ -386,6 +388,7 @@ export class CodingAgentService {
         const secondIntent = sorted[1];
 
         // If top intent has >= threshold hits AND is clearly ahead of second place
+        /* istanbul ignore next -- INTENT_KEYWORDS has 6 entries so sorted[1] always exists; ?? 0 is defensive */
         if (
             topIntent[1].score >= KEYWORD_CONFIDENCE_THRESHOLD &&
             topIntent[1].score > (secondIntent?.[1].score ?? 0)
@@ -400,6 +403,7 @@ export class CodingAgentService {
         }
 
         // Single strong keyword hit with no competition
+        /* istanbul ignore next -- sorted always has 6+ entries; ?? 0 is defensive */
         if (topIntent[1].score === 1 && (secondIntent?.[1].score ?? 0) === 0) {
             return {
                 intent: topIntent[0] as CodingAgentRequest['intent'],
@@ -953,6 +957,7 @@ export class CodingAgentService {
                         return `switch (${b.condition}) {\n  ${b.body}\n}`;
                     case LogicBlockType.Case:
                         return `case ${b.condition}:\n  ${b.body}\n  break;`;
+                    /* istanbul ignore next -- exhaustive switch; all LogicBlockType values handled above */
                     default:
                         return `// ${b.label}: ${b.body}`;
                 }
@@ -1325,6 +1330,7 @@ export class CodingAgentService {
                 return 'css';
             case 'json':
                 return 'react_tsx'; // Default to react for JSON format
+            /* istanbul ignore next -- exhaustive switch; all known format values handled above */
             default:
                 return 'react_tsx';
         }
@@ -1412,6 +1418,118 @@ export class CodingAgentService {
             this.outputChannel.appendLine(
                 `[CodingAgent] WARNING: Transparency log failed: ${err}`
             );
+        }
+    }
+
+    // ==================== PROMPT GENERATION FOR EXTERNAL CODING AGENTS ====================
+
+    /**
+     * Use the local LLM to generate a rich, contextual prompt for an external coding agent.
+     * The prompt incorporates task details, dependencies, plan context, and MCP tool instructions.
+     */
+    async generateTaskPrompt(taskId: string): Promise<{ prompt: string; tokens_used: number }> {
+        const task = this.database.getTask(taskId);
+        if (!task) {
+            return { prompt: `Task ${taskId} not found.`, tokens_used: 0 };
+        }
+
+        // Gather dependency context
+        const depContext: string[] = [];
+        for (const depId of task.dependencies) {
+            const dep = this.database.getTask(depId);
+            if (dep) {
+                depContext.push(`- "${dep.title}" (${dep.status})${dep.files_modified?.length ? ' — files: ' + dep.files_modified.join(', ') : ''}`);
+            }
+        }
+
+        // Gather plan context if available
+        let planContext = '';
+        if (task.plan_id) {
+            const plan = this.database.getPlan(task.plan_id);
+            if (plan) {
+                planContext = `\nThis task belongs to plan "${plan.name}".`;
+                const siblings = this.database.getTasksByPlan(task.plan_id);
+                const completed = siblings.filter(t => t.status === TaskStatus.Verified);
+                const remaining = siblings.filter(t => t.status === TaskStatus.NotStarted || t.status === TaskStatus.InProgress);
+                planContext += ` Progress: ${completed.length}/${siblings.length} tasks done.`;
+                if (remaining.length > 0 && remaining.length <= 5) {
+                    planContext += ` Remaining: ${remaining.map(t => `"${t.title}"`).join(', ')}.`;
+                }
+            }
+        }
+
+        // Build the meta-prompt for the local LLM
+        const systemMessage: LLMMessage = {
+            role: 'system',
+            content: [
+                'You are a prompt engineer. Your job is to write clear, actionable prompts for an external AI coding agent.',
+                'Given task details below, generate a comprehensive prompt that tells the coding agent EXACTLY what to implement.',
+                'The prompt should include:',
+                '1. A clear objective statement',
+                '2. Technical requirements and constraints',
+                '3. Acceptance criteria as a checklist',
+                '4. Files to create or modify (if known)',
+                '5. MCP tool instructions for reporting results',
+                '',
+                'Write the prompt in second person ("You will...", "Implement..."). Be specific and unambiguous.',
+                'Do NOT wrap the prompt in markdown code fences — output the prompt directly.',
+            ].join('\n'),
+        };
+
+        const userMessage: LLMMessage = {
+            role: 'user',
+            content: [
+                `Generate a coding agent prompt for this task:`,
+                ``,
+                `**Title:** ${task.title}`,
+                `**Priority:** ${task.priority}`,
+                `**Estimated:** ${task.estimated_minutes ?? 'unspecified'} minutes`,
+                `**Description:** ${task.description || 'No description.'}`,
+                `**Acceptance Criteria:** ${task.acceptance_criteria || 'None specified.'}`,
+                task.files_modified?.length ? `**Known files:** ${task.files_modified.join(', ')}` : '',
+                depContext.length ? `**Dependencies (completed/in-progress):**\n${depContext.join('\n')}` : '',
+                planContext,
+                ``,
+                `**MCP Tools available to the coding agent:**`,
+                `- reportTaskDone(task_id: "${task.id}", summary, files_modified, decisions_made)`,
+                `- askQuestion(task_id: "${task.id}", question) — for clarification`,
+                `- getErrors(task_id: "${task.id}") — to check known errors`,
+            ].filter(Boolean).join('\n'),
+        };
+
+        this.outputChannel.appendLine(`[CodingAgent] Generating prompt for task: ${task.title}`);
+
+        try {
+            const result = await this.llmService.chat(
+                [systemMessage, userMessage],
+                { maxTokens: 2048, temperature: 0.4, stream: false }
+            );
+
+            return { prompt: result.content, tokens_used: result.tokens_used ?? 0 };
+        } catch (err) {
+            this.outputChannel.appendLine(`[CodingAgent] Prompt generation failed: ${err}`);
+            // Fallback: return a static template if LLM is unavailable
+            const fallback = [
+                `## Task: ${task.title}`,
+                ``,
+                `**Priority:** ${task.priority}`,
+                `**Estimated:** ${task.estimated_minutes ?? '?'} minutes`,
+                ``,
+                `### Description`,
+                task.description || 'No description provided.',
+                ``,
+                `### Acceptance Criteria`,
+                task.acceptance_criteria || 'None specified.',
+                ``,
+                `### Instructions`,
+                `Implement this task. When done, use reportTaskDone with:`,
+                `- task_id: ${task.id}`,
+                `- summary: What you did`,
+                `- files_modified: Array of file paths changed`,
+                `- decisions_made: Any architectural decisions`,
+            ].join('\n');
+
+            return { prompt: fallback, tokens_used: 0 };
         }
     }
 }

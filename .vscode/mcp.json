@@ -1,0 +1,8 @@
+{
+    "servers": {
+        "coe": {
+            "type": "http",
+            "url": "http://localhost:3030/mcp"
+        }
+    }
+}

@@ -760,4 +760,750 @@ describe('ConflictResolver', () => {
             expect(dbConflict!.resolved_by).toBe('dev-001');
         });
     });
+
+    // ==================== AUTO-MERGE PARSE ERROR (lines 204-208) ====================
+
+    describe('Auto-merge — parse errors', () => {
+        test('autoMerge returns failure when local_version is invalid JSON', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-parse-err',
+                local_version: 'NOT VALID JSON{{{',
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const result = resolver.autoMerge(conflict);
+
+            expect(result.success).toBe(false);
+            expect(result.merged).toEqual({});
+            expect(result.mergedFields).toEqual([]);
+            expect(result.conflictingFields).toEqual(['name']);
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('unable to parse versions')
+            );
+        });
+
+        test('autoMerge returns failure when remote_version is invalid JSON', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-parse-err-2',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: '<<<INVALID>>>',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const result = resolver.autoMerge(conflict);
+
+            expect(result.success).toBe(false);
+            expect(result.merged).toEqual({});
+        });
+    });
+
+    // ==================== RESOLVE: UserChoice + default (lines 362-370) ====================
+
+    describe('Resolution — UserChoice and unknown strategy', () => {
+        test('resolve with UserChoice marks conflict resolved', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-uc',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            resolver.resolve(conflict.id, ConflictResolutionStrategy.UserChoice, 'user-manual');
+
+            const resolved = database.getSyncConflict(conflict.id);
+            expect(resolved!.resolution).toBe(ConflictResolutionStrategy.UserChoice);
+            expect(resolved!.resolved_by).toBe('user-manual');
+            expect(resolved!.resolved_at).toBeDefined();
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('user choice by user-manual')
+            );
+        });
+
+        test('resolve with unknown strategy throws error', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-unknown-strat',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            expect(() => {
+                resolver.resolve(conflict.id, 'totally_unknown_strategy' as any, 'dev-001');
+            }).toThrow('Unknown resolution strategy: totally_unknown_strategy');
+        });
+    });
+
+    // ==================== SUGGEST: parse error + default fallback (lines 402, 461-463) ====================
+
+    describe('Suggestions — edge cases', () => {
+        test('suggestResolution returns UserChoice with low confidence for unparseable versions', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-bad-json',
+                local_version: 'INVALID JSON!!!',
+                remote_version: 'ALSO BAD!!!',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            expect(suggestion.strategy).toBe(ConflictResolutionStrategy.UserChoice);
+            expect(suggestion.confidence).toBe(0.3);
+            expect(suggestion.reason).toContain('Unable to parse');
+            expect(suggestion.preview).toContain('Cannot generate preview');
+        });
+
+        test('suggestResolution falls back to default strategy for entity type with close timestamps (case 4)', () => {
+            // Non-critical entity (priority 2 = 'plan'), overlapping changes, timestamps within 5 min
+            // This should hit case 4: default strategy fallback
+            const conflict = database.createSyncConflict({
+                entity_type: 'plan',
+                entity_id: 'plan-default',
+                local_version: JSON.stringify({ name: 'LocalPlan', status: 'draft' }),
+                remote_version: JSON.stringify({ name: 'RemotePlan', status: 'active' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:02:00Z', // Only 2 min apart (under 5 min threshold)
+                conflicting_fields: ['name', 'status'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            // 'plan' has defaultStrategy: Merge
+            expect(suggestion.strategy).toBe(ConflictResolutionStrategy.Merge);
+            expect(suggestion.confidence).toBe(0.5);
+            expect(suggestion.reason).toContain('Overlapping changes');
+            expect(suggestion.reason).toContain('default strategy');
+        });
+
+        test('suggestResolution falls back to UserChoice for unknown entity type with close timestamps', () => {
+            // Unknown entity type has no config, so entityConfig is undefined
+            // defaultStrategy falls back to UserChoice
+            const conflict = database.createSyncConflict({
+                entity_type: 'unknown_entity_type' as any,
+                entity_id: 'unk-001',
+                local_version: JSON.stringify({ field: 'localVal' }),
+                remote_version: JSON.stringify({ field: 'remoteVal' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:01:00Z', // 1 min apart
+                conflicting_fields: ['field'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            expect(suggestion.strategy).toBe(ConflictResolutionStrategy.UserChoice);
+            expect(suggestion.confidence).toBe(0.5);
+            expect(suggestion.reason).toContain('default strategy');
+        });
+    });
+
+    // ==================== RESOLVE ALL — error handling (line 617) ====================
+
+    describe('resolveAllForEntity — error handling', () => {
+        test('continues resolving remaining conflicts when one fails', () => {
+            // Create 3 unresolved conflicts. The second one will fail due to overlapping merge
+            database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-bulk-err',
+                local_version: JSON.stringify({ name: 'A', localField: 'val' }),
+                remote_version: JSON.stringify({ name: 'A', remoteField: 'val' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['localField', 'remoteField'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            // This one has overlapping changes — Merge will fail
+            database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-bulk-err',
+                local_version: JSON.stringify({ name: 'LocalB' }),
+                remote_version: JSON.stringify({ name: 'RemoteB' }),
+                remote_device_id: 'dev-003',
+                local_changed_at: '2024-01-02T10:00:00Z',
+                remote_changed_at: '2024-01-02T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-bulk-err',
+                local_version: JSON.stringify({ name: 'C', aField: 'local' }),
+                remote_version: JSON.stringify({ name: 'C', bField: 'remote' }),
+                remote_device_id: 'dev-004',
+                local_changed_at: '2024-01-03T10:00:00Z',
+                remote_changed_at: '2024-01-03T10:05:00Z',
+                conflicting_fields: ['aField', 'bField'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            // Use Merge strategy — 2 will succeed (non-overlapping), 1 will fail (overlapping)
+            const count = resolver.resolveAllForEntity(
+                'design_component',
+                'comp-bulk-err',
+                ConflictResolutionStrategy.Merge,
+                'auto'
+            );
+
+            // 2 succeeded, 1 failed
+            expect(count).toBe(2);
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Failed to resolve conflict')
+            );
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Bulk-resolved 2 conflict(s)')
+            );
+        });
+    });
+
+    // ==================== GET RESOLVED VERSION (lines 643-695) ====================
+
+    describe('getResolvedVersion()', () => {
+        function createResolvedConflict(resolution: ConflictResolutionStrategy | null, overrides: {
+            local?: Record<string, unknown>;
+            remote?: Record<string, unknown>;
+            localChangedAt?: string;
+            remoteChangedAt?: string;
+        } = {}) {
+            const local = overrides.local ?? { name: 'Local', extra: 'localVal' };
+            const remote = overrides.remote ?? { name: 'Remote', extra: 'remoteVal' };
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-resolved-ver',
+                local_version: JSON.stringify(local),
+                remote_version: JSON.stringify(remote),
+                remote_device_id: 'dev-002',
+                local_changed_at: overrides.localChangedAt ?? '2024-01-01T10:00:00Z',
+                remote_changed_at: overrides.remoteChangedAt ?? '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            if (resolution !== null) {
+                database.resolveSyncConflict(conflict.id, resolution, 'dev-001');
+            }
+
+            return database.getSyncConflict(conflict.id)!;
+        }
+
+        test('returns null for unresolved conflict', () => {
+            const conflict = createResolvedConflict(null);
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toBeNull();
+        });
+
+        test('returns local version for KeepLocal resolution', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.KeepLocal, {
+                local: { name: 'LocalButton', width: 100 },
+                remote: { name: 'RemoteButton', width: 200 },
+            });
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toEqual({ name: 'LocalButton', width: 100 });
+        });
+
+        test('returns remote version for KeepRemote resolution', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.KeepRemote, {
+                local: { name: 'LocalButton', width: 100 },
+                remote: { name: 'RemoteButton', width: 200 },
+            });
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toEqual({ name: 'RemoteButton', width: 200 });
+        });
+
+        test('returns merged version for Merge resolution (non-overlapping)', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.Merge, {
+                local: { name: 'Button', localProp: 'from-local' },
+                remote: { name: 'Button', remoteProp: 'from-remote' },
+            });
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toEqual({
+                name: 'Button',
+                localProp: 'from-local',
+                remoteProp: 'from-remote',
+            });
+        });
+
+        test('returns null for Merge resolution when auto-merge fails (overlapping)', () => {
+            // Create a conflict with overlapping fields, resolve it as merge directly in DB
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-merge-fail',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+            // Force-resolve in DB even though merge would fail (to test getResolvedVersion)
+            database.resolveSyncConflict(conflict.id, ConflictResolutionStrategy.Merge, 'force');
+            const resolved = database.getSyncConflict(conflict.id)!;
+
+            const result = resolver.getResolvedVersion(resolved);
+
+            // autoMerge fails -> returns null
+            expect(result).toBeNull();
+        });
+
+        test('returns correct version for LastWriteWins (remote newer)', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.LastWriteWins, {
+                local: { name: 'OldLocal' },
+                remote: { name: 'NewRemote' },
+                localChangedAt: '2024-01-01T10:00:00Z',
+                remoteChangedAt: '2024-01-02T10:00:00Z',
+            });
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toEqual({ name: 'NewRemote' });
+        });
+
+        test('returns correct version for LastWriteWins (local newer)', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.LastWriteWins, {
+                local: { name: 'NewLocal' },
+                remote: { name: 'OldRemote' },
+                localChangedAt: '2024-01-02T10:00:00Z',
+                remoteChangedAt: '2024-01-01T10:00:00Z',
+            });
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toEqual({ name: 'NewLocal' });
+        });
+
+        test('returns null for UserChoice resolution', () => {
+            const conflict = createResolvedConflict(ConflictResolutionStrategy.UserChoice);
+
+            const result = resolver.getResolvedVersion(conflict);
+
+            expect(result).toBeNull();
+        });
+
+        test('returns null for unknown resolution type (default case)', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-unk-res',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+            // Manually force an unknown resolution value in DB
+            database.resolveSyncConflict(conflict.id, 'completely_unknown' as any, 'dev-001');
+            const resolved = database.getSyncConflict(conflict.id)!;
+
+            const result = resolver.getResolvedVersion(resolved);
+
+            expect(result).toBeNull();
+        });
+
+        test('returns null when version JSON is corrupted (catch block)', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-corrupt',
+                local_version: 'NOT{VALID}JSON',
+                remote_version: 'ALSO{BAD}',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+            database.resolveSyncConflict(conflict.id, ConflictResolutionStrategy.KeepLocal, 'dev-001');
+            const resolved = database.getSyncConflict(conflict.id)!;
+
+            const result = resolver.getResolvedVersion(resolved);
+
+            expect(result).toBeNull();
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('Failed to parse resolved versions')
+            );
+        });
+    });
+
+    // ==================== TRUNCATE VALUE + CONFLICT PREVIEW (lines 749, 768) ====================
+
+    describe('Preview and truncation', () => {
+        test('generateConflictPreview returns "No conflicting fields." for empty array', () => {
+            // Access private method via type assertion
+            const preview = (resolver as any).generateConflictPreview(
+                { name: 'Local' },
+                { name: 'Remote' },
+                [] // empty conflicting fields
+            );
+
+            expect(preview).toBe('No conflicting fields.');
+        });
+
+        test('truncateValue truncates strings longer than 80 characters', () => {
+            const longValue = 'x'.repeat(100);
+            const truncated = (resolver as any).truncateValue(longValue);
+
+            // JSON.stringify wraps in quotes, so the JSON string is 102 chars
+            // It should be truncated to 77 chars + "..."
+            expect(truncated.length).toBe(80);
+            expect(truncated).toMatch(/\.\.\.$/);
+        });
+
+        test('truncateValue does not truncate strings 80 characters or fewer', () => {
+            const shortValue = 'hello';
+            const result = (resolver as any).truncateValue(shortValue);
+
+            expect(result).toBe('"hello"');
+            expect(result.length).toBeLessThanOrEqual(80);
+        });
+
+        test('suggestResolution generates conflict preview for critical entity with overlapping fields', () => {
+            // This test exercises generateConflictPreview through the suggestResolution path
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-preview',
+                local_version: JSON.stringify({ name: 'LocalTask', description: 'a'.repeat(100) }),
+                remote_version: JSON.stringify({ name: 'RemoteTask', description: 'b'.repeat(100) }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:01:00Z',
+                conflicting_fields: ['name', 'description'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            expect(suggestion.preview).toContain('Conflicting fields:');
+            expect(suggestion.preview).toContain('name:');
+            expect(suggestion.preview).toContain('description:');
+            // description value is long — should be truncated with ...
+            expect(suggestion.preview).toContain('...');
+        });
+    });
+
+    // ==================== EVENT EMISSION ERRORS (lines 792, 822) ====================
+
+    describe('Event emission error handling', () => {
+        test('emitConflictDetected catches error and logs warning', () => {
+            // Replace the eventBus with one that throws
+            const brokenEventBus = new EventBus();
+            jest.spyOn(brokenEventBus, 'emit').mockImplementation(() => {
+                throw new Error('EventBus exploded');
+            });
+            const brokenResolver = new ConflictResolver(database, brokenEventBus, outputChannel);
+
+            // detectConflict calls emitConflictDetected internally
+            const local = { name: 'LocalVal' };
+            const remote = { name: 'RemoteVal' };
+
+            // Should not throw even though eventBus.emit throws
+            const result = brokenResolver.detectConflict(
+                'design_component',
+                'comp-event-err',
+                local,
+                remote,
+                '2024-01-01T10:00:00Z',
+                '2024-01-01T10:05:00Z',
+                'dev-002'
+            );
+
+            expect(result).not.toBeNull();
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('WARNING: Failed to emit conflict_detected event')
+            );
+        });
+
+        test('emitConflictResolved catches error and logs warning', () => {
+            // Create a conflict first with working eventBus
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-resolve-event-err',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:05:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            // Now replace eventBus with one that throws, and create new resolver
+            const brokenEventBus = new EventBus();
+            jest.spyOn(brokenEventBus, 'emit').mockImplementation(() => {
+                throw new Error('EventBus exploded on resolve');
+            });
+            const brokenResolver = new ConflictResolver(database, brokenEventBus, outputChannel);
+
+            // Should not throw
+            brokenResolver.resolve(conflict.id, ConflictResolutionStrategy.KeepLocal, 'dev-001');
+
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('WARNING: Failed to emit conflict_resolved event')
+            );
+        });
+    });
+
+    // ==================== LAST WRITE WINNER (line 643) ====================
+
+    describe('getLastWriteWinner()', () => {
+        test('returns "local" when local is newer', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-lww-local',
+                local_version: '{"a":1}',
+                remote_version: '{"a":2}',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-02T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:00:00Z',
+                conflicting_fields: ['a'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const winner = resolver.getLastWriteWinner(conflict);
+
+            expect(winner).toBe('local');
+        });
+
+        test('returns "remote" when remote is newer', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-lww-remote',
+                local_version: '{"a":1}',
+                remote_version: '{"a":2}',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-02T10:00:00Z',
+                conflicting_fields: ['a'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const winner = resolver.getLastWriteWinner(conflict);
+
+            expect(winner).toBe('remote');
+        });
+
+        test('returns "local" when timestamps are equal (local bias)', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-lww-equal',
+                local_version: '{"a":1}',
+                remote_version: '{"a":2}',
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:00:00Z',
+                conflicting_fields: ['a'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const winner = resolver.getLastWriteWinner(conflict);
+
+            expect(winner).toBe('local');
+        });
+    });
+
+    // ==================== BRANCH COVERAGE: resolve LastWriteWins local wins (line 350) ====================
+
+    describe('Resolution — LastWriteWins local wins branch', () => {
+        test('resolve with LastWriteWins picks local when local is newer', () => {
+            const conflict = database.createSyncConflict({
+                entity_type: 'task',
+                entity_id: 't-lww-local-wins',
+                local_version: JSON.stringify({ name: 'Local' }),
+                remote_version: JSON.stringify({ name: 'Remote' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-02T10:00:00Z', // Local is newer
+                remote_changed_at: '2024-01-01T10:00:00Z',
+                conflicting_fields: ['name'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            resolver.resolve(conflict.id, ConflictResolutionStrategy.LastWriteWins, 'auto');
+
+            expect(outputChannel.appendLine).toHaveBeenCalledWith(
+                expect.stringContaining('local version chosen')
+            );
+        });
+    });
+
+    // ==================== BRANCH COVERAGE: suggestResolution metadata-only merge (line 428) ====================
+
+    describe('Suggestions — metadata-only non-overlapping changes', () => {
+        test('suggestResolution reports "none" when only metadata fields differ on each side', () => {
+            // Create a conflict where localOnly and remoteOnly are only metadata fields
+            // This means nonMetaChanges will be empty, triggering the || 'none' branch
+            const conflict = database.createSyncConflict({
+                entity_type: 'design_component',
+                entity_id: 'comp-meta-only',
+                local_version: JSON.stringify({
+                    name: 'Button',
+                    updated_at: '2024-01-01T10:00:00Z',
+                }),
+                remote_version: JSON.stringify({
+                    name: 'Button',
+                    created_at: '2024-01-01T09:00:00Z',
+                }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T10:00:00Z',
+                remote_changed_at: '2024-01-01T10:01:00Z',
+                conflicting_fields: ['updated_at', 'created_at'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            // localOnly has 'updated_at' (metadata), remoteOnly has 'created_at' (metadata)
+            // No true conflicts, so it suggests Merge
+            expect(suggestion.strategy).toBe(ConflictResolutionStrategy.Merge);
+            expect(suggestion.reason).toContain('none');
+        });
+    });
+
+    // ==================== BRANCH COVERAGE: suggestResolution LastWriteWins local wins (lines 450-456) ====================
+
+    describe('Suggestions — LastWriteWins local wins branch', () => {
+        test('suggestResolution suggests LastWriteWins with local as winner when local is newer', () => {
+            // Non-critical entity (priority 2+), overlapping changes, timestamps >5 min apart, local newer
+            const conflict = database.createSyncConflict({
+                entity_type: 'plan',
+                entity_id: 'plan-lww-local',
+                local_version: JSON.stringify({ name: 'NewerLocal', status: 'active' }),
+                remote_version: JSON.stringify({ name: 'OlderRemote', status: 'draft' }),
+                remote_device_id: 'dev-002',
+                local_changed_at: '2024-01-01T12:00:00Z', // Local is 2 hours newer
+                remote_changed_at: '2024-01-01T10:00:00Z',
+                conflicting_fields: ['name', 'status'],
+                resolution: null,
+                resolved_by: null,
+                resolved_at: null,
+            });
+
+            const suggestion = resolver.suggestResolution(conflict);
+
+            expect(suggestion.strategy).toBe(ConflictResolutionStrategy.LastWriteWins);
+            expect(suggestion.reason).toContain('local');
+            expect(suggestion.reason).toContain('more recent');
+            expect(suggestion.preview).toContain('local');
+        });
+    });
+
+    // ==================== BRANCH COVERAGE: generateMergePreview empty parts (line 733) ====================
+
+    describe('Preview — empty merge preview', () => {
+        test('generateMergePreview returns "No meaningful field differences" when parts is empty', () => {
+            // Create a comparison where all arrays are empty
+            const comparison = {
+                both: [],
+                localOnly: [],
+                remoteOnly: [],
+                unchanged: [],
+            };
+
+            const preview = (resolver as any).generateMergePreview(
+                {},
+                {},
+                comparison
+            );
+
+            expect(preview).toBe('Merge preview: No meaningful field differences.');
+        });
+
+        test('generateMergePreview filters out metadata-only localOnly fields', () => {
+            // localOnly has only metadata, remoteOnly has only metadata
+            // unchanged is empty => parts should be empty
+            const comparison = {
+                both: [],
+                localOnly: ['updated_at'],
+                remoteOnly: ['created_at'],
+                unchanged: [],
+            };
+
+            const preview = (resolver as any).generateMergePreview(
+                { updated_at: '2024-01-01' },
+                { created_at: '2024-01-02' },
+                comparison
+            );
+
+            expect(preview).toBe('Merge preview: No meaningful field differences.');
+        });
+    });
 });

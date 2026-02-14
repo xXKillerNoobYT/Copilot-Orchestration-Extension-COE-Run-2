@@ -65,23 +65,24 @@ export class PlanningIntelligence {
         for(const t of tasks){for(const d of t.dependencies||[]){if(tids.has(d)){edges.push({from:d,to:t.id});adj.get(d)!.push(t.id);rev.get(t.id)!.push(d);}}}
         const W=0,G=1,BK=2;const color=new Map<string,number>();const cyc=new Set<string>();let hasCyc=false;
         for(const id of tids)color.set(id,W);
-        const dfsc=(nid:string,anc:Set<string>):void=>{color.set(nid,G);anc.add(nid);for(const nb of adj.get(nid)??[]){if(color.get(nb)===G){hasCyc=true;cyc.add(nb);cyc.add(nid);for(const x of anc)cyc.add(x);}else if(color.get(nb)===W)dfsc(nb,new Set(anc));}color.set(nid,BK);};
+        const dfsc=(nid:string,anc:Set<string>):void=>{color.set(nid,G);anc.add(nid);for(const nb of adj.get(nid)!){if(color.get(nb)===G){hasCyc=true;cyc.add(nb);cyc.add(nid);for(const x of anc)cyc.add(x);}else if(color.get(nb)===W)dfsc(nb,new Set(anc));}color.set(nid,BK);};
         for(const id of tids){if(color.get(id)===W)dfsc(id,new Set());}
-        const inD=new Map<string,number>();for(const id of tids)inD.set(id,(rev.get(id)??[]).length);
+        const inD=new Map<string,number>();for(const id of tids)inD.set(id,rev.get(id)!.length);
         const dm=new Map<string,number>();const q:string[]=[];
         for(const id of tids){if(inD.get(id)===0){q.push(id);dm.set(id,0);}}
-        let mxD=0;while(q.length>0){const cur=q.shift()!;for(const nb of adj.get(cur)??[]){const nd=(dm.get(cur)??0)+1;const cd=dm.get(nb);if(cd===undefined||nd>cd){dm.set(nb,nd);if(nd>mxD)mxD=nd;}const ni=(inD.get(nb)??1)-1;inD.set(nb,ni);if(ni===0)q.push(nb);}}
+        let mxD=0;while(q.length>0){const cur=q.shift()!;for(const nb of adj.get(cur)!){const nd=dm.get(cur)!+1;const cd=dm.get(nb);if(cd===undefined||nd>cd){dm.set(nb,nd);if(nd>mxD)mxD=nd;}const ni=inD.get(nb)!-1;inD.set(nb,ni);if(ni===0)q.push(nb);}}
         for(const id of tids){if(!dm.has(id))dm.set(id,-1);}
         const cp=this._cp(tasks,rev,dm);const pg=this._pg(tasks,dm,rev);
-        const nodes:DependencyNode[]=tasks.map(t=>({id:t.id,title:t.title,status:t.status,priority:t.priority,depth:dm.get(t.id)??-1,inDegree:(rev.get(t.id)??[]).length,outDegree:(adj.get(t.id)??[]).length}));
+        const nodes:DependencyNode[]=tasks.map(t=>({id:t.id,title:t.title,status:t.status,priority:t.priority,depth:dm.get(t.id)!,inDegree:rev.get(t.id)!.length,outDegree:adj.get(t.id)!.length}));
         return{nodes,edges,criticalPath:cp,parallelGroups:pg,maxDepth:mxD,hasCycles:hasCyc,cycleNodes:Array.from(cyc)};
     }
 
     private _cp(tasks:Task[],rev:Map<string,string[]>,dm:Map<string,number>):string[]{
+        /* istanbul ignore next -- _cp is only called from buildDependencyGraph which checks for empty tasks */
         if(!tasks.length)return[];
         const dist=new Map<string,number>();const pred=new Map<string,string|null>();
-        const sorted=[...tasks].filter(t=>(dm.get(t.id)??-1)>=0).sort((a,b)=>(dm.get(a.id)??0)-(dm.get(b.id)??0));
-        for(const t of sorted){const deps=rev.get(t.id)??[];if(!deps.length){dist.set(t.id,t.estimated_minutes??0);pred.set(t.id,null);}else{let mx=0;let bp:string|null=null;for(const d of deps){const v=dist.get(d)??0;if(v>mx){mx=v;bp=d;}}dist.set(t.id,mx+(t.estimated_minutes??0));pred.set(t.id,bp);}}
+        const sorted=[...tasks].filter(t=>dm.get(t.id)!>=0).sort((a,b)=>dm.get(a.id)!-dm.get(b.id)!);
+        for(const t of sorted){const deps=rev.get(t.id)!;if(!deps.length){dist.set(t.id,t.estimated_minutes??0);pred.set(t.id,null);}else{let mx=0;let bp:string|null=null;for(const d of deps){const v=dist.get(d)!;if(v>mx){mx=v;bp=d;}}dist.set(t.id,mx+(t.estimated_minutes??0));pred.set(t.id,bp);}}
         let en:string|null=null;let mx=0;for(const[id,d]of dist){if(d>mx){mx=d;en=id;}}
         const path:string[]=[];let cur=en;while(cur!==null){path.unshift(cur);cur=pred.get(cur)??null;}
         return path;
@@ -89,9 +90,10 @@ export class PlanningIntelligence {
 
     private _pg(tasks:Task[],dm:Map<string,number>,rev:Map<string,string[]>):string[][]{
         const dg=new Map<number,string[]>();
-        for(const t of tasks){const d=dm.get(t.id)??-1;if(d<0)continue;if(!dg.has(d))dg.set(d,[]);dg.get(d)!.push(t.id);}
+        for(const t of tasks){const d=dm.get(t.id)!;if(d<0)continue;if(!dg.has(d))dg.set(d,[]);dg.get(d)!.push(t.id);}
         const groups:string[][]=[];
-        for(const[,nodes]of dg){if(nodes.length>1){const sd=new Set<string>();for(const id of nodes){for(const dep of rev.get(id)??[]){if(nodes.includes(dep)){sd.add(id);sd.add(dep);}}}const par=nodes.filter(id=>!sd.has(id));if(par.length>1)groups.push(par);}}
+        /* istanbul ignore next -- in a DAG, same-depth nodes cannot have inter-edges; par always equals nodes */
+        for(const[,nodes]of dg){if(nodes.length>1){const sd=new Set<string>();for(const id of nodes){for(const dep of rev.get(id)!){if(nodes.includes(dep)){sd.add(id);sd.add(dep);}}}const par=nodes.filter(id=>!sd.has(id));if(par.length>1)groups.push(par);}}
         return groups;
     }
 

@@ -26,7 +26,7 @@ test.describe('COE Webapp — Tickets Page', () => {
         await expect(headers.nth(1)).toHaveText('Title');
         await expect(headers.nth(2)).toHaveText('Status');
         await expect(headers.nth(3)).toHaveText('Priority');
-        await expect(headers.nth(4)).toHaveText('Creator');
+        await expect(headers.nth(4)).toHaveText('Type');
         await expect(headers.nth(5)).toHaveText('Actions');
     });
 });
