@@ -23,6 +23,29 @@ function shouldCreateTicket(operationType: string, aiLevel: string): boolean {
     return true;
 }
 
+/** Auto-generated acceptance criteria by deliverable type */
+const ACCEPTANCE_CRITERIA_TEMPLATES: Record<string, string> = {
+    plan_generation: 'Tasks generated with titles, descriptions, priorities, estimates, acceptance criteria. All tasks 15-45 min. Scaffold tasks created before feature tasks.',
+    design_change: 'All specified pages have header + nav + content area. Components positioned within canvas bounds. Design tokens applied.',
+    code_generation: 'Code compiles. Tests pass. Matches acceptance criteria of linked task. Files created/modified listed in task completion.',
+    communication: 'Reply clarity score >= 85 (Clarity Agent verified).',
+    verification: 'All acceptance criteria checked. Test results recorded. No failed criteria.',
+};
+
+/** Context for richer auto-tickets */
+interface AutoTicketContext {
+    planConfig?: { scale?: string; focus?: string; techStack?: string; aiLevel?: string; priorities?: string };
+    pageDesigns?: Array<{ id: string; name: string; route?: string; componentCount?: number }>;
+    taskDependencies?: string[];
+    targetAgent?: string;
+    expectedDeliverables?: string[];
+    acceptanceCriteria?: string;
+    sourcePageIds?: string[];
+    sourceComponentIds?: string[];
+    stage?: number;
+    deliverableType?: string;
+}
+
 /** Creates an auto-ticket if the AI level permits it */
 function createAutoTicket(
     database: Database,
@@ -31,19 +54,212 @@ function createAutoTicket(
     body: string,
     priority: string,
     aiLevel: string,
-    parentTicketId?: string | null
+    parentTicketId?: string | null,
+    context?: AutoTicketContext
 ): { id: string; ticket_number: number } | null {
     if (!shouldCreateTicket(operationType, aiLevel)) return null;
+
+    // Determine deliverable type from operation or explicit context
+    const deliverableType = context?.deliverableType || operationType;
+
+    // Build enriched body with plan context
+    let enrichedBody = body;
+    if (context?.planConfig) {
+        const cfg = context.planConfig;
+        const parts: string[] = [];
+        if (cfg.scale) parts.push(`Scale: ${cfg.scale}`);
+        if (cfg.focus) parts.push(`Focus: ${cfg.focus}`);
+        if (cfg.techStack) parts.push(`Tech: ${cfg.techStack}`);
+        if (cfg.aiLevel) parts.push(`AI Level: ${cfg.aiLevel}`);
+        if (parts.length > 0) enrichedBody += `\n\n**Plan Context**: ${parts.join(' | ')}`;
+    }
+    if (context?.pageDesigns && context.pageDesigns.length > 0) {
+        const pageList = context.pageDesigns.map(p => `- ${p.name}${p.route ? ` (${p.route})` : ''}${p.componentCount != null ? ` [${p.componentCount} components]` : ''}`).join('\n');
+        enrichedBody += `\n\n**Related Pages**:\n${pageList}`;
+    }
+    if (context?.taskDependencies && context.taskDependencies.length > 0) {
+        enrichedBody += `\n\n**Dependencies**: ${context.taskDependencies.join(', ')}`;
+    }
+    if (context?.expectedDeliverables && context.expectedDeliverables.length > 0) {
+        enrichedBody += `\n\n**Expected Deliverables**: ${context.expectedDeliverables.join(', ')}`;
+    }
+
+    // Auto-generate acceptance criteria if not explicitly provided
+    const acceptanceCriteria = context?.acceptanceCriteria
+        || ACCEPTANCE_CRITERIA_TEMPLATES[deliverableType]
+        || null;
+
     const ticket = database.createTicket({
         title,
-        body,
+        body: enrichedBody,
         priority: priority as any,
         creator: 'system',
         parent_ticket_id: parentTicketId ?? null,
         auto_created: true,
         operation_type: operationType,
+        acceptance_criteria: acceptanceCriteria,
+        deliverable_type: (deliverableType || null) as import('../types').TicketDeliverableType,
+        source_page_ids: context?.sourcePageIds ? JSON.stringify(context.sourcePageIds) : null,
+        source_component_ids: context?.sourceComponentIds ? JSON.stringify(context.sourceComponentIds) : null,
+        stage: context?.stage ?? undefined,
     });
     return ticket;
+}
+
+// ==================== AGENT RESOLUTION ====================
+
+/** Maps ticket operation_type + title patterns to agent info for display */
+function resolveAgentForTicket(ticket: { operation_type?: string; title: string; processing_agent?: string | null }): {
+    agentName: string; agentLabel: string; agentColor: string;
+} {
+    // If explicitly set, use that
+    if (ticket.processing_agent) {
+        const agentColors: Record<string, string> = {
+            planning: '#4a9eff', verification: '#22c55e', coding: '#a855f7',
+            boss: '#eab308', design_architect: '#4a9eff', gap_hunter: '#4a9eff',
+            design_hardener: '#4a9eff', decision_memory: '#6366f1',
+        };
+        const agentLabels: Record<string, string> = {
+            planning: 'Planning Team', verification: 'Verification Team', coding: 'Coding Agent',
+            boss: 'Boss AI', design_architect: 'Design Architect', gap_hunter: 'Gap Hunter',
+            design_hardener: 'Design Hardener', decision_memory: 'Decision Memory',
+        };
+        return {
+            agentName: ticket.processing_agent,
+            agentLabel: agentLabels[ticket.processing_agent] || ticket.processing_agent,
+            agentColor: agentColors[ticket.processing_agent] || '#6b7280',
+        };
+    }
+
+    const op = ticket.operation_type || '';
+    const title = ticket.title.toLowerCase();
+
+    if (op === 'boss_directive') return { agentName: 'boss', agentLabel: 'Boss AI', agentColor: '#eab308' };
+    if (op === 'verification' || title.startsWith('verify:')) return { agentName: 'verification', agentLabel: 'Verification Team', agentColor: '#22c55e' };
+    if (title.startsWith('coding:') || title.startsWith('rework:') || op === 'code_generation') return { agentName: 'coding', agentLabel: 'Coding Agent', agentColor: '#a855f7' };
+    if (op === 'design_change' || title.startsWith('phase: design') || title.startsWith('phase: data model')) return { agentName: 'planning', agentLabel: 'Planning Team', agentColor: '#4a9eff' };
+    if (op === 'plan_generation' || title.startsWith('phase: task generation')) return { agentName: 'planning', agentLabel: 'Planning Team', agentColor: '#4a9eff' };
+    if (op === 'user_created') return { agentName: 'user', agentLabel: 'User', agentColor: '#6b7280' };
+
+    return { agentName: 'planning', agentLabel: 'Planning Team', agentColor: '#4a9eff' };
+}
+
+// ==================== JSON REPAIR HELPERS ====================
+
+/**
+ * Attempts to repair malformed JSON from LLM responses.
+ * Progressive repair: trailing commas → single quotes → unquoted keys → truncation → trailing content.
+ */
+function repairJson(raw: string): { parsed: any; repaired: boolean; error: string | null; repairs: string[] } {
+    const repairs: string[] = [];
+    let text = raw;
+
+    // Step 1: Strip markdown fences
+    text = text.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
+    if (text !== raw) repairs.push('stripped_markdown_fences');
+
+    // Step 2: Fix trailing commas before } or ]
+    const trailingCommaFixed = text.replace(/,\s*([}\]])/g, '$1');
+    if (trailingCommaFixed !== text) { text = trailingCommaFixed; repairs.push('fixed_trailing_commas'); }
+
+    // Step 3: Fix single-quoted strings to double quotes (skip embedded apostrophes in words)
+    const singleQuoteFixed = text.replace(/(?<![a-zA-Z])'([^']*)'(?![a-zA-Z])/g, '"$1"');
+    if (singleQuoteFixed !== text) { text = singleQuoteFixed; repairs.push('fixed_single_quotes'); }
+
+    // Step 4: Fix unquoted property names
+    const unquotedKeyFixed = text.replace(/(?<=[{,]\s*)([a-zA-Z_]\w*)\s*:/g, '"$1":');
+    if (unquotedKeyFixed !== text) { text = unquotedKeyFixed; repairs.push('fixed_unquoted_keys'); }
+
+    // Step 5: Fix control characters in strings (raw newlines/tabs inside quoted strings)
+    const controlFixed = text.replace(/"([^"]*?)"/g, (_match, content) => {
+        const cleaned = content.replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '\\r');
+        return '"' + cleaned + '"';
+    });
+    if (controlFixed !== text) { text = controlFixed; repairs.push('fixed_control_chars'); }
+
+    // Try parsing after basic repairs
+    try {
+        const jsonMatch = text.match(/[\[{][\s\S]*[}\]]/);
+        if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            return { parsed, repaired: repairs.length > 0, error: null, repairs };
+        }
+    } catch { /* continue to more aggressive repairs */ }
+
+    // Step 6: Remove trailing content after the last valid } or ]
+    const lastBrace = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+    if (lastBrace > 0) {
+        const trimmed = text.substring(0, lastBrace + 1);
+        if (trimmed !== text) { text = trimmed; repairs.push('removed_trailing_content'); }
+
+        try {
+            const jsonMatch = text.match(/[\[{][\s\S]*[}\]]/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                return { parsed, repaired: true, error: null, repairs };
+            }
+        } catch { /* continue */ }
+    }
+
+    // Step 7: Close truncated JSON — count unmatched brackets
+    const jsonStart = text.match(/[\[{]/);
+    if (jsonStart) {
+        let fromStart = text.substring(text.indexOf(jsonStart[0]));
+        const openBraces: string[] = [];
+        let inString = false;
+        let escaped = false;
+        for (const ch of fromStart) {
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\') { escaped = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') openBraces.push('}');
+            else if (ch === '[') openBraces.push(']');
+            else if (ch === '}' || ch === ']') openBraces.pop();
+        }
+        if (openBraces.length > 0) {
+            // Remove any trailing partial value (incomplete string or number)
+            fromStart = fromStart.replace(/,\s*"[^"]*$/, '');      // trailing incomplete string value
+            fromStart = fromStart.replace(/,\s*[a-zA-Z0-9]*$/, ''); // trailing incomplete value
+            fromStart = fromStart.replace(/,\s*$/, '');              // trailing comma
+            fromStart += openBraces.reverse().join('');
+            repairs.push('closed_truncated_json');
+
+            try {
+                const parsed = JSON.parse(fromStart);
+                return { parsed, repaired: true, error: null, repairs };
+            } catch (e) {
+                return { parsed: null, repaired: false, error: `Repair failed after all steps: ${String(e)}`, repairs };
+            }
+        }
+    }
+
+    return { parsed: null, repaired: false, error: 'No valid JSON structure found after all repair attempts', repairs };
+}
+
+/**
+ * Parses AI-generated JSON with automatic repair.
+ * Tries direct parse first, then repair, logs results.
+ */
+function parseAIJson<T>(raw: string, context: string): { data: T | null; error: string | null; repaired: boolean } {
+    // Fast path: direct parse after stripping markdown fences
+    const cleaned = raw.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
+    const jsonMatch = cleaned.match(/[\[{][\s\S]*[}\]]/);
+    if (jsonMatch) {
+        try {
+            const data = JSON.parse(jsonMatch[0]) as T;
+            return { data, error: null, repaired: false };
+        } catch { /* fall through to repair */ }
+    }
+
+    // Repair path
+    const result = repairJson(raw);
+    if (result.parsed) {
+        console.log(`[COE] JSON repair succeeded for ${context}. Repairs: ${result.repairs.join(', ')}`);
+        return { data: result.parsed as T, error: null, repaired: true };
+    }
+
+    return { data: null, error: result.error || 'JSON parse failed', repaired: false };
 }
 
 /**
@@ -511,7 +727,17 @@ export async function handleApiRequest(
             if (!ticket) { json(res, { error: 'Ticket not found' }, 404); return true; }
             const replies = database.getTicketReplies(ticketId);
             const childCount = database.getChildTicketCount(ticketId);
-            json(res, { ...ticket, replies, child_count: childCount });
+            const agentInfo = resolveAgentForTicket(ticket);
+            const stageLabels: Record<number, string> = { 1: 'Stage 1: Plan & Design', 2: 'Stage 2: Coding', 3: 'Stage 3: Verification' };
+            json(res, {
+                ...ticket,
+                replies,
+                child_count: childCount,
+                assigned_agent: agentInfo.agentName,
+                agent_label: agentInfo.agentLabel,
+                agent_color: agentInfo.agentColor,
+                stage_label: ticket.stage ? stageLabels[ticket.stage] || null : null,
+            });
             return true;
         }
         if (ticketId && !route.includes('/replies') && method === 'PUT') {
@@ -631,20 +857,16 @@ export async function handleApiRequest(
             const ctx: AgentContext = { conversationHistory: [] };
             const response = await orchestrator.callAgent('planning', prompt, ctx);
 
-            // Try to parse structured response
-            let parsed: { tasks?: Array<{ title: string; description?: string; priority?: string; estimated_minutes?: number; acceptance_criteria?: string; depends_on_titles?: string[]; task_requirements?: Record<string, unknown> }> } | null = null;
-            let parseError: string | null = null;
-            try {
-                // Strip markdown fences before matching
-                const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
-                const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    parsed = JSON.parse(jsonMatch[0]);
-                }
-            } catch (e) {
-                parseError = String(e);
-                const snippet = response.content.substring(0, 200);
-                console.error(`[COE] Task generation JSON parse failed: ${parseError}. Response snippet: ${snippet}`);
+            // Try to parse structured response (with automatic JSON repair)
+            type TaskGenResult = { plan_name?: string; tasks?: Array<{ title: string; description?: string; priority?: string; estimated_minutes?: number; acceptance_criteria?: string; depends_on_titles?: string[]; task_requirements?: Record<string, unknown> }> };
+            const parseResult = parseAIJson<TaskGenResult>(response.content, 'task_generation');
+            let parsed = parseResult.data;
+            let parseError = parseResult.error;
+            if (parseResult.repaired) {
+                database.addAuditLog('planning', 'json_repaired', `Task generation JSON was repaired for plan "${name}"`);
+            }
+            if (parseError) {
+                console.error(`[COE] Task generation JSON parse failed: ${parseError}. Response snippet: ${response.content.substring(0, 200)}`);
             }
 
             // Create the plan regardless of whether LLM returned valid JSON
@@ -798,13 +1020,13 @@ export async function handleApiRequest(
             const ctx: AgentContext = { conversationHistory: [] };
             const response = await orchestrator.callAgent('planning', prompt, ctx);
 
-            let parsed: { tasks?: Array<{ title: string; description?: string; priority?: string; estimated_minutes?: number; acceptance_criteria?: string; depends_on_titles?: string[]; task_requirements?: Record<string, unknown> }> } | null = null;
-            try {
-                const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
-                const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-                if (jsonMatch) { parsed = JSON.parse(jsonMatch[0]); }
-            } catch (e) {
-                console.error(`[COE] Task regeneration JSON parse failed: ${String(e)}. Snippet: ${response.content.substring(0, 200)}`);
+            const regenParseResult = parseAIJson<{ tasks?: Array<{ title: string; description?: string; priority?: string; estimated_minutes?: number; acceptance_criteria?: string; depends_on_titles?: string[]; task_requirements?: Record<string, unknown> }> }>(response.content, 'task_regeneration');
+            const parsed = regenParseResult.data;
+            if (regenParseResult.repaired) {
+                database.addAuditLog('planning', 'json_repaired', `Task regeneration JSON was repaired for plan "${plan.name}"`);
+            }
+            if (regenParseResult.error) {
+                console.error(`[COE] Task regeneration JSON parse failed: ${regenParseResult.error}. Snippet: ${response.content.substring(0, 200)}`);
             }
 
             if (parsed?.tasks && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
@@ -1140,17 +1362,12 @@ export async function handleApiRequest(
                 const ctx: AgentContext = { conversationHistory: [] };
                 const response = await orchestrator.callAgent('planning', prompt, ctx);
 
-                let parsed: { pages?: Array<{ name?: string; route?: string; background?: string; components?: Array<{ type?: string; name?: string; x?: number; y?: number; width?: number; height?: number; content?: string; styles?: Record<string, unknown> }> }> } | null = null;
-                try {
-                    let jsonStr = response.content.trim();
-                    if (jsonStr.startsWith('```')) {
-                        jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-                    }
-                    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-                    if (jsonMatch) {
-                        parsed = JSON.parse(jsonMatch[0]);
-                    }
-                } catch { /* JSON parse failed */ }
+                type DesignGenResult = { pages?: Array<{ name?: string; route?: string; background?: string; components?: Array<{ type?: string; name?: string; x?: number; y?: number; width?: number; height?: number; content?: string; styles?: Record<string, unknown> }> }> };
+                const designParseResult = parseAIJson<DesignGenResult>(response.content, 'design_generation');
+                const parsed = designParseResult.data;
+                if (designParseResult.repaired) {
+                    database.addAuditLog('planning', 'json_repaired', `Design generation JSON was repaired for plan "${planName}"`);
+                }
 
                 if (!parsed?.pages || !Array.isArray(parsed.pages) || parsed.pages.length === 0) {
                     if (earlyDesignTicket) {
@@ -1991,12 +2208,11 @@ Only return the JSON array, nothing else.`;
             try {
                 const ctx: AgentContext = { conversationHistory: [] };
                 const response = await orchestrator.callAgent('planning', prompt, ctx);
-                let answers: string[] = [];
-                try {
-                    const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
-                    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-                    if (jsonMatch) answers = JSON.parse(jsonMatch[0]);
-                } catch { /* parse failed */ }
+                const autofillParseResult = parseAIJson<string[]>(response.content, 'ai_questions_autofill');
+                const answers: string[] = Array.isArray(autofillParseResult.data) ? autofillParseResult.data : [];
+                if (autofillParseResult.repaired) {
+                    database.addAuditLog('planning', 'json_repaired', 'AI question autofill JSON was repaired');
+                }
 
                 const autofilled = [];
                 for (let i = 0; i < pending.length && i < answers.length; i++) {
@@ -3284,6 +3500,302 @@ Only return the JSON array.`;
                 json(res, { success: true });
                 return true;
             }
+        }
+
+        // ==================== DESIGN QA PIPELINE (C6) ====================
+
+        // POST /api/design/architect-review — runs Design Architect review
+        if (route === 'design/architect-review' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const agent = orchestrator.getDesignArchitectAgent();
+            const response = await agent.reviewDesign(planId);
+            eventBus.emit('design:architect_review_completed', 'webapp', { planId, response: response.content.substring(0, 200) });
+            json(res, { success: true, review: response.content, actions: response.actions });
+            return true;
+        }
+
+        // POST /api/design/gap-analysis — runs Gap Hunter analysis
+        if (route === 'design/gap-analysis' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const agent = orchestrator.getGapHunterAgent();
+            const analysis = await agent.analyzeGaps(planId);
+            eventBus.emit('design:gap_analysis_completed', 'webapp', { planId, gap_count: analysis.gaps.length });
+            json(res, analysis);
+            return true;
+        }
+
+        // POST /api/design/harden — generates draft proposals from gap analysis
+        if (route === 'design/harden' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            const gapAnalysis = body.gap_analysis as import('../types').DesignGapAnalysis;
+            if (!planId || !gapAnalysis) { json(res, { error: 'plan_id and gap_analysis required' }, 400); return true; }
+            const agent = orchestrator.getDesignHardenerAgent();
+            const result = await agent.hardenDesign(planId, gapAnalysis);
+            eventBus.emit('design:hardening_completed', 'webapp', { planId, drafts_created: result.drafts_created });
+            json(res, result);
+            return true;
+        }
+
+        // POST /api/design/full-qa — runs all 3 phases sequentially
+        if (route === 'design/full-qa' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+
+            eventBus.emit('design:qa_pipeline_started', 'webapp', { planId });
+
+            // Step 1: Architect Review
+            const architectAgent = orchestrator.getDesignArchitectAgent();
+            const reviewResponse = await architectAgent.reviewDesign(planId);
+            const scoreMatch = reviewResponse.content.match(/Score:\s*(\d+)/);
+            const architectScore = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+            eventBus.emit('design:architect_review_completed', 'webapp', { planId, score: architectScore });
+
+            // Step 2: Gap Analysis
+            const gapAgent = orchestrator.getGapHunterAgent();
+            const gapAnalysis = await gapAgent.analyzeGaps(planId);
+            eventBus.emit('design:gap_analysis_completed', 'webapp', { planId, gap_count: gapAnalysis.gaps.length });
+
+            // Step 3: Hardening (draft proposals)
+            const hardenerAgent = orchestrator.getDesignHardenerAgent();
+            const hardenResult = await hardenerAgent.hardenDesign(planId, gapAnalysis);
+            eventBus.emit('design:hardening_completed', 'webapp', { planId, drafts_created: hardenResult.drafts_created });
+
+            eventBus.emit('design:qa_pipeline_completed', 'webapp', {
+                planId, score: architectScore, gaps: gapAnalysis.gaps.length, drafts: hardenResult.drafts_created,
+            });
+
+            json(res, {
+                architect_score: architectScore,
+                architect_review: reviewResponse.content,
+                gap_analysis: gapAnalysis,
+                hardening_result: hardenResult,
+            });
+            return true;
+        }
+
+        // ==================== DRAFT COMPONENTS (C4) ====================
+
+        // GET /api/design/drafts?plan_id=X — list pending drafts
+        if (route === 'design/drafts' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const allComponents = database.getDesignComponentsByPlan(planId);
+            const drafts = allComponents.filter((c: any) => c.is_draft === true || c.is_draft === 1);
+            json(res, drafts);
+            return true;
+        }
+
+        // POST /api/design/drafts/:id/approve — approve a draft
+        {
+            const draftId = extractParam(route, 'design/drafts/:id/approve');
+            if (draftId && method === 'POST') {
+                database.updateDesignComponent(draftId, { is_draft: 0 } as any);
+                eventBus.emit('design:draft_approved', 'webapp', { componentId: draftId });
+                database.addAuditLog('webapp', 'draft_approved', `Draft component ${draftId} approved`);
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // POST /api/design/drafts/:id/reject — reject (delete) a draft
+        {
+            const draftId = extractParam(route, 'design/drafts/:id/reject');
+            if (draftId && method === 'POST') {
+                database.deleteDesignComponent(draftId);
+                eventBus.emit('design:draft_rejected', 'webapp', { componentId: draftId });
+                database.addAuditLog('webapp', 'draft_rejected', `Draft component ${draftId} rejected`);
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // POST /api/design/drafts/approve-all?plan_id=X — batch approve
+        if (route === 'design/drafts/approve-all' && method === 'POST') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id') || ((await parseBody(req)) as any).plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const all = database.getDesignComponentsByPlan(planId);
+            let count = 0;
+            for (const c of all) {
+                if ((c as any).is_draft === true || (c as any).is_draft === 1) {
+                    database.updateDesignComponent(c.id, { is_draft: 0 } as any);
+                    count++;
+                }
+            }
+            eventBus.emit('design:draft_approved', 'webapp', { planId, count });
+            json(res, { success: true, approved: count });
+            return true;
+        }
+
+        // POST /api/design/drafts/reject-all?plan_id=X — batch reject (delete)
+        if (route === 'design/drafts/reject-all' && method === 'POST') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id') || ((await parseBody(req)) as any).plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const all = database.getDesignComponentsByPlan(planId);
+            let count = 0;
+            for (const c of all) {
+                if ((c as any).is_draft === true || (c as any).is_draft === 1) {
+                    database.deleteDesignComponent(c.id);
+                    count++;
+                }
+            }
+            eventBus.emit('design:draft_rejected', 'webapp', { planId, count });
+            json(res, { success: true, rejected: count });
+            return true;
+        }
+
+        // ==================== QUESTION QUEUE (E2) ====================
+
+        // GET /api/questions/queue — pending questions sorted by priority
+        if (route === 'questions/queue' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const questions = database.getAIQuestionsByPlan(planId, 'pending');
+            // Sort by queue_priority (P1 first) then created_at
+            questions.sort((a: any, b: any) => {
+                const pa = a.queue_priority ?? 2;
+                const pb = b.queue_priority ?? 2;
+                if (pa !== pb) return pa - pb;
+                return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+            });
+            json(res, questions);
+            return true;
+        }
+
+        // GET /api/questions/queue/count — badge counts
+        if (route === 'questions/queue/count' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const questions = database.getAIQuestionsByPlan(planId, 'pending');
+            const counts = { total: questions.length, p1: 0, p2: 0, p3: 0 };
+            for (const q of questions) {
+                const p = (q as any).queue_priority ?? 2;
+                if (p === 1) counts.p1++;
+                else if (p === 2) counts.p2++;
+                else counts.p3++;
+            }
+            json(res, counts);
+            return true;
+        }
+
+        // POST /api/questions/:id/dismiss — dismiss with Ghost Ticket 3-strike logic
+        {
+            const qId = extractParam(route, 'questions/:id/dismiss');
+            if (qId && method === 'POST') {
+                const question = database.getAIQuestion(qId);
+                if (!question) { json(res, { error: 'Question not found' }, 404); return true; }
+                const currentDismissCount = (question as any).dismiss_count ?? 0;
+                const newDismissCount = currentDismissCount + 1;
+
+                if (newDismissCount >= 3 && question.is_ghost) {
+                    // 3rd dismiss: auto-unblock with note
+                    database.updateAIQuestion(qId, { status: 'dismissed', dismiss_count: newDismissCount } as any);
+                    if ((question as any).source_ticket_id) {
+                        const originalTicket = database.getTicket((question as any).source_ticket_id);
+                        if (originalTicket) {
+                            database.addTicketReply(originalTicket.id, 'system',
+                                'User dismissed question 3 times — proceeding with AI\'s best assumption.');
+                            database.updateTicket(originalTicket.id, {
+                                blocking_ticket_id: undefined,
+                                processing_status: 'queued',
+                            });
+                            eventBus.emit('ticket:unblocked', 'webapp', { ticketId: originalTicket.id });
+                        }
+                    }
+                    // Resolve the ghost ticket
+                    if (question.ticket_id) {
+                        database.resolveGhostTicket(question.ticket_id);
+                    }
+                    json(res, { success: true, action: 'auto_unblocked', dismiss_count: newDismissCount });
+                } else {
+                    database.updateAIQuestion(qId, { dismiss_count: newDismissCount } as any);
+                    database.dismissAIQuestion(qId);
+                    eventBus.emit('question:dismissed', 'webapp', { questionId: qId, dismiss_count: newDismissCount });
+                    json(res, { success: true, action: 'dismissed', dismiss_count: newDismissCount });
+                }
+                return true;
+            }
+        }
+
+        // ==================== PHASE STATUS (F1) ====================
+
+        // GET /api/plans/:id/phase — get current phase info
+        {
+            const phaseId = extractParam(route, 'plans/:id/phase');
+            if (phaseId && !route.includes('/approve') && method === 'GET') {
+                const phaseInfo = database.getPlanPhase(phaseId);
+                if (!phaseInfo) { json(res, { error: 'Plan not found' }, 404); return true; }
+                json(res, phaseInfo);
+                return true;
+            }
+        }
+
+        // POST /api/plans/:id/approve-design — approve design and advance phase
+        {
+            const approveId = extractParam(route, 'plans/:id/approve-design');
+            if (approveId && method === 'POST') {
+                database.approvePlanDesign(approveId);
+                eventBus.emit('design:approved', 'webapp', { planId: approveId });
+                database.addAuditLog('webapp', 'design_approved', `Design approved for plan ${approveId}`);
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // ==================== BOSS HEALTH CHECK (B9) ====================
+
+        if (route === 'boss/health-check' && method === 'POST') {
+            eventBus.emit('boss:health_check_started', 'webapp', {});
+            const ctx: AgentContext = { conversationHistory: [] };
+            const response = await orchestrator.callAgent('boss', 'Run a health check on the system. Check for stale tickets, blocked tasks, pending questions, and agent status.', ctx);
+            eventBus.emit('boss:health_check_completed', 'webapp', { assessment: response.content.substring(0, 200) });
+            json(res, { success: true, assessment: response.content, actions: response.actions });
+            return true;
+        }
+
+        // ==================== SETTINGS (H) ====================
+
+        if (route === 'settings' && method === 'GET') {
+            const cfg = config.getConfig();
+            json(res, {
+                designQaScoreThreshold: cfg.designQaScoreThreshold ?? 80,
+                maxActiveTickets: cfg.maxActiveTickets ?? 10,
+                maxTicketRetries: cfg.maxTicketRetries ?? 3,
+                maxClarificationRounds: cfg.maxClarificationRounds ?? 5,
+                bossIdleTimeoutMinutes: cfg.bossIdleTimeoutMinutes ?? 5,
+                bossStuckPhaseMinutes: cfg.bossStuckPhaseMinutes ?? 30,
+                bossTaskOverloadThreshold: cfg.bossTaskOverloadThreshold ?? 20,
+                bossEscalationThreshold: cfg.bossEscalationThreshold ?? 5,
+                clarityAutoResolveScore: cfg.clarityAutoResolveScore ?? 85,
+                clarityClarificationScore: cfg.clarityClarificationScore ?? 70,
+                llmEndpoint: cfg.llm.endpoint,
+                llmModel: cfg.llm.model,
+            });
+            return true;
+        }
+
+        if (route === 'settings' && method === 'PUT') {
+            const body = await parseBody(req);
+            const updates: Record<string, unknown> = {};
+            if (body.designQaScoreThreshold !== undefined) updates.designQaScoreThreshold = Math.max(50, Number(body.designQaScoreThreshold));
+            if (body.maxActiveTickets !== undefined) updates.maxActiveTickets = Number(body.maxActiveTickets);
+            if (body.maxTicketRetries !== undefined) updates.maxTicketRetries = Number(body.maxTicketRetries);
+            if (body.maxClarificationRounds !== undefined) updates.maxClarificationRounds = Number(body.maxClarificationRounds);
+            if (body.bossIdleTimeoutMinutes !== undefined) updates.bossIdleTimeoutMinutes = Number(body.bossIdleTimeoutMinutes);
+            if (body.bossStuckPhaseMinutes !== undefined) updates.bossStuckPhaseMinutes = Number(body.bossStuckPhaseMinutes);
+            if (body.bossTaskOverloadThreshold !== undefined) updates.bossTaskOverloadThreshold = Number(body.bossTaskOverloadThreshold);
+            if (body.bossEscalationThreshold !== undefined) updates.bossEscalationThreshold = Number(body.bossEscalationThreshold);
+            if (body.clarityAutoResolveScore !== undefined) updates.clarityAutoResolveScore = Number(body.clarityAutoResolveScore);
+            if (body.clarityClarificationScore !== undefined) updates.clarityClarificationScore = Number(body.clarityClarificationScore);
+            config.updateConfig(updates as any);
+            eventBus.emit('system:config_updated', 'webapp', { fields: Object.keys(updates) });
+            json(res, { success: true });
+            return true;
         }
 
         // Not found

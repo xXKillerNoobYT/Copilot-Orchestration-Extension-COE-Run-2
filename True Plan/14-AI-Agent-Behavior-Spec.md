@@ -1,7 +1,24 @@
 # AI Agent Behavior Specification
 
-**Version**: 2.0
-**Date**: February 12, 2026
+**Version**: 3.0
+**Date**: February 13, 2026
+**Status**: Specification — CodingAgentService and EthicsEngine implemented
+**Depends On**: [11 - PRD](11-Program-Designer-PRD.md) §8, [08 - Safety](08-Context-Management-and-Safety.md), [10 - AI Principles](10-AI-Operating-Principles.md)
+
+**Changelog**:
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Feb 8, 2026 | Initial behavioral spec — core identity, intent classification, state machine |
+| 2.0 | Feb 12, 2026 | Added code generation pipeline, ethics enforcement, sync coordination, integration architecture |
+| 3.0 | Feb 13, 2026 | Standardized header, User/Dev views, Mermaid state diagram, prompt engineering section, cross-references |
+
+### How to Read This Document
+
+This is the behavioral specification for the AI coding agent that lives inside the visual program designer. It defines what the agent does, how it decides, what it refuses, and how it coordinates across devices. If [11 - PRD](11-Program-Designer-PRD.md) §8 says "what to build," this document says **"how it should behave."**
+
+> **As a User**: Focus on §1 (Core Identity), §3 (Ethical Constraints — what the agent will and won't do), §5 (Behavioral States — what it looks like when the agent is working), and §6 (Logging — what gets recorded). These explain what you will experience when interacting with the agent.
+>
+> **As a Developer**: Focus on §2 (Architectural Responsibilities — the classification pipeline, code generation pipeline, task handling), §4 (Multi-Device Coordination — sync protocol), §7 (Self-Maintenance), and §8 (Integration — where services live, event bus contracts, database dependencies). These are engineering-ready specs.
 
 ---
 
@@ -436,7 +453,29 @@ Before editing a shared resource:
 
 ## 5. Behavioral States
 
+> **User View**: The agent always shows you what state it is in. A status indicator in the command bar displays: "Ready" (idle), "Working..." (active), "Review needed" (awaiting confirmation), or "Blocked" (ethics enforcement). You are never left guessing what the agent is doing.
+>
+> **Developer View**: States are tracked in `CodingAgentService.currentState`. Transitions emit events through the EventBus (e.g., `coding_agent:generating`, `coding_agent:diff_pending`). The state machine is not formally enforced — it is a design guideline for handler implementations.
+
 ### State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Active: user input received
+    Active --> AwaitingConfirmation: needs approval (diff/preview)
+    Active --> Executing: safe action (auto-execute)
+    Active --> EthicsEnforcement: risk detected
+    AwaitingConfirmation --> Executing: user approves
+    AwaitingConfirmation --> Idle: user rejects
+    Executing --> Completed: action applied
+    Completed --> Idle: log + notify
+    EthicsEnforcement --> Idle: action blocked + logged
+    Idle --> ConflictResolution: sync conflict detected
+    ConflictResolution --> Idle: conflict resolved
+```
+
+**ASCII Fallback:**
 
 ```
                     ┌──────────┐
@@ -708,3 +747,85 @@ Requires these new tables (defined in Document 13):
 The AI agent is the central intelligence of the program designer. It translates user intent into code, enforces ethical boundaries, coordinates across devices, and maintains full transparency. Every action is logged, every change is reviewable, and the user always has final authority.
 
 The agent serves the user — never the other way around.
+
+---
+
+## Appendix A: Prompt Engineering Guide
+
+This section documents how the AI coding agent's prompts are constructed. The agent uses LM Studio (local `ministral-3-14b-reasoning` model, 32K context window) for all LLM operations.
+
+### System Prompt Structure
+
+The system prompt is assembled dynamically by `CodingAgentService.buildSystemPrompt()`:
+
+```
+┌──────────────────────────────────────────────┐
+│ 1. ROLE DEFINITION (fixed)                    │
+│    "You are a coding agent integrated into a  │
+│     visual program designer..."               │
+├──────────────────────────────────────────────┤
+│ 2. CURRENT DESIGN STATE (dynamic)             │
+│    JSON representation of the component tree  │
+│    for the active page                        │
+├──────────────────────────────────────────────┤
+│ 3. DESIGN TOKENS (dynamic)                    │
+│    Active colors, spacing, typography tokens  │
+├──────────────────────────────────────────────┤
+│ 4. EXISTING CODE CONTEXT (dynamic)            │
+│    Last exported code for this page           │
+├──────────────────────────────────────────────┤
+│ 5. CONSTRAINTS (fixed)                        │
+│    Safety rules: no fs access, no unknown     │
+│    endpoints, no user data collection         │
+├──────────────────────────────────────────────┤
+│ 6. OUTPUT FORMAT (fixed)                      │
+│    CODE_BLOCK, EXPLANATION, FILES_AFFECTED,   │
+│    DIFF (if modifying)                        │
+└──────────────────────────────────────────────┘
+```
+
+### Small Model Optimization
+
+The agent is designed for small local models (8B–14B parameters). This constrains prompt design:
+
+| Constraint | Impact on Prompts | Mitigation |
+|-----------|-------------------|------------|
+| 32K context window | Cannot include full file contents | Extract only the active page's component tree (typically <2K tokens) |
+| Limited reasoning depth | Complex multi-step generation may fail | Break into single-component generation; compose results programmatically |
+| Instruction following varies | May not respect output format | Use XML-tagged sections (`<CODE_BLOCK>`, `<EXPLANATION>`) for reliable parsing |
+| No fine-tuning available | Cannot train on project-specific patterns | Include 1-2 few-shot examples in the system prompt for each intent type |
+
+### Intent-Specific Prompt Templates
+
+| Intent | System Prompt Addition | User Message Format |
+|--------|----------------------|---------------------|
+| `build` | "Generate a new component. Follow the schema exactly." | `"Create a {componentType} with properties: {props}"` |
+| `modify` | "Modify the existing component. Show a diff." | `"Change {componentId} property {prop} to {value}"` |
+| `explain` | "Explain this code in simple terms. Use bullet points." | `"Explain what {code/component} does"` |
+| `fix` | "Diagnose and fix the issue. Show before/after." | `"Fix {description of problem}"` |
+| `automate` | "Create an IF/THEN logic block. Use the LogicBlock schema." | `"When {condition}, then {action}"` |
+| `query` | "Search the design and return matching components." | `"Find all {criteria}"` |
+
+### Prompt Quality Rules
+
+1. **Never exceed 4K tokens for the system prompt** — leave room for the user message and response
+2. **Always include at least one few-shot example** — models perform significantly better with examples
+3. **Use XML tags for output sections** — more reliable than markdown fences for parsing
+4. **Include the ethics constraints in every prompt** — the model must be reminded every call (no memory across calls)
+5. **Serialize component trees as flat JSON arrays** — nested trees consume more tokens for the same information
+
+> **Developer View**: The prompt template lives in `CodingAgentService.buildSystemPrompt()` in `src/core/coding-agent.ts`. The component tree is serialized by `extractComponentTree()`. Ethics constraints are injected as a final section by `EthicsEngine.getPromptConstraints()`. Token counting uses the rough heuristic of `text.length / 4` — accurate enough for prompt budget management.
+
+---
+
+## Cross-References
+
+| Document | Relationship |
+|----------|-------------|
+| [11 - PRD §8](11-Program-Designer-PRD.md) | Feature requirements this spec fulfills |
+| [13 - Implementation Plan §6](13-Implementation-Plan.md) | Engineering implementation of this behavioral spec |
+| [12 - Agile Stories, Epic 3](12-Agile-Stories-and-Tasks.md) | User stories for the AI coding agent |
+| [08 - Safety](08-Context-Management-and-Safety.md) | Security rules and input validation the agent follows |
+| [10 - AI Operating Principles](10-AI-Operating-Principles.md) | Foundational AI principles (tool-first, self-annealing, single-turn optimization) |
+| [03 - Agent Teams](03-Agent-Teams-and-Roles.md) | Where CodingAgentService fits in the agent roster |
+| [07 - Lifecycle](07-Program-Lifecycle-and-Evolution.md) | Evolution pipeline that optimizes the agent's behavior over time |

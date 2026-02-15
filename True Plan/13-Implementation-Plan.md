@@ -1,9 +1,26 @@
 # 13 - Developer Implementation Plan: Program Designer v2.0
 
-**Version:** 2.1
+**Version:** 3.0
 **Date:** February 13, 2026
 **Status:** Specification — v2.0 core services IMPLEMENTED, webapp integration COMPLETE
 **Scope:** API shapes, storage formats, sync protocols, component-to-code mappings, AI agent architecture
+**Depends On**: [11 - PRD](11-Program-Designer-PRD.md), [12 - Agile Stories](12-Agile-Stories-and-Tasks.md)
+
+**Changelog**:
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Feb 8, 2026 | Initial type definitions and database schema |
+| 2.0 | Feb 12, 2026 | Full 8-section implementation spec: types, DB, API, component mapping, sync, AI agent, events, phased schedule |
+| 2.1 | Feb 13, 2026 | Added implementation status section with phase-by-phase tracking |
+| 3.0 | Feb 13, 2026 | Standardized header, User/Dev views, migration & rollback strategy, cross-references |
+
+### How to Read This Document
+
+This is a pure engineering document. It contains production-ready TypeScript interfaces, SQL schemas, API endpoint definitions, and protocol specifications. Every section is directly implementable — copy the TypeScript code into the codebase.
+
+> **As a User**: You typically do not need this document. It is the engineering blueprint for the features described in [11 - PRD](11-Program-Designer-PRD.md). If you want to understand what the system does, read the PRD. If you want to understand how it is built, read on.
+>
+> **As a Developer**: This is your primary reference during implementation. Sections are ordered by dependency: types first (§1), then database (§2), then API (§3), then higher-level systems (§4–7), then schedule (§8). Each section includes the exact code to write — interfaces, SQL DDL, API shapes, and event contracts.
 
 ---
 
@@ -2632,3 +2649,61 @@ export type COEEventType =
 
 - **40 test suites**, **1,520+ tests**, all passing
 - Coverage threshold: **100%** (enforced in `jest.config.js`)
+
+---
+
+## Migration & Rollback Strategy
+
+### Database Migration
+
+v2.0 adds 8 new tables and modifies 2 existing tables. All changes are **additive** — no existing columns are removed or renamed.
+
+| Migration Step | SQL | Rollback SQL | Risk |
+|---------------|-----|-------------|------|
+| Create `sync_state` | `CREATE TABLE IF NOT EXISTS sync_state (...)` | `DROP TABLE IF EXISTS sync_state` | Low — new table |
+| Create `sync_versions` | `CREATE TABLE IF NOT EXISTS sync_versions (...)` | `DROP TABLE IF EXISTS sync_versions` | Low — new table |
+| Create `sync_locks` | `CREATE TABLE IF NOT EXISTS sync_locks (...)` | `DROP TABLE IF EXISTS sync_locks` | Low — new table |
+| Create `sync_conflicts` | `CREATE TABLE IF NOT EXISTS sync_conflicts (...)` | `DROP TABLE IF EXISTS sync_conflicts` | Low — new table |
+| Create `ethics_log` | `CREATE TABLE IF NOT EXISTS ethics_log (...)` | `DROP TABLE IF EXISTS ethics_log` | Low — P1 ethics audit data |
+| Create `ethics_modules` | `CREATE TABLE IF NOT EXISTS ethics_modules (...)` | `DROP TABLE IF EXISTS ethics_modules` | Low — new table |
+| Create `component_templates` | `CREATE TABLE IF NOT EXISTS component_templates (...)` | `DROP TABLE IF EXISTS component_templates` | Low — new table |
+| Create `ai_commands` | `CREATE TABLE IF NOT EXISTS ai_commands (...)` | `DROP TABLE IF EXISTS ai_commands` | Low — new table |
+| Add `design_components.sync_version` | `ALTER TABLE design_components ADD COLUMN sync_version INTEGER DEFAULT 0` | Cannot DROP COLUMN in SQLite — requires table rebuild | Medium |
+| Add `design_pages.sync_version` | `ALTER TABLE design_pages ADD COLUMN sync_version INTEGER DEFAULT 0` | Cannot DROP COLUMN in SQLite — requires table rebuild | Medium |
+
+> **Developer View**: All migrations run in `database.ts:initialize()` using `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN`. SQLite does not support `IF NOT EXISTS` for `ADD COLUMN` — wrap in a try/catch that ignores "duplicate column name" errors. For true rollback, you would need to rebuild the table (copy data → drop → recreate → re-insert). In practice, rollback means restoring a backup of `tickets.db`.
+
+**Backup Strategy:**
+1. Before any migration, copy `tickets.db` to `tickets.db.backup-{timestamp}`
+2. Run migrations inside a single transaction
+3. If any migration fails, roll back the transaction and restore from backup
+4. Keep the 3 most recent backups; delete older ones
+
+### Service Rollback
+
+If a v2.0 service causes issues in production:
+
+| Service | Rollback Action | Data Impact |
+|---------|----------------|-------------|
+| CodingAgentService | Remove from `extension.ts` constructor chain | `ai_commands` table stops receiving new entries; existing data preserved |
+| EthicsEngine | Remove from CodingAgent's `evaluateAction()` call | AI agent operates without ethics gates — NOT recommended in production |
+| SyncService | Remove from `extension.ts` | Sync stops; all data remains local-only; no data loss |
+| ConflictResolver | Remove from SyncService | Sync conflicts fail-safe to "ask user" mode |
+| ComponentSchemaService | Remove from `extension.ts` | Component library shows empty; designer still works with existing components |
+| TransparencyLogger | Remove from service chain | Audit trail stops; no functional impact |
+
+> **User View**: If something goes wrong after an update, the extension can be rolled back by installing the previous version from the VS Code marketplace. Your data (tasks, designs, tickets) is preserved in the SQLite database. The worst case is a brief period where new v2.0 features are unavailable while a fix is prepared.
+
+---
+
+## Cross-References
+
+| Document | Relationship |
+|----------|-------------|
+| [11 - PRD](11-Program-Designer-PRD.md) | Source requirements — this plan implements every feature specified in the PRD |
+| [12 - Agile Stories](12-Agile-Stories-and-Tasks.md) | User stories and developer tasks that map to this implementation |
+| [14 - AI Agent Behavior Spec](14-AI-Agent-Behavior-Spec.md) | Behavioral specification implemented in §6 (AI Agent Architecture) |
+| [02 - Architecture](02-System-Architecture-and-Design.md) | 4-layer architecture this plan extends |
+| [07 - Lifecycle](07-Program-Lifecycle-and-Evolution.md) | Evolution pipeline that optimizes the services built here |
+| [08 - Safety](08-Context-Management-and-Safety.md) | Security and context management rules these services follow |
+| [09 - Features](09-Features-and-Capabilities.md) | Feature catalog where these implementations are registered |

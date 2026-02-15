@@ -12,6 +12,10 @@ import { BossAgent } from './boss-agent';
 import { CustomAgentRunner } from './custom-agent';
 import { UITestingAgent } from './ui-testing-agent';
 import { ObservationAgent } from './observation-agent';
+import { DesignArchitectAgent } from './design-architect-agent';
+import { GapHunterAgent } from './gap-hunter-agent';
+import { DesignHardenerAgent } from './design-hardener-agent';
+import { DecisionMemoryAgent } from './decision-memory-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
@@ -21,21 +25,29 @@ import {
     ConversationRole, Task, TaskStatus
 } from '../types';
 
-const INTENT_CATEGORIES = ['planning', 'verification', 'ui_testing', 'observation', 'question', 'research', 'custom', 'general'] as const;
+const INTENT_CATEGORIES = [
+    'planning', 'verification', 'ui_testing', 'observation',
+    'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
+    'question', 'research', 'custom', 'general',
+] as const;
 
 /**
  * Priority order for tie-breaking: lower index = higher priority.
- * verification > planning > question > research > custom > general
+ * verification > ui_testing > observation > design agents > planning > question > research > custom > general
  */
 const INTENT_PRIORITY: Record<string, number> = {
     verification: 0,
     ui_testing: 1,
     observation: 2,
-    planning: 3,
-    question: 4,
-    research: 5,
-    custom: 6,
-    general: 7,
+    design_architect: 3,
+    gap_hunter: 4,
+    design_hardener: 5,
+    decision_memory: 6,
+    planning: 7,
+    question: 8,
+    research: 9,
+    custom: 10,
+    general: 11,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -76,6 +88,22 @@ const KEYWORD_MAP: Record<string, string[]> = {
         'code quality', 'agent performance', 'health check',
         'system review', 'find improvements', 'suggest fix',
         'recurring issue', 'pattern detection', 'architecture review',
+    ],
+    design_architect: [
+        'design review', 'architecture review', 'page hierarchy', 'design assessment',
+        'design score', 'structure review', 'score design', 'review design quality',
+    ],
+    gap_hunter: [
+        'gap analysis', 'find gaps', 'missing components', 'missing pages',
+        'coverage analysis', 'design gaps', 'completeness check', 'find missing',
+    ],
+    design_hardener: [
+        'harden design', 'fix gaps', 'complete design', 'fill gaps',
+        'add missing', 'draft components', 'propose additions', 'draft proposals',
+    ],
+    decision_memory: [
+        'previous decision', 'past answer', 'user preference', 'decision history',
+        'conflict check', 'what did user say', 'decision lookup', 'past choices',
     ],
     custom: [
         'custom agent', 'run agent', 'specialist', 'domain expert',
@@ -138,6 +166,10 @@ When classifying, respond with ONLY the category name as a single lowercase word
     private customAgentRunner!: CustomAgentRunner;
     private uiTestingAgent!: UITestingAgent;
     private observationAgent!: ObservationAgent;
+    private designArchitectAgent!: DesignArchitectAgent;
+    private gapHunterAgent!: GapHunterAgent;
+    private designHardenerAgent!: DesignHardenerAgent;
+    private decisionMemoryAgent!: DecisionMemoryAgent;
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
 
@@ -170,6 +202,10 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.customAgentRunner = new CustomAgentRunner(this.database, this.llm, this.config, this.outputChannel);
         this.uiTestingAgent = new UITestingAgent(this.database, this.llm, this.config, this.outputChannel);
         this.observationAgent = new ObservationAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.designArchitectAgent = new DesignArchitectAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.gapHunterAgent = new GapHunterAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.designHardenerAgent = new DesignHardenerAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.decisionMemoryAgent = new DecisionMemoryAgent(this.database, this.llm, this.config, this.outputChannel);
 
         await Promise.all([
             this.planningAgent.initialize(),
@@ -181,6 +217,10 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.customAgentRunner.initialize(),
             this.uiTestingAgent.initialize(),
             this.observationAgent.initialize(),
+            this.designArchitectAgent.initialize(),
+            this.gapHunterAgent.initialize(),
+            this.designHardenerAgent.initialize(),
+            this.decisionMemoryAgent.initialize(),
         ]);
 
         this.outputChannel.appendLine('All agents initialized.');
@@ -289,10 +329,14 @@ When classifying, respond with ONLY the category name as a single lowercase word
             case 'verification': return this.verificationAgent;
             case 'ui_testing': return this.uiTestingAgent;
             case 'observation': return this.observationAgent;
+            case 'design_architect': return this.designArchitectAgent;
+            case 'gap_hunter': return this.gapHunterAgent;
+            case 'design_hardener': return this.designHardenerAgent;
+            case 'decision_memory': return this.decisionMemoryAgent;
             case 'question': return this.answerAgent;
             case 'research': return this.researchAgent;
             case 'custom': return this.customAgentRunner;
-            case 'general': return this.answerAgent; // default to answer agent
+            case 'general': return this.answerAgent;
             default: return this.answerAgent;
         }
     }
@@ -309,6 +353,10 @@ When classifying, respond with ONLY the category name as a single lowercase word
             clarity: this.clarityAgent,
             boss: this.bossAgent,
             custom: this.customAgentRunner,
+            design_architect: this.designArchitectAgent,
+            gap_hunter: this.gapHunterAgent,
+            design_hardener: this.designHardenerAgent,
+            decision_memory: this.decisionMemoryAgent,
         };
         return agents[name.toLowerCase()] || null;
     }
@@ -403,6 +451,12 @@ When classifying, respond with ONLY the category name as a single lowercase word
     getClarityAgent(): ClarityAgent { return this.clarityAgent; }
     getBossAgent(): BossAgent { return this.bossAgent; }
     getCustomAgentRunner(): CustomAgentRunner { return this.customAgentRunner; }
+    getUITestingAgent(): UITestingAgent { return this.uiTestingAgent; }
+    getObservationAgent(): ObservationAgent { return this.observationAgent; }
+    getDesignArchitectAgent(): DesignArchitectAgent { return this.designArchitectAgent; }
+    getGapHunterAgent(): GapHunterAgent { return this.gapHunterAgent; }
+    getDesignHardenerAgent(): DesignHardenerAgent { return this.designHardenerAgent; }
+    getDecisionMemoryAgent(): DecisionMemoryAgent { return this.decisionMemoryAgent; }
 
     /**
      * Get all agents (including the orchestrator itself) as an array.
@@ -418,6 +472,12 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.clarityAgent,
             this.bossAgent,
             this.customAgentRunner,
+            this.uiTestingAgent,
+            this.observationAgent,
+            this.designArchitectAgent,
+            this.gapHunterAgent,
+            this.designHardenerAgent,
+            this.decisionMemoryAgent,
         ];
     }
 
@@ -449,5 +509,11 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.clarityAgent?.dispose();
         this.bossAgent?.dispose();
         this.customAgentRunner?.dispose();
+        this.uiTestingAgent?.dispose();
+        this.observationAgent?.dispose();
+        this.designArchitectAgent?.dispose();
+        this.gapHunterAgent?.dispose();
+        this.designHardenerAgent?.dispose();
+        this.decisionMemoryAgent?.dispose();
     }
 }

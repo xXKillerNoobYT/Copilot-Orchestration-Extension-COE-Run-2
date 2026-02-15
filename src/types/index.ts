@@ -47,7 +47,11 @@ export enum AgentType {
     Boss = 'boss',
     Custom = 'custom',
     UITesting = 'ui_testing',
-    Observation = 'observation'
+    Observation = 'observation',
+    DesignArchitect = 'design_architect',
+    GapHunter = 'gap_hunter',
+    DesignHardener = 'design_hardener',
+    DecisionMemory = 'decision_memory'
 }
 
 export enum AgentStatus {
@@ -63,6 +67,44 @@ export enum PlanStatus {
     Completed = 'completed',
     Archived = 'archived'
 }
+
+/** Project lifecycle phases — grouped into 3 stages */
+export enum ProjectPhase {
+    // Stage 1: Plan & Design
+    Planning = 'planning',
+    Designing = 'designing',
+    DesignReview = 'design_review',
+    TaskGeneration = 'task_generation',
+    // Stage 2: Code Implementation
+    Coding = 'coding',
+    DesignUpdate = 'design_update',
+    // Stage 3: Verification
+    Verification = 'verification',
+    Complete = 'complete',
+}
+
+/** Maps each phase to its stage number (1, 2, or 3) */
+export const PHASE_STAGE_MAP: Record<ProjectPhase, number> = {
+    [ProjectPhase.Planning]: 1,
+    [ProjectPhase.Designing]: 1,
+    [ProjectPhase.DesignReview]: 1,
+    [ProjectPhase.TaskGeneration]: 1,
+    [ProjectPhase.Coding]: 2,
+    [ProjectPhase.DesignUpdate]: 2,
+    [ProjectPhase.Verification]: 3,
+    [ProjectPhase.Complete]: 3,
+};
+
+/** Phase display order for UI rendering */
+export const PHASE_ORDER: ProjectPhase[] = [
+    ProjectPhase.Planning,
+    ProjectPhase.Designing,
+    ProjectPhase.DesignReview,
+    ProjectPhase.TaskGeneration,
+    ProjectPhase.Coding,
+    ProjectPhase.Verification,
+    ProjectPhase.Complete,
+];
 
 export enum VerificationStatus {
     NotStarted = 'not_started',
@@ -132,6 +174,12 @@ export interface Task {
     updated_at: string;
 }
 
+/** Processing status for tickets in the auto-processing queue */
+export type TicketProcessingStatus = 'queued' | 'processing' | 'awaiting_user' | 'verifying' | 'holding' | null;
+
+/** Deliverable type determines verification strategy */
+export type TicketDeliverableType = 'communication' | 'design_change' | 'code_generation' | 'verification' | 'plan_generation' | null;
+
 export interface Ticket {
     id: string;
     ticket_number: number;
@@ -145,6 +193,19 @@ export interface Ticket {
     parent_ticket_id: string | null;
     auto_created: boolean;
     operation_type: string;
+    // v4.0 — Ticket processing fields
+    acceptance_criteria: string | null;
+    blocking_ticket_id: string | null;
+    is_ghost: boolean;
+    processing_agent: string | null;
+    processing_status: TicketProcessingStatus;
+    deliverable_type: TicketDeliverableType;
+    verification_result: string | null;
+    source_page_ids: string | null;
+    source_component_ids: string | null;
+    retry_count: number;
+    max_retries: number;
+    stage: number;
     created_at: string;
     updated_at: string;
 }
@@ -380,6 +441,20 @@ export interface COEConfig {
         enabled: boolean;
         sensitivity: 'low' | 'medium' | 'high' | 'maximum';
     };
+    /** Design QA thresholds (v4.0) */
+    designQaScoreThreshold?: number;       // default 80, min 50
+    /** Ticket processing limits (v4.0) */
+    maxActiveTickets?: number;             // default 10
+    maxTicketRetries?: number;             // default 3
+    maxClarificationRounds?: number;       // default 5
+    /** Boss AI thresholds (v4.0) */
+    bossIdleTimeoutMinutes?: number;       // default 5
+    bossStuckPhaseMinutes?: number;        // default 30
+    bossTaskOverloadThreshold?: number;    // default 20
+    bossEscalationThreshold?: number;      // default 5
+    /** Clarity Agent thresholds (v4.0) */
+    clarityAutoResolveScore?: number;      // default 85
+    clarityClarificationScore?: number;    // default 70
 }
 
 // --- Agent Framework Types ---
@@ -432,6 +507,8 @@ export interface DesignComponent {
         tablet?: Partial<ComponentStyles & { x: number; y: number; width: number; height: number; visible: boolean }>;
         mobile?: Partial<ComponentStyles & { x: number; y: number; width: number; height: number; visible: boolean }>;
     };
+    // Draft flag (set by Design Hardener / QA pipeline)
+    is_draft?: boolean;
     created_at: string;
     updated_at: string;
 }
@@ -1298,6 +1375,18 @@ export interface AIQuestion {
     ticket_id: string | null;
     created_at: string;
     updated_at: string;
+    // v4.0 fields
+    source_agent?: string | null;
+    source_ticket_id?: string | null;
+    navigate_to?: string | null;
+    is_ghost?: boolean;
+    queue_priority?: number;           // 1=P1, 2=P2, 3=P3
+    answered_at?: string | null;
+    ai_continued?: boolean;
+    dismiss_count?: number;
+    previous_decision_id?: string | null;
+    conflict_decision_id?: string | null;
+    technical_context?: string | null;
 }
 
 export interface PlanVersion {
@@ -1396,4 +1485,106 @@ export interface AIChatMessage {
     context_element_type: string | null;
     ai_level: string;
     created_at: string;
+}
+
+// --- Design QA Types (v4.0) ---
+
+/** Result of Design Architect review */
+export interface DesignGapAnalysis {
+    plan_id: string;
+    analysis_timestamp: string;
+    overall_score: number;
+    gaps: DesignGap[];
+    summary: string;
+    pages_analyzed: number;
+    components_analyzed: number;
+}
+
+/** A single design gap found by Gap Hunter */
+export interface DesignGap {
+    id: string;
+    category: 'missing_component' | 'missing_nav' | 'missing_page' | 'missing_state' | 'incomplete_flow' | 'accessibility' | 'responsive' | 'user_story_gap' | 'data_binding';
+    severity: 'critical' | 'major' | 'minor';
+    page_id?: string;
+    page_name?: string;
+    component_id?: string;
+    title: string;
+    description: string;
+    related_requirement?: string;
+    suggested_fix: DesignGapFix;
+}
+
+/** A suggested fix for a design gap — ready for the Hardener */
+export interface DesignGapFix {
+    action: 'add_component' | 'add_page' | 'modify_component' | 'add_navigation' | 'flag_review';
+    target_page_id?: string;
+    component_type?: string;
+    component_name?: string;
+    properties?: Record<string, unknown>;
+    position?: { x: number; y: number; width: number; height: number };
+}
+
+/** Result of Design Hardener processing */
+export interface DesignHardeningResult {
+    plan_id: string;
+    gaps_addressed: number;
+    drafts_created: number;
+    pages_created: number;
+    actions_taken: Array<{ gap_id: string; action: string; result: string }>;
+}
+
+// --- User Decision Memory Types (v4.0) ---
+
+/** A user decision tracked by the Decision Memory Agent */
+export interface UserDecision {
+    id: string;
+    plan_id: string;
+    category: string;
+    topic: string;
+    decision: string;
+    question_id: string | null;
+    ticket_id: string | null;
+    superseded_by: string | null;
+    is_active: boolean;
+    context: string | null;
+    affected_entities: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Result of a decision memory lookup */
+export interface DecisionLookupResult {
+    found: boolean;
+    decision: string;
+    confidence: number;
+    questionId: string;
+    category: string;
+    decidedAt: string;
+}
+
+/** Result of a decision match check before creating a question */
+export interface DecisionMatchResult {
+    exactMatch: boolean;
+    similarMatch: boolean;
+    potentialConflict: boolean;
+    decision?: UserDecision;
+    conflictingDecision?: UserDecision;
+}
+
+// --- Phase Gate Types (v4.0) ---
+
+/** Result of checking if a phase gate's criteria are met */
+export interface PhaseGateResult {
+    passed: boolean;
+    blockers: string[];
+    progress: { done: number; total: number };
+}
+
+/** Ticket verification result stored as JSON */
+export interface TicketVerificationResult {
+    clarity_score: number;
+    deliverable_check: boolean;
+    passed: boolean;
+    attempt_number: number;
+    failure_details?: string;
 }

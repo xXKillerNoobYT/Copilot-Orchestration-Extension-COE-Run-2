@@ -1,8 +1,20 @@
-# AI Agent Teams & Roles
+# 03 — AI Agent Teams & Roles
 
-**Version**: 1.2
-**Date**: February 12, 2026
-**Updated**: v2.0 — Added context service injection, deterministic decomposition, CodingAgentService integration
+**Version**: 4.0  
+**Last Updated**: February 2026  
+**Status**: ✅ Current  
+**Depends On**: [01-Vision-and-Goals](01-Vision-and-Goals.md), [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [10-AI-Operating-Principles](10-AI-Operating-Principles.md)  
+**Changelog**: v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
+
+---
+
+## How to Read This Document
+
+This document describes every AI agent in the COE system — what it does, how it decides, what it outputs, and when it fails. Agents are grouped by team and listed in the order they were introduced.
+
+> **👤 User View**: You don't interact with individual agents directly — the Orchestrator handles routing automatically. But understanding the agents helps you know WHO is working on your project and WHY things happen the way they do. When COE creates a ticket asking you a question, this document tells you which agent asked and why.
+
+> **🔧 Developer View**: Every agent extends `BaseAgent` in `src/agents/base-agent.ts`, which provides LLM access, token management, and audit logging. Agent output must always be a structured `AgentResponse` object — agents never write files, execute code, or produce side effects directly. The Orchestrator in `src/agents/orchestrator.ts` routes to agents via keyword-based intent classification using `KEYWORD_MAP` and `INTENT_PRIORITY`.
 
 ---
 
@@ -22,20 +34,31 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                           │  (Supervisor)    │
                           └────────┬────────┘
                                    │ oversees
-                    ┌──────────────┼──────────────┐
-                    │              │              │
-          ┌─────────▼────┐ ┌──────▼──────┐ ┌─────▼──────────┐
-          │ ORCHESTRATOR │ │  PLANNING   │ │  VERIFICATION  │
-          │ (Router)     │ │  TEAM       │ │  TEAM          │
-          └──────┬───────┘ └─────────────┘ └────────────────┘
-                 │
-      ┌──────────┼──────────┬──────────────┐
-      │          │          │              │
-┌─────▼───┐ ┌───▼────┐ ┌───▼─────┐ ┌──────▼──────┐
-│ ANSWER  │ │RESEARCH│ │CLARITY  │ │   CUSTOM    │
-│ AGENT   │ │ AGENT  │ │ AGENT   │ │   AGENTS    │
-└─────────┘ └────────┘ └─────────┘ └─────────────┘
+          ┌────────────────────────┼─────────────────────────┐
+          │                        │                         │
+┌─────────▼────┐          ┌───────▼───────┐         ┌───────▼──────────┐
+│ ORCHESTRATOR │          │   PLANNING    │         │  VERIFICATION    │
+│ (Router)     │          │   TEAM        │         │  TEAM            │
+└──────┬───────┘          └───────────────┘         └──────────────────┘
+       │
+       ├──────┬──────────┬──────────────┬───────────────┐
+       │      │          │              │               │
+┌──────▼┐ ┌───▼───┐ ┌───▼─────┐ ┌──────▼──────┐ ┌──────▼─────────┐
+│ANSWER │ │RESEARCH│ │CLARITY  │ │   CUSTOM    │ │ TICKET         │
+│AGENT  │ │ AGENT  │ │ AGENT   │ │   AGENTS    │ │ PROCESSOR      │
+└───────┘ └────────┘ └─────────┘ └─────────────┘ └────────────────┘
+                                                         │
+                              ┌───────────────┬──────────┤
+                              │               │          │
+                     ┌────────▼──────┐ ┌──────▼───┐ ┌───▼──────────┐
+                     │DESIGN QA TEAM │ │DECISION  │ │ UI TESTING & │
+                     │Architect      │ │MEMORY    │ │ OBSERVATION  │
+                     │Gap Hunter     │ │AGENT     │ │ AGENTS       │
+                     │Hardener       │ │          │ │              │
+                     └───────────────┘ └──────────┘ └──────────────┘
 ```
+
+**14 total agents** (10 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
 
 ---
 
@@ -44,6 +67,10 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
 **Role**: Top-level AI supervisor — the "CEO" of all agent teams.
 
 **File**: `src/agents/boss-agent.ts`
+
+> **👤 User View**: The Boss AI is the quality-control authority. You won't talk to it directly, but when it detects a problem — too many pending tasks, a failing agent, or plan drift — it creates tickets that appear in your Ticket Panel. If you see a ticket marked `ESCALATE: true`, the Boss is asking for your input on something it can't resolve alone. Note this should be routed to the user chat.
+
+> **🔧 Developer View**: `BossAgent` extends `BaseAgent`. Its `processMessage()` receives system metrics from `DatabaseService` (task counts, agent states, ticket counts, recent audits). It runs on-demand — not on a timer — triggered by the Orchestrator when threshold checks are needed. Output is parsed by string splitting on `ASSESSMENT:`, `ISSUES:`, `ACTIONS:`, `ESCALATE:` markers. Add new thresholds by updating the system prompt in `boss-agent.ts`.
 
 **Responsibilities**:
 - Monitor global system health and team performance
@@ -97,6 +124,10 @@ ESCALATE: true
 
 **File**: `src/agents/orchestrator.ts`
 
+> **👤 User View**: The Orchestrator is invisible to you — it works behind the scenes to figure out what you're asking for and who should handle it. When you type "plan my project" or "verify task #3", the Orchestrator reads your keywords and routes to the right agent. If it can't figure out your intent, it defaults to the Answer Agent (so you always get a response).
+
+> **🔧 Developer View**: The Orchestrator is the ONLY agent that doesn't call the LLM for its primary function. `classifyIntent()` uses a `KEYWORD_MAP` (object mapping category strings to keyword arrays) and `INTENT_PRIORITY` (object mapping category strings to numeric priorities — note: `0` is a valid priority, so always use `??` not `||`). Tie-breaking is deterministic via the priority map. LLM fallback only triggers when zero keywords match. Adding a new agent requires: (1) new entry in `AgentType` enum, (2) new keyword array in `KEYWORD_MAP`, (3) new priority in `INTENT_PRIORITY`, (4) new case in `routeToAgent()` switch.
+
 **What It Does**:
 - Receives all user messages, MCP tool calls, and webview interactions
 - Classifies intent using a two-stage system: keyword scoring first, LLM fallback second
@@ -110,14 +141,20 @@ Stage 1 (Fast, No LLM): Count keyword matches per category. The category with th
 
 | Category | Keywords (10+ per category) |
 |----------|---------------------------|
-| `planning` | plan, create, break down, decompose, task, feature, requirement, roadmap, schedule, build, implement, design, architect, structure, organize, timeline |
 | `verification` | verify, check, test, validate, review, pass, fail, coverage, acceptance, confirm, ensure, assertion, correct, accuracy, regression, quality |
+| `ui_testing` | ui test, visual test, component test, screenshot, pixel, render, layout test, design test |
+| `observation` | observe, monitor, watch, track, detect, pattern, anomaly, behavior, trend, metric, signal |
+| `design_architect` | design review, architecture review, page hierarchy, design assessment, design score, structure review |
+| `gap_hunter` | gap analysis, find gaps, missing components, missing pages, coverage analysis, design gaps, completeness check |
+| `design_hardener` | harden design, fix gaps, complete design, fill gaps, add missing, draft components |
+| `decision_memory` | previous decision, past answer, user preference, decision history, conflict check, what did user say |
+| `planning` | plan, create, break down, decompose, task, feature, requirement, roadmap, schedule, build, implement, design, architect, structure, organize, timeline |
 | `question` | how, what, why, should, which, where, when, clarify, explain, confused, can, does, tell me, meaning, define |
 | `research` | investigate, analyze, research, deep dive, explore, study, compare, benchmark, tradeoff, alternative, option, evaluate, pros and cons |
 | `custom` | custom agent, my agent, specialized, domain |
 | `general` | (fallback when no keywords match) |
 
-**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > planning > question > research > custom > general.
+**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general.
 
 Stage 2 (LLM Fallback): If zero keywords match, ask the LLM to classify. If the LLM is offline, default to `general`.
 
@@ -162,6 +199,10 @@ All agents receive token management services via the Orchestrator:
 **Role**: Generates plans, decomposes features, and prepares task queues. Works independently — once it hands off tasks, it's done.
 
 **File**: `src/agents/planning-agent.ts`
+
+> **👤 User View**: When you say "plan my project" or "break this down into tasks", the Planning Agent activates. It reads your requirements (or your `plan.json` file), creates a structured task list, and queues everything for the coding agent. Each task is small enough to finish in 15–45 minutes. You'll see the plan appear in the sidebar and can review it before coding begins.
+
+> **🔧 Developer View**: `PlanningAgent` extends `BaseAgent`. It receives a `TaskDecompositionEngine` via `injectDecompositionEngine()` from the Orchestrator. Decomposition is two-stage: deterministic first (`TaskDecompositionEngine.decompose()` — pure functions, no LLM cost), then LLM fallback. Output is a JSON plan parsed by `JSON.parse()` — if the LLM returns malformed JSON, the agent retries once with a stricter prompt. Max nesting depth for sub-tasks is 3 levels, enforced by a `depth` counter.
 
 **What It Does**:
 - Analyzes user requirements and generates structured plans
@@ -239,6 +280,10 @@ When a task has `estimated_minutes > 45`, decomposition uses a two-stage approac
 
 **File**: `src/agents/answer-agent.ts`
 
+> **👤 User View**: You'll rarely interact with the Answer Agent directly. It primarily serves the external coding AI — when Copilot has a question about your project ("which database should I use?"), the Answer Agent checks the plan, past decisions, and codebase to give an evidence-based answer. If it's not confident enough (below 50%), it creates a ticket asking YOU instead. This way, you only get interrupted for genuinely ambiguous decisions.
+
+> **🔧 Developer View**: `AnswerAgent` extends `BaseAgent`. Its system prompt includes the full plan context and recent Q&A history. Output is parsed by splitting on `ANSWER:`, `CONFIDENCE:`, `SOURCES:`, `ESCALATE:` markers. The 50% threshold for auto-escalation is hardcoded in the prompt. When the coding AI calls `askQuestion` via MCP, the MCP server routes to the Orchestrator which classifies as `question` intent and delegates to AnswerAgent. Response time target is <5s — if the LLM is slow, the MCP `askQuestion` tool has a 45s timeout.
+
 **How It Works**:
 1. Coding AI encounters ambiguity → calls `askQuestion` via MCP
 2. Answer Agent receives the question with task context
@@ -284,6 +329,10 @@ ESCALATE: false
 **Role**: Independent post-execution checker. Verifies that completed work matches the plan's acceptance criteria using both real test output and LLM analysis.
 
 **File**: `src/agents/verification-agent.ts`
+
+> **👤 User View**: After each task is marked "done" by the coding AI, the Verification Team checks the work — automatically. It waits 60 seconds (to make sure all files are saved), runs real tests, and compares results against the acceptance criteria from the plan. If something doesn't pass, it creates a follow-up task to fix it. You'll see verification results in the task panel: green checkmark = passed, red X = failed, yellow = needs re-check.
+
+> **🔧 Developer View**: `VerificationAgent` extends `BaseAgent`. It depends on `TestRunnerService` (in `src/core/test-runner.ts`) which executes `npm test` and captures stdout/stderr. The 60-second stability delay is enforced by the Orchestrator before handing off to verification. Output is a JSON object parsed via `JSON.parse()`. CRITICAL: `test_results` must come from real `TestRunnerService` output — never hallucinate test results. If `TestRunnerService` is unavailable, set `test_results` to `null`. Follow-up tasks are created via `DatabaseService.createTask()` with the parent task ID set as a dependency.
 
 **How It Works**:
 1. Coding AI finishes a task → reports done via MCP `reportTaskDone`
@@ -357,6 +406,10 @@ Not Started → In Progress → Pending Verification → Verified ✓
 
 **File**: `src/agents/research-agent.ts`
 
+> **👤 User View**: When a task is stuck or a question needs deeper investigation, the Research Agent activates. It analyzes the problem, compares approaches, and produces a structured report with findings, analysis, and a clear recommendation. If it's not confident (below 60%), it escalates to you. You'll see research reports in the ticket panel when they're relevant to your project.
+
+> **🔧 Developer View**: `ResearchAgent` extends `BaseAgent`. It's triggered by the Orchestrator when `research` keywords match (investigate, analyze, compare, benchmark, etc.) or when a task has been in `in_progress` status for >30 minutes (detected by the Orchestrator's stuck-task monitoring). Output is parsed by splitting on `FINDINGS:`, `ANALYSIS:`, `RECOMMENDATION:`, `SOURCES:`, `CONFIDENCE:` markers. Max output is 1000 words, enforced by the system prompt.
+
 **When It Activates**:
 - A coding task has been stuck for >30 minutes
 - A question requires investigation beyond the plan and codebase
@@ -403,6 +456,10 @@ CONFIDENCE: 90
 
 **File**: `src/agents/clarity-agent.ts`
 
+> **👤 User View**: The Clarity Agent reviews ticket replies to make sure they're clear and complete. If the coding AI gives a vague update ("I did some work on the login page"), the Clarity Agent will ask for specifics before letting the ticket close. If YOUR reply to a ticket is unclear, it may ask for clarification too — not to be annoying, but to make sure the system has what it needs to proceed.
+
+> **🔧 Developer View**: `ClarityAgent` extends `BaseAgent`. Output is parsed by splitting on `SCORE:`, `ASSESSMENT:`, `FEEDBACK:` markers. The scoring thresholds (85+, 70-84, <70) are in the system prompt. The 5-round escalation limit prevents infinite clarification loops. NOTE: The Clarity Agent and Answer Agent have zero overlap — Clarity evaluates QUALITY of replies ("is this clear enough?"), while Answer provides CONTENT ("what's the answer to this question?"). Clarity never generates answers; Answer never scores clarity.
+
 **How It Works**:
 1. Someone replies to a ticket (user or AI)
 2. Clarity Agent scores the reply 0–100 on clarity, completeness, and accuracy
@@ -439,6 +496,10 @@ FEEDBACK: [If needs_clarification: numbered list of max 3 specific points that n
 **Role**: Specialized agents that users create for domain-specific tasks **without writing code**.
 
 **File**: `src/agents/custom-agent.ts`
+
+> **👤 User View**: You can create your own agents for specialized tasks — no coding required. Use the Custom Agent wizard to define what the agent does, give it goals, and set routing keywords. Your custom agents can read files, search code, create tickets, and use the LLM. They CANNOT write or edit code (that's a safety hardlock). Great for documentation review, technology analysis, compliance checks, or domain-specific Q&A.
+
+> **🔧 Developer View**: `CustomAgent` extends `BaseAgent` and loads its configuration from the `custom_agents` table in SQLite. The YAML template is parsed into a `CustomAgentConfig` object. Safety limits are enforced in the execution loop: 50 LLM calls/run, 5 min/goal, 30 min total, 3-similar loop detection. File write/execute permissions are hardlocked to `false` in the agent constructor — the YAML `permissions` field is read but write/execute are always overridden to `false`. Custom agent keywords are added to the Orchestrator's `KEYWORD_MAP` at runtime via `registerCustomAgent()`.
 
 **Designed For**:
 - Research & analysis
@@ -497,11 +558,160 @@ FEEDBACK: [If needs_clarification: numbered list of max 3 specific points that n
 
 ---
 
-## Team 8: Integrated Coding Agent (v2.0 — Internal Service)
+## Team 8: Design QA Team (v3.0)
+
+Three specialized agents that work together to ensure design quality before coding begins.
+
+> **👤 User View**: Before any code is written, the Design QA Team reviews your project's design. The Architect scores your design quality (out of 100), the Gap Hunter finds anything missing (like a 404 page or a form without a submit button), and the Hardener creates draft fixes for you to approve. You'll see draft components appear with dashed outlines on the canvas — drag, resize, approve, or reject them.
+
+> **🔧 Developer View**: All three agents extend `BaseAgent`. The Design Architect uses a 6-category scoring prompt (hierarchy, components, layout, tokens, data binding, user flow). The Gap Hunter runs 15 deterministic checks as pure functions BEFORE any LLM call — this saves token cost for obvious issues. The Hardener produces `is_draft = 1` components that block phase advancement via the `GateService`. Score threshold is configurable via `DesignScoreThreshold` setting (default 80, min 50).
+
+### Design Architect Agent
+
+**Role**: Reviews overall design structure and scores quality across 6 categories.
+
+**File**: `src/agents/design-architect-agent.ts`
+
+**What It Does**:
+- Evaluates page hierarchy and navigation flow (0-20 points)
+- Checks component completeness per page (0-20 points)
+- Reviews layout and positioning quality (0-20 points)
+- Verifies design token consistency (0-15 points)
+- Assesses data binding coverage (0-15 points)
+- Evaluates user flow completeness (0-10 points)
+
+**Output**: JSON with `design_score` (0-100), `category_scores`, `findings[]`, `structure_assessment`, `recommendations[]`.
+
+**Score Threshold**: Configurable via Settings (default 80, minimum 50). Design must meet this score before advancing past the DesignReview phase.
+
+### Gap Hunter Agent
+
+**Role**: Finds missing pages, components, flows, and UX gaps using a hybrid deterministic+LLM approach.
+
+**File**: `src/agents/gap-hunter-agent.ts`
+
+**15 Deterministic Checks** (run as pure functions, no LLM cost):
+| # | Check | Severity |
+|---|-------|----------|
+| 1 | Page has 0 components | critical |
+| 2 | Page missing header | major |
+| 3 | Missing nav/sidebar (multi-page app) | major |
+| 4 | Missing footer | minor |
+| 5 | Form without submit button | major |
+| 6 | No login/signup page (when plan mentions auth) | critical |
+| 7 | No 404/error page | minor |
+| 8 | No loading state component | major |
+| 9 | No empty state component | minor |
+| 10 | Page unreachable (no nav link or flow) | critical |
+| 11 | Button/link with empty content | major |
+| 12 | No responsive breakpoint overrides | minor |
+| 13 | Data model with no bound component | minor |
+| 14 | One-way navigation (no way back) | major |
+| 15 | Input without nearby label | major |
+
+**LLM Analysis**: Only triggered when no critical deterministic gaps exist. Covers user flow gaps, missing interaction patterns, and edge-case pages.
+
+**Score Calculation**: `100 - (15 × critical) - (5 × major) - (2 × minor)`
+
+### Design Hardener Agent
+
+**Role**: Creates draft component proposals from gap analysis for user review. Does NOT auto-apply changes.
+
+**File**: `src/agents/design-hardener-agent.ts`
+
+**Human-in-the-Loop Flow**:
+1. Takes `DesignGapAnalysis` as input
+2. Simple fixes (complete info) → creates draft components directly (no LLM)
+3. Complex fixes (new pages, insufficient detail) → LLM generates detailed proposals
+4. All created components have `is_draft = 1` (dashed outline on canvas)
+5. User can drag/resize, then approve or reject each draft
+6. **Drafts block phase advancement** — all must be handled before Design Review → Task Generation gate passes
+
+---
+
+## Team 9: Decision Memory Agent (v3.0)
+
+**Role**: Tracks user decisions, detects duplicates, finds conflicts, and auto-answers questions when possible.
+
+**File**: `src/agents/decision-memory-agent.ts`
+
+> **👤 User View**: Every design decision you make ("use blue for primary buttons", "PostgreSQL for the database") is remembered. If you're asked the same question again, the Decision Memory Agent answers automatically — you won't be asked twice. If you change your mind and contradict a previous decision, it flags the conflict and lets you choose which decision to keep.
+
+> **🔧 Developer View**: `DecisionMemoryAgent` extends `BaseAgent`. Decisions are stored in the `user_decisions` table (columns: `id`, `topic`, `category`, `decision_text`, `context`, `created_at`, `superseded_by`). Fast path: keyword matching against `topic` field (no LLM). Slow path: LLM semantic comparison, triggered only when keyword candidates are found with 3+ word overlap. The 13 fixed categories are hardcoded in the system prompt. A `superseded_by` field links to the newer decision when conflicts are resolved.
+
+**Responsibilities**:
+1. **Before any question reaches the user**: Checks `user_decisions` table for matching topic/category
+   - **Exact match** → auto-answer, don't add to queue
+   - **Similar match** → add to queue with past decision context shown to user
+   - **Conflict** → flag for conflict resolution UI
+2. **Conflict detection** when user submits a new answer that contradicts an existing decision
+3. **Stale question filtering** when design/plan is regenerated
+
+**Classification**: 13 fixed categories (authentication, database, styling, ui_ux, api_design, testing, deployment, architecture, data_model, behavior, accessibility, performance, security) + custom categories for edge cases.
+
+**Fast Path**: Keyword matching first (no LLM cost), LLM only for semantic comparison when keyword candidates are found with 3+ word overlap.
+
+---
+
+## Team 10: UI Testing & Observation Agents (v3.0)
+
+> **👤 User View**: These agents work behind the scenes — the UI Testing Agent creates test plans for your UI components (what to check, what edge cases to test), and the Observation Agent watches for patterns in how tasks are progressing (is the same file failing repeatedly? Are tasks taking longer than expected?). You'll see their insights in the analysis panel.
+
+> **🔧 Developer View**: Both agents extend `BaseAgent`. The UI Testing Agent generates structured test scenarios from design pages — it does NOT execute tests (that's `TestRunnerService`). The Observation Agent is event-driven via `EventBus` — it subscribes to task completion and failure events and maintains pattern counters in memory (not persisted to DB). Both are relatively lightweight agents with simple prompts.
+
+### UI Testing Agent
+**File**: `src/agents/ui-testing-agent.ts`
+**Role**: Generates test plans for UI components. Analyzes design pages and creates structured test scenarios for each component.
+
+### Observation Agent
+**File**: `src/agents/observation-agent.ts`
+**Role**: Monitors system behavior, detects patterns, and provides observational insights about the development process.
+
+---
+
+## Ticket Processor Service (v3.0 — Auto-Processing Engine)
+
+**Role**: Auto-processing engine that routes tickets to the correct agent, verifies deliverables, and handles retries.
+
+**File**: `src/core/ticket-processor.ts`
+
+> **👤 User View**: The Ticket Processor is the engine behind the ticket system. When a ticket is created (by you, by an agent, or by the system), the Ticket Processor figures out which agent should handle it, sends it there, checks the response quality, and retries if needed. If something fails 3 times, it creates a "ghost ticket" — a noob-friendly explanation of what went wrong and what you need to do.
+
+> **🔧 Developer View**: `TicketProcessorService` is in `src/core/ticket-processor.ts` (NOT in `src/agents/`). It runs two independent serial queues — main and boss — so Boss directives never get blocked behind normal tickets. Routing uses `operation_type` and title pattern matching (not the Orchestrator's keyword system). The idle watchdog fires after 5 minutes of no queue activity and triggers a Boss health check. Max 10 active tickets enforced by `ActiveTicketGate`.
+
+**Two Independent Queues**:
+- **Main queue**: Normal ticket processing (serial, priority-ordered)
+- **Boss queue**: Boss AI directive tickets (separate serial queue, never blocked by main)
+
+**Agent Routing**: Maps operation_type + title patterns to the correct agent:
+| Pattern | Agent | Stage |
+|---------|-------|-------|
+| `Phase: Task Generation` | Planning | 1 |
+| `Phase: Design *` | Planning | 1 |
+| `Coding: *` / `Rework: *` | Coding (MCP) | 2 |
+| `Verify: *` | Verification | 3 |
+| Ghost tickets | Clarity | 1 |
+| Boss directives | Boss | — |
+
+**Verification**: Dual-mode — clarity score for communication, deliverable check + clarity for work tickets.
+
+**Tiered Retry**: Auto-retry 3x → Boss classifies severity (minor: keep retrying, major: escalate) → Ghost Ticket to user with noob-friendly explanation + collapsible technical details.
+
+**Ticket Limits**: Max 10 active tickets. P1 tickets can bump P3 tickets when at limit.
+
+**Idle Watchdog**: Configurable timeout (default 5 min). Triggers Boss AI health check when no activity detected.
+
+---
+
+## Team 11: Integrated Coding Agent (v2.0 — Internal Service)
 
 **Role**: NL-driven code generation, modification, and explanation engine integrated directly into COE.
 
 **File**: `src/core/coding-agent.ts`
+
+> **👤 User View**: This is COE's built-in code generator. Unlike the external coding AI (Copilot), this agent is part of COE itself and handles simpler code tasks — creating components from templates, making targeted edits, explaining code, and answering queries about the codebase. It uses the same LLM as other agents. You interact with it through the command palette or chat.
+
+> **🔧 Developer View**: Despite the name, `CodingAgentService` is in `src/core/` (not `src/agents/`) because it produces side effects (file writes). It uses `ComponentSchemaService` for template-based code generation. Ethics gate is enforced via `EthicsEngine.check()` before every action. The two-stage intent classification mirrors the Orchestrator's pattern but uses different keyword sets. Diff generation is deterministic (no LLM) — using string comparison to produce unified diffs for user approval.
 
 **What It Does**:
 - Two-stage intent classification: keyword scoring (deterministic, instant) → LLM fallback (ambiguous commands)
@@ -528,6 +738,10 @@ FEEDBACK: [If needs_clarification: numbered list of max 3 specific points that n
 ## The Coding AI (External — Not Part of COE)
 
 **Important**: The actual coding agent (GitHub Copilot) is **not a COE agent** — it's an external tool that COE coordinates.
+
+> **👤 User View**: This is the AI that actually writes your code — it's the external coding agent (like GitHub Copilot) that COE manages. COE gives it one task at a time with very detailed instructions, answers its questions, monitors for blocks, and verifies its work. You don't need to interact with it directly — COE handles the coordination. You just review the results.
+
+> **🔧 Developer View**: The external coding AI connects via MCP (HTTP + JSON-RPC on port 3030). It uses 3 tools: `getNextTask` (pull the next queued task), `askQuestion` (get answers to ambiguities), and `reportTaskDone` (submit completion report). The MCP server is in `src/mcp/server.ts`. The 30-second inactivity detection is handled by the Orchestrator's stuck-task monitor. All communication is logged in the `audit_log` table.
 
 **How COE Treats the Coding AI**:
 - Sends it one task at a time with detailed context via MCP `getNextTask`
@@ -580,3 +794,649 @@ sequenceDiagram
     Boss->>Orch: Drift detected — plan updated, re-check Task #5
     Verify->>Verify: Task #5 marked "Needs Re-Check"
 ```
+
+---
+
+## Universal Agent Response Format
+
+Every agent in COE extends `BaseAgent` and returns an `AgentResponse` object. No agent is allowed to return raw strings, write files, or produce side effects directly.
+
+```typescript
+interface AgentResponse {
+  agentType: AgentType;          // Which agent produced this response
+  content: string;               // The agent's output (parsed from LLM response)
+  confidence: number;            // 0-100. Agent's self-assessed confidence
+  metadata: {
+    tokensUsed: number;          // Input + output tokens consumed
+    processingTimeMs: number;    // Wall-clock time for this agent call
+    modelUsed: string;           // LLM model identifier
+    cached: boolean;             // Whether this came from LLMService response cache
+  };
+  followUpActions?: FollowUpAction[];  // Optional actions for Orchestrator to execute
+  escalate?: boolean;            // If true, Orchestrator creates a user-facing ticket
+}
+```
+
+> **👤 User View**: You never see `AgentResponse` objects directly — COE translates them into human-readable messages, tickets, and UI updates. The `confidence` score is what determines whether the system asks you for help or handles things on its own.
+
+> **🔧 Developer View**: All agents must return this interface. The `BaseAgent.processMessage()` method wraps the LLM response into this format. The `followUpActions` array lets agents trigger downstream work without coupling to other agents — the Orchestrator reads these actions and routes them. Never add side effects inside an agent's `processMessage()` — that violates the architecture.
+
+---
+
+## RACI Matrix — Agent Handoff Responsibilities
+
+This matrix defines WHO is Responsible, Accountable, Consulted, and Informed for every major handoff in the system.
+
+| Handoff | Responsible (does it) | Accountable (owns it) | Consulted (asked before) | Informed (told after) |
+|---------|----------------------|----------------------|--------------------------|----------------------|
+| Plan generation | Planning Agent | Orchestrator | User (if requirements unclear) | Boss AI |
+| Task decomposition | Planning Agent / DecompositionEngine | Planning Agent | — | Orchestrator |
+| Task assignment to coding AI | Orchestrator (via MCP) | Orchestrator | Planning Agent (dependencies) | Boss AI |
+| Code execution | External Coding AI | Orchestrator | Answer Agent (questions) | Verification Team |
+| Question answering (coding AI → system) | Answer Agent | Orchestrator | Decision Memory (past answers) | — |
+| Question answering (system → user) | Ticket System | Orchestrator | Clarity Agent (quality check) | Boss AI |
+| Task verification | Verification Agent | Orchestrator | TestRunnerService (real tests) | Boss AI, User |
+| Verification follow-up creation | Verification Agent | Verification Agent | — | Orchestrator, Planning Agent |
+| Design quality Review | Design QA Team (3 agents) | Design Architect | Gap Hunter, Hardener | Planning Agent |
+| Draft component approval | User | User | Design Hardener (proposals) | Design Architect |
+| Ticket clarity scoring | Clarity Agent | Ticket Processor | — | Orchestrator |
+| Decision conflict resolution | Decision Memory Agent | Decision Memory Agent | User (if conflict detected) | Orchestrator |
+| System health monitoring | Boss AI | Boss AI | — | User (if escalated) |
+| Inter-agent conflict resolution | Boss AI | Boss AI | Affected agents | User (if critical) |
+| Custom agent creation | User (YAML config) | Orchestrator | — | Boss AI |
+| Stuck task detection | Orchestrator | Orchestrator | Research Agent (investigation) | Boss AI |
+
+> **👤 User View**: You are the final authority. When you see "User" in the Accountable column, that means YOU make the call. When you see "User" in the Consulted column, COE will ask you before proceeding. Everything else happens automatically.
+
+> **🔧 Developer View**: The RACI matrix maps directly to method calls. "Responsible" = the class whose method is called. "Accountable" = the class that catches errors and decides what to do. "Consulted" = a dependency injected into the responsible class. "Informed" = an `EventBus.emit()` call after the action completes. When adding new handoffs, update this matrix AND add the corresponding event to `EventBus`.
+
+---
+
+## Role Clarification: Clarity Agent vs Answer Agent
+
+These two agents are frequently confused. They have **zero functional overlap**:
+
+| Dimension | Clarity Agent | Answer Agent |
+|-----------|--------------|--------------|
+| **Purpose** | Evaluates QUALITY of communication | Provides CONTENT in response to questions |
+| **Trigger** | Any ticket reply (user or AI) | `askQuestion` MCP call or `question` intent |
+| **Phase** | Post-response (after someone answers) | Pre-response (before an answer exists) |
+| **Input** | A reply to evaluate | A question to answer |
+| **Output** | Score (0-100) + assessment + feedback | Answer + confidence + sources + escalate flag |
+| **Decision** | "Is this reply clear enough?" | "What's the answer to this question?" |
+| **Escalation** | To Boss AI after 5 rounds | To User via ticket when confidence < 50% |
+| **Scope** | Communication quality | Knowledge retrieval |
+
+**When they interact**: The Answer Agent produces a response → the Clarity Agent scores that response's quality. If the Clarity Agent scores it below 70, the Answer Agent may be asked to elaborate. They never call each other directly — the Ticket Processor mediates.
+
+**Common mistake**: Routing a quality concern to the Answer Agent, or routing a knowledge question to the Clarity Agent. The Orchestrator's keyword separation prevents this: `question` keywords → Answer Agent, clarity-related keywords → Clarity Agent.
+
+---
+
+## Failure Modes & Recovery
+
+Every agent can fail. This table documents what happens when each agent fails and how the system recovers.
+
+| Agent | Failure Mode | Detection | Immediate Action | Recovery |
+|-------|-------------|-----------|-------------------|----------|
+| **Boss AI** | LLM timeout or error | Orchestrator monitors response | Skip health check cycle | Retry next scheduled check. If 3 consecutive failures → disable Boss monitoring, alert user |
+| **Orchestrator** | Classification produces wrong agent | User reports wrong behavior | Message re-routed to `general` | User can manually specify agent via `/route <agent>` prefix |
+| **Orchestrator** | All agents offline | `routeToAgent()` throws | Return error response with retry suggestion | Queue message, retry when agents come online |
+| **Planning Agent** | Malformed JSON output | `JSON.parse()` throws | Retry once with stricter prompt | If retry fails → create error ticket, ask user to refine requirements |
+| **Planning Agent** | Task > 45 min after decomposition | Post-decomposition validation | Re-decompose with forced split | Max 3 depth levels. If still > 45 min → flag for manual review |
+| **Answer Agent** | Confidence always < 50% | Pattern detection (3+ consecutive) | Escalate all questions to user | Check if plan context is loaded correctly. May indicate stale plan. |
+| **Answer Agent** | LLM offline | `LLMService.chat()` fails | Return `ESCALATE: true` immediately | All questions go to user until LLM recovers |
+| **Verification Agent** | TestRunnerService unavailable | `npm test` process fails | Set `test_results: null`, use LLM-only analysis | Add note: "No test runner output available". Create ticket for test setup. |
+| **Verification Agent** | Always returns `needs_recheck` | Pattern detection (5+ consecutive) | Boss AI investigates | Likely indicates criteria are too vague. Re-planning may be needed. |
+| **Research Agent** | Research takes > 5 minutes | Timeout in `processMessage()` | Return partial findings | Partial results are usable. Flag for deeper investigation later. |
+| **Clarity Agent** | 5 rounds without resolution | Round counter | Escalate to Boss AI | Boss determines if question is unanswerable, removes from queue |
+| **Custom Agent** | Loop detected (3 similar responses) | Output similarity check | Halt agent, save partial results | User notified via ticket. Agent paused until user adjusts config. |
+| **Custom Agent** | Budget exceeded (50 LLM calls) | Call counter | Agent halts, saves progress | User notified, can resume with fresh budget or adjust goals |
+| **Design Architect** | Score below minimum (50) | Score validation | Block phase advancement | Design must be revised. Create ticket for user with specific deficiencies. |
+| **Gap Hunter** | False positives (finds gaps that don't exist) | User rejects gap findings | User can dismiss individual gaps | Dismissed gaps stored in `dismissed_gaps` to prevent re-flagging |
+| **Decision Memory** | Conflict not detected | Manual user discovery | User reports conflict | Mark old decision as `superseded_by`, update affected tasks |
+| **Ticket Processor** | Queue stuck (no progress for 5 min) | Idle watchdog timer | Trigger Boss AI health check | Boss classifies cause. If agent error → restart agent. If external → alert user. |
+| **External Coding AI** | MCP connection lost | HTTP connection error | Mark current task as `blocked` | Retry connection 3x at 10s intervals. If still down → queue tasks, alert user. |
+| **External Coding AI** | Inactivity > 30 seconds | Orchestrator stuck-task monitor | Send ping via MCP | If no response after 2 pings → mark task as `stalled`, re-queue |
+
+> **👤 User View**: When an agent fails, COE tries to fix it automatically. You only get notified when the system can't self-recover — usually via a ticket in the Ticket Panel. The ticket explains what went wrong in plain language and tells you what (if anything) you need to do.
+
+> **🔧 Developer View**: Failure detection lives in three places: (1) try/catch blocks in each agent's `processMessage()`, (2) the Orchestrator's monitoring loop for stuck tasks and pattern detection, and (3) the Ticket Processor's idle watchdog. Recovery actions are dispatched via `EventBus` events — subscribe to `agent:error`, `agent:timeout`, and `agent:recovery` to add custom handling. All failures are logged to `audit_log` with `severity: 'error'`.
+
+---
+
+## Decision Trees
+
+These decision trees show the exact logic used at critical routing and handoff points in the system. Each one maps to code in the Orchestrator or the relevant agent.
+
+### Decision Tree 1: Planning → Decomposition
+
+```
+INPUT: New task with estimated_minutes
+
+IF estimated_minutes <= 45:
+    → Task is READY — add to queue as-is
+    → Set status = 'not_started'
+
+IF estimated_minutes > 45:
+    → TRY deterministic decomposition (TaskDecompositionEngine)
+    
+    IF deterministic produces sub-tasks:
+        → Validate each sub-task: 15 ≤ minutes ≤ 45?
+        IF all valid:
+            → Set parent status = 'decomposed'
+            → Add sub-tasks to queue
+            → Sub-tasks inherit parent dependencies
+            → Sub-tasks depend on each other in order
+        IF any sub-task still > 45:
+            → Check depth < 3
+            IF depth < 3: Recursively decompose that sub-task
+            IF depth >= 3: Flag for manual review, create ticket
+
+    IF deterministic produces nothing:
+        → FALLBACK to LLM-based decomposition
+        → Same validation and recursion rules apply
+```
+
+### Decision Tree 2: Orchestrator → Agent Routing
+
+```
+INPUT: Incoming message (user, MCP, or webview)
+
+STEP 1: Count keyword matches per category
+    → For each category in KEYWORD_MAP:
+        count = number of keywords found in message (case-insensitive)
+    
+STEP 2: Find winner
+    IF max(counts) > 0:
+        → Winner = category with highest count
+        IF TIE between categories:
+            → Winner = category with lowest INTENT_PRIORITY value
+            (verification=0 > ui_testing=1 > ... > general=11)
+            CRITICAL: Use ?? not || — priority 0 is valid!
+    
+    IF max(counts) == 0:
+        → No keywords matched
+        IF LLM is online:
+            → Send message to LLM for classification
+            → LLM returns one of the category names
+        IF LLM is offline:
+            → Default to 'general' (routes to Answer Agent)
+
+STEP 3: Route to agent
+    → Map category to AgentType enum
+    → Call agent.processMessage(message, context)
+    → Return AgentResponse to caller
+```
+
+### Decision Tree 3: Coding AI → Answer Team
+
+```
+INPUT: askQuestion MCP call from external coding AI
+
+STEP 1: Decision Memory check
+    → Search user_decisions table for matching topic
+    IF exact match found:
+        → Return stored decision directly (no LLM cost)
+        → Log as "auto-answered from decision memory"
+        → DONE
+
+STEP 2: Answer Agent processing
+    IF no decision memory match:
+        → Route to Answer Agent
+        → Answer Agent searches: plan context + codebase + Q&A history
+        → Answer Agent returns: ANSWER, CONFIDENCE, SOURCES, ESCALATE
+
+STEP 3: Confidence evaluation
+    IF CONFIDENCE >= 50:
+        → Return answer to coding AI via MCP
+        → Store in decision memory for future use
+    IF CONFIDENCE < 50:
+        → Set ESCALATE = true
+        → Create P1 ticket for human input
+        → Return to coding AI: "Question escalated to user. Proceed with next task or wait."
+        → Coding AI can call getNextTask for a different task while waiting
+```
+
+### Decision Tree 4: Verification → Follow-Up
+
+```
+INPUT: Completed task + test results + acceptance criteria
+
+STEP 1: Wait for stability
+    → 60-second delay after reportTaskDone
+    → Purpose: Ensure all files are written and saved
+
+STEP 2: Run real tests
+    → TestRunnerService.run(modifiedFiles)
+    IF TestRunnerService unavailable:
+        → Set test_results = null
+        → Add note: "No test runner output available"
+        → Proceed with LLM-only analysis
+
+STEP 3: Evaluate each criterion
+    → For each acceptance_criterion in task:
+        Compare against: test output + file changes + evidence
+        → Mark as: 'met', 'not_met', or 'unclear'
+
+STEP 4: Determine verdict
+    IF all criteria = 'met':
+        → Status = 'passed'
+        → Unblock dependent tasks
+        → Emit 'task:verified' event
+    
+    IF any criteria = 'not_met':
+        → Status = 'failed'
+        → For EACH not_met criterion:
+            → Create exactly ONE follow-up task
+            → Title: "Fix: [original title] - [unmet criterion]"
+            → Priority: P1
+        → Emit 'task:failed' event
+    
+    IF all remaining criteria = 'unclear' (none not_met):
+        → Status = 'needs_recheck'
+        → Create investigation ticket
+        → Do NOT create follow-up tasks yet
+
+STEP 5: Error handling
+    IF verification throws an error:
+        → Retry once after 30 seconds
+        IF second attempt fails:
+            → Create investigation ticket
+            → Mark task as 'needs_recheck'
+```
+
+### Decision Tree 5: Clarity Agent → Task Unblocking
+
+```
+INPUT: Ticket reply to score
+
+STEP 1: Score the reply
+    → Clarity Agent evaluates: completeness, specificity, actionability
+    → Returns SCORE (0-100), ASSESSMENT, FEEDBACK
+
+STEP 2: Route based on score
+    IF SCORE >= 85:
+        → Assessment = 'clear'
+        → Ticket marked as resolved
+        → Unblock any tasks waiting on this ticket's answer
+        → DONE
+    
+    IF SCORE 70-84:
+        → Assessment = 'needs_clarification'
+        → Request ONE specific clarification point
+        → Increment round counter
+    
+    IF SCORE < 70:
+        → Assessment = 'needs_clarification'
+        → Request up to 3 specific clarification points
+        → Increment round counter
+
+STEP 3: Escalation check
+    IF round_counter >= 5:
+        → Escalate to Boss AI
+        → Boss determines: is this question answerable?
+        IF Boss says no:
+            → Remove ticket from queue
+            → Mark task as 'blocked' with reason
+        IF Boss says yes:
+            → Rewrite question, try one more round
+```
+
+### Decision Tree 6: Optional Feature Triage
+
+```
+INPUT: Feature request or plan item tagged 'optional'
+
+STEP 1: Classify priority
+    → P1 (critical path): Must implement before release
+    → P2 (important): Should implement, but system works without it
+    → P3 (nice-to-have): Implement if time allows
+
+STEP 2: Evaluate based on priority
+    IF P1:
+        → Add to task queue immediately
+        → No special handling
+    
+    IF P2:
+        → Add to task queue with lower priority
+        → Can be bumped by P1 tasks
+        → May be deferred to next sprint
+    
+    IF P3:
+        → Add to backlog (not active queue)
+        → Only promoted to queue when all P1 and P2 tasks complete
+        → User can manually promote via ticket panel
+
+STEP 3: Token budget consideration
+    IF remaining token budget < 20%:
+        → Defer ALL P3 tasks
+        → Surface warning: "Low token budget — deferring optional features"
+```
+
+### Decision Tree 7: Backend Fallback Logic
+
+```
+INPUT: LLM call from any agent
+
+STEP 1: Primary attempt
+    → Call LLMService.chat(messages, { stream: false })
+    → Endpoint: http://192.168.1.205:1234/v1
+    → Timeout cascade: 300s startup, 120s stall, 900s total
+
+STEP 2: Response validation
+    IF response received:
+        → Check response is not empty
+        → Check response format matches expected pattern
+        IF valid: Return response
+        IF invalid: Log warning, retry once with stricter prompt
+
+STEP 3: Failure handling
+    IF timeout (total > 900s):
+        → Log error with full request details
+        → Emit 'llm:timeout' event
+        → Return null (agent handles null as "LLM unavailable")
+    
+    IF connection refused:
+        → Set llmOffline flag = true
+        → Emit 'llm:offline' event
+        → Show VS Code warning: "LLM offline. Using keyword-based routing only."
+        → Keyword-only mode for all agents
+    
+    IF AbortError:
+        CRITICAL: Node's fetch throws DOMException, not Error
+        → Detect via: error.name === 'AbortError'
+        → NEVER use: instanceof AbortError
+        → Treat as timeout
+
+STEP 4: Recovery
+    → On next successful LLM call:
+        → Reset llmOffline flag = false
+        → Emit 'llm:online' event
+        → Resume normal routing
+```
+
+---
+
+## Enforcement Mechanisms
+
+These are the GATES that prevent bad work from flowing through the system. Each gate is enforced in code — not just by prompts.
+
+### Gate 1: Task Size Gate
+
+**What it enforces**: Every task must be 15–45 minutes. No exceptions.
+
+**Where it's enforced**: `TaskDecompositionEngine.validate()` and `PlanningAgent.processMessage()`
+
+**How it works**:
+1. Planning Agent generates tasks with `estimated_minutes`
+2. Validation checks: `15 <= estimated_minutes <= 45`
+3. If task > 45 minutes → auto-decompose (see Decision Tree 1)
+4. If task < 15 minutes → merge with the next related task or flag for review
+5. Decomposition is recursive, max depth 3 levels
+6. If a task can't be decomposed below 45 min at depth 3 → create ticket for manual review
+
+**Bypass**: None. This gate cannot be overridden by user config, agent output, or system state.
+
+### Gate 2: Confidence Threshold Gate
+
+**What it enforces**: Agents must be confident in their outputs. Low-confidence outputs trigger escalation.
+
+**Where it's enforced**: Each agent's output parsing logic
+
+**Thresholds by agent**:
+| Agent | Threshold | Action Below Threshold |
+|-------|-----------|----------------------|
+| Answer Agent | 50% | Auto-escalate question to user via ticket |
+| Research Agent | 60% | Stop research, escalate to user |
+| Clarity Agent | 70% | Request clarification (up to 5 rounds) |
+| Design Architect | 80% (configurable, min 50) | Block phase advancement, require design revision |
+| Verification Agent | N/A (uses met/not_met/unclear, not confidence) | N/A |
+
+### Gate 3: Clarity Gate
+
+**What it enforces**: All ticket communication must be clear enough to act on.
+
+**Where it's enforced**: `ClarityAgent.processMessage()` via `TicketProcessorService`
+
+**How it works**:
+1. Any ticket reply → Clarity Agent scores it (0-100)
+2. Score ≥ 85: Clear. Proceed.
+3. Score 70-84: Mostly clear. Request 1 clarification.
+4. Score < 70: Unclear. Request up to 3 clarifications.
+5. Max 5 rounds before Boss AI escalation
+
+**Bypass**: None for AI-generated replies. User replies scoring < 70 get clarification requests, but the user can force-close the ticket.
+
+### Gate 4: Stability Delay Gate
+
+**What it enforces**: A 60-second waiting period between task completion and verification.
+
+**Where it's enforced**: `Orchestrator.handleTaskDone()` (or equivalent task completion handler)
+
+**Why it exists**: External coding AI may report "done" before all file writes are flushed. Without this delay, the Verification Agent might check partially-written files.
+
+**How it works**:
+1. External coding AI calls `reportTaskDone` via MCP
+2. Task status changes to `pending_verification`
+3. Timer: `setTimeout(startVerification, 60_000)` (60 seconds)
+4. After 60s → Verification Agent receives the task
+5. If another `reportTaskDone` comes for the same task during the wait → reset the timer
+
+**Bypass**: None. The 60-second delay is hardcoded. Even for tasks with no file changes, the delay applies (protects against edge cases).
+
+### Gate 5: Project-Type Routing Gate
+
+**What it enforces**: Task routing and decomposition strategies vary by project type.
+
+**Where it's enforced**: `PlanningAgent` (configurable via project plan)
+
+**Project Types and Behavior**:
+| Project Type | Decomposition Strategy | Default Priority | Special Handling |
+|-------------|----------------------|------------------|-----------------|
+| `web-app` | By page/component | P2 | Design QA required before coding |
+| `api` | By endpoint/route | P2 | Schema validation tasks auto-generated |
+| `cli` | By command/subcommand | P2 | Help text generation tasks auto-added |
+| `library` | By module/function | P2 | API docs tasks auto-added |
+| `monorepo` | By package first, then by component | P1 | Cross-package dependency checking |
+| `mobile` | By screen/view | P2 | Platform-specific tasks split |
+
+---
+
+## Cross-Agent Communication Patterns
+
+Agents don't call each other directly — all communication goes through the Orchestrator or EventBus. These patterns document the two primary inter-agent communication flows.
+
+### Pattern 1: Question Escalation Chain
+
+```
+External Coding AI
+    │
+    ▼ askQuestion (MCP)
+MCP Server
+    │
+    ▼ route to Orchestrator
+Orchestrator
+    │
+    ▼ check Decision Memory first
+Decision Memory Agent
+    │
+    ├── MATCH FOUND → return stored answer → Orchestrator → MCP → Coding AI
+    │
+    └── NO MATCH → continue chain
+                    │
+                    ▼
+            Answer Agent
+                    │
+                    ├── CONFIDENCE ≥ 50% → return answer → Orchestrator → MCP → Coding AI
+                    │                       (also store in Decision Memory for next time)
+                    │
+                    └── CONFIDENCE < 50% → escalate
+                                            │
+                                            ▼
+                                    Ticket Processor
+                                            │
+                                            ▼ create P1 ticket
+                                    Clarity Agent (scores the question)
+                                            │
+                                            ▼ ticket appears in UI
+                                        User
+                                            │
+                                            ▼ user replies
+                                    Clarity Agent (scores the reply)
+                                            │
+                                            ├── CLEAR → store in Decision Memory → return to Coding AI
+                                            │
+                                            └── UNCLEAR → request clarification (max 5 rounds)
+```
+
+**Key properties of this pattern**:
+- Decision Memory is checked FIRST (zero LLM cost for repeat questions)
+- Answer Agent only runs if Decision Memory has no match
+- Escalation to user only happens when confidence is genuinely low (< 50%)
+- User's answer is stored in Decision Memory, so the same question never reaches the user again
+- Maximum 5 clarification rounds before Boss AI intervention
+
+### Pattern 2: Task Execution Chain
+
+```
+Planning Agent
+    │
+    ▼ tasks created and queued
+Task Queue (in SQLite)
+    │
+    ▼ getNextTask (MCP call from external Coding AI)
+Orchestrator
+    │
+    ▼ find next task where: status='not_started' AND all dependencies met
+    ▼ set status='in_progress'
+    ▼ bundle: task + plan context + relevant code + step_by_step_implementation
+    │
+    ▼ return via MCP
+External Coding AI
+    │
+    ├── Questions? → askQuestion (see Pattern 1)
+    │
+    └── Done → reportTaskDone (MCP)
+                │
+                ▼
+        Orchestrator
+                │
+                ▼ set status='pending_verification'
+                ▼ start 60-second stability timer
+                │
+                ▼ (after 60s)
+        Verification Agent
+                │
+                ├── PASSED → set status='verified'
+                │             → unblock dependent tasks
+                │             → emit 'task:verified' event
+                │             → Coding AI can call getNextTask for next task
+                │
+                ├── FAILED → set status='failed'
+                │             → create follow-up tasks (one per unmet criterion)
+                │             → emit 'task:failed' event
+                │
+                └── NEEDS RECHECK → set status='needs_recheck'
+                                     → create investigation ticket
+                                     → do NOT unblock dependent tasks
+```
+
+**Key properties of this pattern**:
+- Tasks flow in ONE direction: Plan → Queue → Code → Verify
+- Each step has exactly one owner (see RACI matrix above)
+- The 60-second stability delay is mandatory and non-bypassable
+- Failed tasks generate follow-up tasks, NOT retry attempts of the same task
+- The external Coding AI can pull the next task while waiting for question answers
+- All state transitions are logged to `audit_log` and emitted via `EventBus`
+
+### Pattern 3: Design Review Chain (v3.0)
+
+```
+Planning Agent
+    │
+    ▼ plan generated with page/component definitions
+Design Architect Agent
+    │
+    ▼ score design quality (0-100, 6 categories)
+    │
+    ├── SCORE ≥ threshold (default 80)
+    │       → Design approved, proceed to Gap Hunter
+    │
+    └── SCORE < threshold
+            → Block phase advancement
+            → Create ticket: "Design needs revision"
+            → User must revise and re-submit
+            │
+            ▼ (after revision)
+            → Re-score. Loop until ≥ threshold.
+
+Gap Hunter Agent
+    │
+    ▼ 15 deterministic checks first (no LLM cost)
+    ▼ LLM analysis only if no critical gaps found
+    │
+    ├── NO GAPS → Proceed to task generation
+    │
+    └── GAPS FOUND → Pass gaps to Hardener
+                        │
+                        ▼
+                Design Hardener Agent
+                        │
+                        ▼ create draft components (is_draft = 1)
+                        ▼ dashed outline on canvas
+                        │
+                        ▼ User reviews drafts
+                        │
+                        ├── APPROVED → is_draft = 0, proceed
+                        │
+                        └── REJECTED → remove draft, log reason
+                        │
+                        ▼ ALL drafts handled?
+                        │
+                        ├── YES → Proceed to task generation
+                        │
+                        └── NO → Block phase advancement
+```
+
+---
+
+## Agent Implementation Checklist
+
+When adding a new agent to COE, follow this checklist. Missing any step will cause routing failures, type errors, or silent drops.
+
+### Required Steps
+
+1. **Define the agent type**: Add new entry to `AgentType` enum in `src/types/index.ts`
+2. **Create the agent class**: New file in `src/agents/` extending `BaseAgent`
+3. **Implement `processMessage()`**: Must return `AgentResponse` — no side effects
+4. **Add keywords**: New entry in `KEYWORD_MAP` in `src/agents/orchestrator.ts`
+5. **Add priority**: New entry in `INTENT_PRIORITY` in `src/agents/orchestrator.ts`
+6. **Add routing case**: New case in `routeToAgent()` switch in `src/agents/orchestrator.ts`
+7. **Instantiate in extension**: Create instance in `src/extension.ts` `activate()` function
+8. **Register with Orchestrator**: Pass instance to Orchestrator constructor or setter
+9. **Write tests**: New test file in `tests/` covering: routing, output format, failure modes
+10. **Update True Plan**: Add to this document (Doc 03) with full team section
+
+### Optional Steps
+
+11. **Add MCP tool** (if external agents need access): New tool in `src/mcp/server.ts`
+12. **Add EventBus events**: Define new events in `EventBus` for lifecycle hooks
+13. **Add directive**: Create `directives/<agent-name>.md` with SOP
+14. **Add webview UI** (if user-facing): New panel in `src/webapp/`
+
+---
+
+## Cross-References
+
+| Topic | Document |
+|-------|----------|
+| System architecture & 4-layer model | [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md) |
+| Agent routing keywords & MCP API | [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md) §MCP API Reference |
+| Task workflows & lifecycle | [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md) |
+| User experience & UI panels | [05-User-Experience-and-Interface](05-User-Experience-and-Interface.md) |
+| User & developer stories per agent | [06-User-and-Developer-Stories](06-User-and-Developer-Stories.md) |
+| Context management & token budgets | [08-Context-Management-and-Safety](08-Context-Management-and-Safety.md) |
+| Feature list & version mapping | [09-Features-and-Capabilities](09-Features-and-Capabilities.md) |
+| AI operating principles & constraints | [10-AI-Operating-Principles](10-AI-Operating-Principles.md) |
+| Agent behavior specification | [14-AI-Agent-Behavior-Spec](14-AI-Agent-Behavior-Spec.md) |

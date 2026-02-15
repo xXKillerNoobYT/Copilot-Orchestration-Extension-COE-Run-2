@@ -1,8 +1,20 @@
-# Features & Capabilities
+# 09 — Features & Capabilities
 
-**Version**: 1.2
-**Date**: February 13, 2026
-**Updated**: v2.0 features added, full implementation audit completed, status markers updated
+**Version**: 3.0  
+**Last Updated**: February 2026  
+**Status**: ✅ Current  
+**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md)  
+**Changelog**: v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
+
+---
+
+## How to Read This Document
+
+This is the complete feature catalog for COE — every capability the system provides, organized by category. Each feature has a description explaining what it does, a status indicator, and implementation notes. Use this document to understand what COE can do today and what's planned.
+
+> **👤 User View**: This is your feature reference guide. Green checkmarks (✅) mean the feature is ready to use. Wrench icons (🔧) mean it's partially working. Clipboard icons (📋) mean it's planned but not yet built. You don't need to read every feature — scan the categories that interest you.
+
+> **🔧 Developer View**: Each feature maps to specific source files and services. The status notes include file paths and API endpoints for quick navigation. The Implementation Audit Summary at the bottom provides a compliance snapshot — use it to identify gaps and plan next work.
 
 ---
 
@@ -358,6 +370,89 @@ flowchart TB
 - **Total tests**: 1,520+
 - **Coverage target**: 100% (enforced in jest.config.js)
 
+### v3.0 Features (February 14, 2026)
+
+#### Design Quality Pipeline ✅
+- **Design Architect Agent** — Reviews design structure, scores 0-100 across 6 categories
+- **Gap Hunter Agent** — 15 deterministic checks + LLM analysis for nuanced gaps
+- **Design Hardener Agent** — Creates draft component proposals for human review
+- **Design QA Panel** — Shows scores, gaps, drafts with Approve All/Reject All buttons
+- **Draft Component Rendering** — Dashed outlines on canvas, draggable, approve/reject
+
+#### Ticket System Overhaul ✅
+- **Ticket Auto-Processing** — TicketProcessorService with dual queues (main + boss)
+- **Agent Routing** — Maps operation_type + title patterns to correct agent
+- **Verification System** — Dual-mode: clarity score for communication, deliverable check for work
+- **Tiered Retry** — Auto-retry 3x → Boss severity classification → user escalation
+- **Ghost Ticket System** — P1 tickets auto-created when tasks are blocked. 3-strike dismiss rule.
+- **Cancel Button** — Cancel (not Resolve) for auto-created tickets
+- **Agent Display** — Assigned agent badge, stage badge, acceptance criteria, verification result in ticket detail
+- **Active Ticket SSE Feedback** — Real-time status banners (Processing, Verifying, Retrying)
+- **Ticket Limits** — Max 10 active. P1 bumps P3 when at limit.
+
+#### User Communication Queue ✅
+- **Question Popup** — Focused 1-question-at-a-time popup (replaces free-form chat)
+- **Navigation Buttons** — Navigate to relevant page/area from question
+- **Previous Decision Context** — Shows past answers when similar question detected
+- **Conflict Detection** — Warns when new answer conflicts with existing decision
+- **Queue Badge** — P1 questions pulse red
+
+#### Decision Memory ✅
+- **Decision Tracking** — `user_decisions` table stores every user answer
+- **Auto-Answer** — Repeat questions auto-answered from history
+- **Conflict Detection** — Contradictory answers flagged with impact panel
+- **Stale Filtering** — Outdated questions auto-dismissed when design regenerated
+- **13 Categories** — authentication, database, styling, ui_ux, api_design, etc.
+
+#### Lifecycle Orchestration ✅
+- **8-Phase Model** — Planning → Designing → DesignReview → TaskGeneration → Coding → Verification → Complete (with DesignUpdate loop)
+- **Phase Gates** — Explicit criteria per phase, no manual override
+- **Phase Progress UI** — Grouped by 3 stages, current phase highlighted
+- **Design Approval** — "Approve Design" button creates frozen version snapshot
+- **Version-Aware Coding** — Impact analysis when features branch merges
+- **Layered Task Generation** — Scaffold tasks first, then feature tasks
+
+#### Boss AI Enhancements ✅
+- **Event-Driven Activation** — Triggers on ticket resolved, task completed, agent error, phase transition
+- **Idle Watchdog** — Configurable timeout (default 5 min) triggers health check
+- **Separate Boss Queue** — Boss tickets process independently of main queue
+- **Nav Indicator** — Boss AI status chip in webapp navigation
+
+#### Settings Page ✅
+- **Configurable Thresholds** — QA score, ticket limits, retry counts, clarification rounds, Boss timeouts, clarity scores
+- **LLM Connection** — Endpoint, model, test connection
+- **AI Level** — Manual, Suggestions, Smart, Hybrid
+
+#### MCP Integration ✅
+- **Ticket Processor Drives Task Queue** — `getNextTask` uses TicketProcessorService
+- **Tool Recommendations** — `reportTaskDone` and `askQuestion` include `next_recommended_tool`
+
+#### Planning State Persistence ✅
+- **SSE Auto-Reload** — Real-time updates via Server-Sent Events
+- **State Restoration** — Full state restored on page load/reboot from SQLite
+- **Guided Tour** — Welcome tour for first-time users when no plans exist
+
+#### JSON Repair ✅
+- **Progressive Repair** — 7-step `repairJson()` function fixes malformed LLM JSON output
+- **3-Tier Parsing** — Fast parse → repair → retry LLM with simplified prompt
+
+### v3.0 Service Compliance
+
+| Service | Compliance | Notes |
+|---------|-----------|-------|
+| TicketProcessorService | 100% | Dual queues, routing, verification, retry, ghost tickets, idle watchdog |
+| DesignArchitectAgent | 100% | 6-category scoring, configurable threshold |
+| GapHunterAgent | 100% | 15 deterministic + LLM, hybrid approach |
+| DesignHardenerAgent | 100% | Draft components, human-in-the-loop |
+| DecisionMemoryAgent | 100% | Keyword fast path + LLM, 13 categories, conflict detection |
+| Phase Management | 100% | 8 phases, gate checks, design approval |
+
+### Updated Test Coverage
+
+- **Test suites**: 52+
+- **Total tests**: 2,500+
+- **Coverage target**: 100% (enforced in jest.config.js)
+
 ### Remaining Gaps (Planned)
 
 1. **Adaptive Wizard Paths** — UI-level question branching by project scale
@@ -368,3 +463,42 @@ flowchart TB
 6. **PRD Auto-Generation** — Automatic PRD maintenance from plans
 7. **Orchestrator Loop Detection** — Pattern tracking across all agent calls
 8. **Visual Verification Webview** — Dedicated VS Code panel (API ready)
+
+---
+
+## Feature Dependency Map
+
+The features don't exist in isolation — they depend on each other. This table shows which features must be working before others can function:
+
+| Feature | Hard Dependencies | Soft Dependencies |
+|---------|------------------|-------------------|
+| Planning Wizard | Database, LLM Service | Settings Panel |
+| Task Decomposition | Planning Wizard output | — |
+| Task Queue | Database, Task Decomposition | Boss AI |
+| MCP Server | Database, Task Queue | GitHub Sync |
+| Verification | MCP Server, Task Queue | Test Runner Service |
+| Boss AI | Database, Event Bus | All agents |
+| Custom Agents | YAML Parser, LLM Service | Agent Gallery |
+| GitHub Sync | GitHub Client, Database | File Watcher |
+| Evolution System | Database, Pattern Detection | RL Pipeline |
+| Ethics Engine | LLM Service | Transparency Logger |
+| Sync Service | Database, Conflict Resolver | Vector Clocks |
+| Coding Agent | Component Schema, LLM Service | Ethics Engine |
+| Design QA Pipeline | Design Architect, Gap Hunter, Hardener | — |
+| Ticket Processor | Database, Agent Router, Verification | Ghost Tickets |
+| Decision Memory | Database, LLM Service | Question Queue |
+
+---
+
+## Cross-References
+
+| Topic | Document |
+|-------|----------|
+| Architecture where features are implemented | [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md) |
+| Agents that power these features | [03-Agent-Teams-and-Roles](03-Agent-Teams-and-Roles.md) |
+| Workflows these features enable | [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md) |
+| UI that exposes these features | [05-User-Experience-and-Interface](05-User-Experience-and-Interface.md) |
+| User stories for these features | [06-User-and-Developer-Stories](06-User-and-Developer-Stories.md) |
+| Safety systems protecting features | [08-Context-Management-and-Safety](08-Context-Management-and-Safety.md) |
+| Agile stories tracking implementation | [12-Agile-Stories-and-Tasks](12-Agile-Stories-and-Tasks.md) |
+| Implementation timeline | [13-Implementation-Plan](13-Implementation-Plan.md) |

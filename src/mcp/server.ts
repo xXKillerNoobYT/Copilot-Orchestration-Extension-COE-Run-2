@@ -7,6 +7,7 @@ import { CodingAgentService } from '../core/coding-agent';
 import { AgentContext, TaskStatus } from '../types';
 import { handleApiRequest } from '../webapp/api';
 import { getAppHtml } from '../webapp/app';
+import { TicketProcessorService } from '../core/ticket-processor';
 
 interface MCPToolDefinition {
     name: string;
@@ -24,6 +25,7 @@ export class MCPServer {
     private port = 3030;
     private tools: Map<string, MCPToolDefinition> = new Map();
     private handlers: Map<string, (args: Record<string, unknown>) => Promise<unknown>> = new Map();
+    private ticketProcessor: TicketProcessorService | null = null;
 
     constructor(
         private orchestrator: Orchestrator,
@@ -32,6 +34,15 @@ export class MCPServer {
         private outputChannel: vscode.OutputChannel,
         private codingAgentService?: CodingAgentService
     ) {}
+
+    /**
+     * Wire the TicketProcessorService for task queue integration.
+     * Called after both MCPServer and TicketProcessor are initialized.
+     */
+    setTicketProcessor(processor: TicketProcessorService): void {
+        this.ticketProcessor = processor;
+        this.outputChannel.appendLine('MCP Server: TicketProcessorService wired for task queue integration');
+    }
 
     async initialize(): Promise<void> {
         this.registerTools();
@@ -50,9 +61,43 @@ export class MCPServer {
                 required: [],
             },
         }, async () => {
+            // Use ticket processor if available (I1: ticket processor drives MCP task queue)
+            if (this.ticketProcessor) {
+                const codingTicket = this.ticketProcessor.getNextCodingTask();
+                if (codingTicket && codingTicket.task_id) {
+                    const task = this.database.getTask(codingTicket.task_id);
+                    if (task) {
+                        this.database.updateTask(task.id, { status: TaskStatus.InProgress });
+                        this.database.addAuditLog('mcp', 'get_next_task', `Task "${task.title}" assigned via ticket processor`);
+                        const plan = task.plan_id ? this.database.getPlan(task.plan_id) : null;
+                        const planConfig = plan ? JSON.parse(plan.config_json || '{}') : {};
+                        return {
+                            success: true,
+                            data: {
+                                task_id: task.id,
+                                title: task.title,
+                                description: task.description,
+                                priority: task.priority,
+                                acceptance_criteria: task.acceptance_criteria,
+                                estimated_minutes: task.estimated_minutes,
+                                context_bundle: { plan_name: plan?.name || null, plan_config: planConfig },
+                                related_files: task.files_modified,
+                                ticket_id: codingTicket.id,
+                            },
+                        };
+                    }
+                }
+            }
+
             const task = this.orchestrator.getNextTask();
             if (!task) {
-                return { success: false, error: 'No tasks ready. All tasks are either completed, blocked, or pending verification.' };
+                return {
+                    success: false,
+                    error: 'No tasks ready. All tasks are either completed, blocked, or pending verification.',
+                    status: 'waiting',
+                    next_recommended_tool: 'getNextTask',
+                    reason: 'No tasks available. Call getNextTask again when ready.',
+                };
             }
 
             // Mark as in progress
@@ -157,6 +202,9 @@ export class MCPServer {
                     data: {
                         message: `Task ${taskId} marked as done. Verification will run in ${this.config.getConfig().verification.delaySeconds} seconds.`,
                     },
+                    next_recommended_tool: 'getNextTask',
+                    reason: 'Task verified. Next task is ready for implementation.',
+                    available_tools: ['getNextTask', 'askQuestion', 'getErrors', 'scanCodeBase'],
                 };
             } catch (error) {
                 return {
@@ -204,6 +252,9 @@ export class MCPServer {
                     sources: response.sources || [],
                     escalated: response.actions?.some(a => a.type === 'escalate') || false,
                 },
+                next_recommended_tool: 'getNextTask',
+                reason: 'Your question has been answered. Use getNextTask to continue with the next available task.',
+                available_tools: ['getNextTask', 'askQuestion', 'getErrors', 'scanCodeBase'],
             };
         });
 

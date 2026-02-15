@@ -68,6 +68,28 @@ export type COEEventType =
     | 'element:chat_message' | 'element:change_confirmed' | 'element:change_rejected'
     // AI Chat Overlay (v3.0)
     | 'ai_chat:session_created' | 'ai_chat:message_sent' | 'ai_chat:session_archived'
+    // Plan lifecycle (v4.0 — Lifecycle Orchestration)
+    | 'plan:tasks_generated' | 'plan:config_updated'
+    // Design QA pipeline (v4.0)
+    | 'design:generated' | 'design:merged' | 'design:approved'
+    | 'design:architect_review_completed' | 'design:gap_analysis_completed'
+    | 'design:hardening_completed' | 'design:draft_approved' | 'design:draft_rejected'
+    | 'design:qa_pipeline_started' | 'design:qa_pipeline_completed'
+    // Ticket processing (v4.0)
+    | 'ticket:queued' | 'ticket:processing_started' | 'ticket:processing_completed'
+    | 'ticket:cancelled' | 'ticket:unblocked'
+    | 'ticket:verification_started' | 'ticket:verification_passed' | 'ticket:verification_failed'
+    | 'ticket:retry'
+    // Question queue (v4.0)
+    | 'question:created' | 'question:answered' | 'question:auto_answered'
+    | 'question:dismissed' | 'question:conflict_detected'
+    // Boss AI (v4.0)
+    | 'boss:health_check_started' | 'boss:health_check_completed'
+    | 'boss:idle_watchdog_triggered'
+    // Phase management (v4.0)
+    | 'phase:changed' | 'phase:gate_checked' | 'phase:gate_passed' | 'phase:gate_blocked'
+    // Impact analysis (v4.0)
+    | 'impact:analysis_started' | 'impact:analysis_completed'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

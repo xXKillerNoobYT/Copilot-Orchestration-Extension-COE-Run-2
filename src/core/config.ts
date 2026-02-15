@@ -46,6 +46,20 @@ const DEFAULT_CONFIG: COEConfig = {
         criticalThresholdPercent: 90,
         inputBufferPercent: 5,
     },
+    // Design QA (v4.0)
+    designQaScoreThreshold: 80,
+    // Ticket processing (v4.0)
+    maxActiveTickets: 10,
+    maxTicketRetries: 3,
+    maxClarificationRounds: 5,
+    // Boss AI (v4.0)
+    bossIdleTimeoutMinutes: 5,
+    bossStuckPhaseMinutes: 30,
+    bossTaskOverloadThreshold: 20,
+    bossEscalationThreshold: 5,
+    // Clarity Agent (v4.0)
+    clarityAutoResolveScore: 85,
+    clarityClarificationScore: 70,
 };
 
 export class ConfigManager {
@@ -117,6 +131,17 @@ export class ConfigManager {
                 criticalThresholdPercent: loaded.tokenBudget?.criticalThresholdPercent ?? DEFAULT_CONFIG.tokenBudget!.criticalThresholdPercent,
                 inputBufferPercent: loaded.tokenBudget?.inputBufferPercent ?? DEFAULT_CONFIG.tokenBudget!.inputBufferPercent,
             },
+            // v4.0 thresholds
+            designQaScoreThreshold: loaded.designQaScoreThreshold ?? DEFAULT_CONFIG.designQaScoreThreshold,
+            maxActiveTickets: loaded.maxActiveTickets ?? DEFAULT_CONFIG.maxActiveTickets,
+            maxTicketRetries: loaded.maxTicketRetries ?? DEFAULT_CONFIG.maxTicketRetries,
+            maxClarificationRounds: loaded.maxClarificationRounds ?? DEFAULT_CONFIG.maxClarificationRounds,
+            bossIdleTimeoutMinutes: loaded.bossIdleTimeoutMinutes ?? DEFAULT_CONFIG.bossIdleTimeoutMinutes,
+            bossStuckPhaseMinutes: loaded.bossStuckPhaseMinutes ?? DEFAULT_CONFIG.bossStuckPhaseMinutes,
+            bossTaskOverloadThreshold: loaded.bossTaskOverloadThreshold ?? DEFAULT_CONFIG.bossTaskOverloadThreshold,
+            bossEscalationThreshold: loaded.bossEscalationThreshold ?? DEFAULT_CONFIG.bossEscalationThreshold,
+            clarityAutoResolveScore: loaded.clarityAutoResolveScore ?? DEFAULT_CONFIG.clarityAutoResolveScore,
+            clarityClarificationScore: loaded.clarityClarificationScore ?? DEFAULT_CONFIG.clarityClarificationScore,
         };
     }
 

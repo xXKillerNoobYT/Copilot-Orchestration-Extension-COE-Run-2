@@ -84,6 +84,20 @@ export class Database {
                 assignee TEXT,
                 task_id TEXT,
                 parent_ticket_id TEXT DEFAULT NULL,
+                auto_created INTEGER DEFAULT 0,
+                operation_type TEXT DEFAULT 'user_created',
+                acceptance_criteria TEXT DEFAULT NULL,
+                blocking_ticket_id TEXT DEFAULT NULL,
+                is_ghost INTEGER DEFAULT 0,
+                processing_agent TEXT DEFAULT NULL,
+                processing_status TEXT DEFAULT NULL,
+                deliverable_type TEXT DEFAULT NULL,
+                verification_result TEXT DEFAULT NULL,
+                source_page_ids TEXT DEFAULT NULL,
+                source_component_ids TEXT DEFAULT NULL,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                stage INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (task_id) REFERENCES tasks(id)
@@ -741,6 +755,83 @@ export class Database {
         try {
             this.db.exec('ALTER TABLE tasks ADD COLUMN task_requirements TEXT');
         } catch { /* already exists */ }
+
+        // ==================== v4.0 Migrations ====================
+
+        // Migration: add ticket processing fields
+        const ticketV4Columns = [
+            ['acceptance_criteria', 'TEXT DEFAULT NULL'],
+            ['blocking_ticket_id', 'TEXT DEFAULT NULL'],
+            ['is_ghost', 'INTEGER DEFAULT 0'],
+            ['processing_agent', 'TEXT DEFAULT NULL'],
+            ['processing_status', 'TEXT DEFAULT NULL'],
+            ['deliverable_type', 'TEXT DEFAULT NULL'],
+            ['verification_result', 'TEXT DEFAULT NULL'],
+            ['source_page_ids', 'TEXT DEFAULT NULL'],
+            ['source_component_ids', 'TEXT DEFAULT NULL'],
+            ['retry_count', 'INTEGER DEFAULT 0'],
+            ['max_retries', 'INTEGER DEFAULT 3'],
+            ['stage', 'INTEGER DEFAULT 1'],
+        ];
+        for (const [col, type] of ticketV4Columns) {
+            try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration: add question queue fields
+        const questionV4Columns = [
+            ['source_agent', 'TEXT DEFAULT NULL'],
+            ['source_ticket_id', 'TEXT DEFAULT NULL'],
+            ['navigate_to', 'TEXT DEFAULT NULL'],
+            ['is_ghost', 'INTEGER DEFAULT 0'],
+            ['queue_priority', 'INTEGER DEFAULT 2'],
+            ['answered_at', 'TEXT DEFAULT NULL'],
+            ['ai_continued', 'INTEGER DEFAULT 0'],
+            ['dismiss_count', 'INTEGER DEFAULT 0'],
+            ['previous_decision_id', 'TEXT DEFAULT NULL'],
+            ['conflict_decision_id', 'TEXT DEFAULT NULL'],
+            ['technical_context', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, type] of questionV4Columns) {
+            try { this.db.exec(`ALTER TABLE ai_questions ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration: add draft flag to design_components
+        try {
+            this.db.exec('ALTER TABLE design_components ADD COLUMN is_draft INTEGER DEFAULT 0');
+        } catch { /* already exists */ }
+
+        // Migration: add phase tracking to plans
+        const planPhaseColumns = [
+            ['current_phase', "TEXT DEFAULT 'planning'"],
+            ['current_version', 'INTEGER DEFAULT 1'],
+            ['phase_started_at', 'TEXT DEFAULT NULL'],
+            ['design_approved_at', 'TEXT DEFAULT NULL'],
+            ['coding_version_snapshot_id', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, type] of planPhaseColumns) {
+            try { this.db.exec(`ALTER TABLE plans ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration: create user_decisions table
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS user_decisions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                question_id TEXT,
+                ticket_id TEXT,
+                superseded_by TEXT,
+                is_active INTEGER DEFAULT 1,
+                context TEXT,
+                affected_entities TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_user_decisions_plan ON user_decisions(plan_id, is_active)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_user_decisions_topic ON user_decisions(plan_id, topic)'); } catch { /* already exists */ }
     }
 
     private genId(): string {
@@ -899,8 +990,14 @@ export class Database {
         const ticketNumber = this.nextTicketNumber();
         const now = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO tickets (id, ticket_number, title, body, status, priority, creator, assignee, task_id, parent_ticket_id, auto_created, operation_type, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tickets (
+                id, ticket_number, title, body, status, priority, creator, assignee, task_id,
+                parent_ticket_id, auto_created, operation_type,
+                acceptance_criteria, blocking_ticket_id, is_ghost, processing_agent,
+                processing_status, deliverable_type, verification_result,
+                source_page_ids, source_component_ids, retry_count, max_retries, stage,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id,
             ticketNumber,
@@ -914,6 +1011,18 @@ export class Database {
             data.parent_ticket_id || null,
             data.auto_created ? 1 : 0,
             data.operation_type || 'user_created',
+            data.acceptance_criteria ?? null,
+            data.blocking_ticket_id ?? null,
+            data.is_ghost ? 1 : 0,
+            data.processing_agent ?? null,
+            data.processing_status ?? null,
+            data.deliverable_type ?? null,
+            data.verification_result ?? null,
+            data.source_page_ids ?? null,
+            data.source_component_ids ?? null,
+            data.retry_count ?? 0,
+            data.max_retries ?? 3,
+            data.stage ?? null,
             now,
             now
         );
@@ -960,6 +1069,18 @@ export class Database {
         if (updates.priority !== undefined) { fields.push('priority = ?'); values.push(updates.priority); }
         if (updates.assignee !== undefined) { fields.push('assignee = ?'); values.push(updates.assignee); }
         if (updates.parent_ticket_id !== undefined) { fields.push('parent_ticket_id = ?'); values.push(updates.parent_ticket_id); }
+        if (updates.acceptance_criteria !== undefined) { fields.push('acceptance_criteria = ?'); values.push(updates.acceptance_criteria); }
+        if (updates.blocking_ticket_id !== undefined) { fields.push('blocking_ticket_id = ?'); values.push(updates.blocking_ticket_id); }
+        if (updates.is_ghost !== undefined) { fields.push('is_ghost = ?'); values.push(updates.is_ghost ? 1 : 0); }
+        if (updates.processing_agent !== undefined) { fields.push('processing_agent = ?'); values.push(updates.processing_agent); }
+        if (updates.processing_status !== undefined) { fields.push('processing_status = ?'); values.push(updates.processing_status); }
+        if (updates.deliverable_type !== undefined) { fields.push('deliverable_type = ?'); values.push(updates.deliverable_type); }
+        if (updates.verification_result !== undefined) { fields.push('verification_result = ?'); values.push(updates.verification_result); }
+        if (updates.source_page_ids !== undefined) { fields.push('source_page_ids = ?'); values.push(updates.source_page_ids); }
+        if (updates.source_component_ids !== undefined) { fields.push('source_component_ids = ?'); values.push(updates.source_component_ids); }
+        if (updates.retry_count !== undefined) { fields.push('retry_count = ?'); values.push(updates.retry_count); }
+        if (updates.max_retries !== undefined) { fields.push('max_retries = ?'); values.push(updates.max_retries); }
+        if (updates.stage !== undefined) { fields.push('stage = ?'); values.push(updates.stage); }
 
         if (fields.length === 0) return existing;
 
@@ -995,6 +1116,18 @@ export class Database {
             parent_ticket_id: (row.parent_ticket_id as string | null) ?? null,
             auto_created: !!(row.auto_created as number),
             operation_type: (row.operation_type as string) || 'user_created',
+            acceptance_criteria: (row.acceptance_criteria as string | null) ?? null,
+            blocking_ticket_id: (row.blocking_ticket_id as string | null) ?? null,
+            is_ghost: !!(row.is_ghost as number),
+            processing_agent: (row.processing_agent as string | null) ?? null,
+            processing_status: (row.processing_status as string | null) as Ticket['processing_status'],
+            deliverable_type: (row.deliverable_type as string | null) as Ticket['deliverable_type'],
+            verification_result: (row.verification_result as string | null) ?? null,
+            source_page_ids: (row.source_page_ids as string | null) ?? null,
+            source_component_ids: (row.source_component_ids as string | null) ?? null,
+            retry_count: (row.retry_count as number) ?? 0,
+            max_retries: (row.max_retries as number) ?? 3,
+            stage: (row.stage as number) ?? 1,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -1036,6 +1169,166 @@ export class Database {
 
     getTicketReplies(ticketId: string): TicketReply[] {
         return this.db.prepare('SELECT * FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC').all(ticketId) as TicketReply[];
+    }
+
+    // ==================== GHOST TICKETS (B6) ====================
+
+    /**
+     * Creates a Ghost Ticket for user-blocking questions.
+     * Links a P1 ghost ticket to the original ticket and creates an ai_questions entry.
+     */
+    createGhostTicket(
+        originalTicketId: string,
+        question: string,
+        context: string,
+        navigateTo: string,
+        planId: string,
+        technicalContext?: string
+    ): { ghostTicket: Ticket; ghostQuestion: AIQuestion } {
+        const originalTicket = this.getTicket(originalTicketId);
+
+        // Create ghost ticket linked to original
+        const ghostTicket = this.createTicket({
+            title: `Ghost: ${originalTicket?.title || 'Blocked task'}`,
+            body: `**Blocking Question**\n\n${question}\n\n**Context**: ${context}`,
+            priority: TicketPriority.P1,
+            creator: 'system',
+            parent_ticket_id: originalTicketId,
+            auto_created: true,
+            operation_type: 'ghost_ticket',
+            is_ghost: true,
+            deliverable_type: 'communication',
+            stage: originalTicket?.stage,
+        });
+
+        // Mark original as blocked
+        if (originalTicket) {
+            this.updateTicket(originalTicketId, {
+                status: TicketStatus.Open, // stays open but marked blocked
+                blocking_ticket_id: ghostTicket.id,
+                processing_status: 'awaiting_user',
+            });
+        }
+
+        // Create linked question in the user queue
+        const ghostQuestion = this.createAIQuestion({
+            plan_id: planId,
+            component_id: null,
+            page_id: null,
+            category: 'general' as any,
+            question,
+            question_type: 'text',
+            options: [],
+            ai_reasoning: context,
+            ai_suggested_answer: null,
+            user_answer: null,
+            status: 'pending' as any,
+            ticket_id: ghostTicket.id,
+            source_agent: originalTicket?.processing_agent ?? 'system',
+            source_ticket_id: originalTicketId,
+            navigate_to: navigateTo,
+            is_ghost: true,
+            queue_priority: 1,
+            technical_context: technicalContext ?? null,
+        });
+
+        return { ghostTicket, ghostQuestion };
+    }
+
+    /**
+     * Resolves a ghost ticket and unblocks the original ticket.
+     */
+    resolveGhostTicket(ghostTicketId: string): Ticket | null {
+        const ghost = this.getTicket(ghostTicketId);
+        if (!ghost || !ghost.is_ghost) return null;
+
+        // Resolve the ghost
+        this.updateTicket(ghostTicketId, { status: TicketStatus.Resolved });
+
+        // Unblock the original (parent)
+        if (ghost.parent_ticket_id) {
+            this.updateTicket(ghost.parent_ticket_id, {
+                blocking_ticket_id: undefined,
+                processing_status: 'queued',
+            });
+            return this.getTicket(ghost.parent_ticket_id);
+        }
+        return ghost;
+    }
+
+    // ==================== USER DECISIONS (E5) ====================
+
+    createUserDecision(data: {
+        plan_id: string;
+        category: string;
+        topic: string;
+        decision: string;
+        question_id?: string;
+        ticket_id?: string;
+        context?: string;
+        affected_entities?: string;
+    }): Record<string, unknown> {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO user_decisions (id, plan_id, category, topic, decision, question_id, ticket_id, context, affected_entities, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id, data.category, data.topic, data.decision,
+            data.question_id ?? null, data.ticket_id ?? null,
+            data.context ?? null, data.affected_entities ?? null, now, now);
+        return this.db.prepare('SELECT * FROM user_decisions WHERE id = ?').get(id) as Record<string, unknown>;
+    }
+
+    getActiveDecisions(planId: string, category?: string, topic?: string): Record<string, unknown>[] {
+        let sql = 'SELECT * FROM user_decisions WHERE plan_id = ? AND is_active = 1';
+        const params: unknown[] = [planId];
+        if (category) { sql += ' AND category = ?'; params.push(category); }
+        if (topic) { sql += ' AND topic = ?'; params.push(topic); }
+        sql += ' ORDER BY created_at DESC';
+        return this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    }
+
+    supersedeDecision(decisionId: string, newDecisionId: string): void {
+        const now = new Date().toISOString();
+        this.db.prepare('UPDATE user_decisions SET is_active = 0, superseded_by = ?, updated_at = ? WHERE id = ?')
+            .run(newDecisionId, now, decisionId);
+    }
+
+    getDecisionsByTopic(planId: string, topic: string): Record<string, unknown>[] {
+        return this.db.prepare(
+            'SELECT * FROM user_decisions WHERE plan_id = ? AND topic LIKE ? AND is_active = 1 ORDER BY created_at DESC'
+        ).all(planId, `%${topic}%`) as Record<string, unknown>[];
+    }
+
+    // ==================== PLAN PHASE (F1) ====================
+
+    updatePlanPhase(planId: string, phase: string): void {
+        const now = new Date().toISOString();
+        this.db.prepare('UPDATE plans SET current_phase = ?, phase_started_at = ?, updated_at = ? WHERE id = ?')
+            .run(phase, now, now, planId);
+    }
+
+    getPlanPhase(planId: string): { phase: string; stage: number; startedAt: string | null; version: number } | null {
+        const row = this.db.prepare('SELECT current_phase, phase_started_at, current_version FROM plans WHERE id = ?')
+            .get(planId) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        const phase = (row.current_phase as string) || 'planning';
+        const stageMap: Record<string, number> = {
+            planning: 1, designing: 1, design_review: 1, task_generation: 1,
+            coding: 2, design_update: 2, verification: 3, complete: 3,
+        };
+        return {
+            phase,
+            stage: stageMap[phase] ?? 1,
+            startedAt: (row.phase_started_at as string) ?? null,
+            version: (row.current_version as number) ?? 1,
+        };
+    }
+
+    approvePlanDesign(planId: string): void {
+        const now = new Date().toISOString();
+        this.db.prepare('UPDATE plans SET design_approved_at = ?, updated_at = ? WHERE id = ?')
+            .run(now, now, planId);
     }
 
     // ==================== CONVERSATIONS ====================
@@ -1496,6 +1789,7 @@ export class Database {
             props: JSON.parse((row.props as string) || '{}'),
             requirements: JSON.parse((row.requirements as string) || '[]'),
             responsive: JSON.parse((row.responsive as string) || '{}'),
+            is_draft: !!(row.is_draft as number),
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -2611,13 +2905,27 @@ export class Database {
         const id = this.genId();
         const now = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO ai_questions (id, plan_id, component_id, page_id, category, question, question_type, options, ai_reasoning, ai_suggested_answer, user_answer, status, ticket_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
+            INSERT INTO ai_questions (
+                id, plan_id, component_id, page_id, category, question, question_type, options,
+                ai_reasoning, ai_suggested_answer, user_answer, status, ticket_id,
+                source_agent, source_ticket_id, navigate_to, is_ghost, queue_priority,
+                answered_at, ai_continued, dismiss_count, previous_decision_id,
+                conflict_decision_id, technical_context,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
             data.category || 'general', data.question, data.question_type || 'text',
             JSON.stringify(data.options || []), data.ai_reasoning || '',
             data.ai_suggested_answer ?? null, data.user_answer ?? null,
-            data.status || 'pending', data.ticket_id ?? null, now, now);
+            data.status || 'pending', data.ticket_id ?? null,
+            data.source_agent ?? null, data.source_ticket_id ?? null,
+            data.navigate_to ?? null, data.is_ghost ? 1 : 0, data.queue_priority ?? 2,
+            data.answered_at ?? null, data.ai_continued ? 1 : 0, data.dismiss_count ?? 0,
+            data.previous_decision_id ?? null, data.conflict_decision_id ?? null,
+            data.technical_context ?? null,
+            now, now
+        );
         return this.getAIQuestion(id)!;
     }
 
@@ -2729,6 +3037,18 @@ export class Database {
             ticket_id: (row.ticket_id as string) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
+            // v4.0 fields
+            source_agent: (row.source_agent as string) ?? null,
+            source_ticket_id: (row.source_ticket_id as string) ?? null,
+            navigate_to: (row.navigate_to as string) ?? null,
+            is_ghost: Boolean(row.is_ghost),
+            queue_priority: (row.queue_priority as number) ?? 2,
+            answered_at: (row.answered_at as string) ?? null,
+            ai_continued: Boolean(row.ai_continued),
+            dismiss_count: (row.dismiss_count as number) ?? 0,
+            previous_decision_id: (row.previous_decision_id as string) ?? null,
+            conflict_decision_id: (row.conflict_decision_id as string) ?? null,
+            technical_context: (row.technical_context as string) ?? null,
         };
     }
 

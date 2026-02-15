@@ -1,10 +1,26 @@
 # Program Designer & Integrated AI Agent — Product Requirements Document
 
-**Version**: 2.0
-**Date**: February 12, 2026
-**Status**: Draft
+**Version**: 3.0
+**Date**: February 13, 2026
+**Status**: Draft — Core services implemented, designer canvas in progress
 **Author**: COE Development Team
 **Supersedes**: N/A (new capability)
+**Depends On**: [02 - Architecture](02-System-Architecture-and-Design.md), [03 - Agent Teams](03-Agent-Teams-and-Roles.md), [08 - Safety](08-Context-Management-and-Safety.md)
+
+**Changelog**:
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Feb 5, 2026 | Initial PRD draft — canvas and component library |
+| 2.0 | Feb 12, 2026 | Added AI agent spec, sync protocol, ethics framework, full component library, data model, phased delivery |
+| 3.0 | Feb 13, 2026 | Standardized header, User/Dev perspectives, testing strategy, prompt engineering details, cross-ref fixes |
+
+### How to Read This Document
+
+This is the most comprehensive single document in the True Plan. It defines the full product requirements for v2.0 — the visual designer expansion. It is organized as a standard PRD: problem → goals → architecture → features → data model → delivery plan.
+
+> **As a User**: Focus on Sections 1–4 (what is being built and why), Section 6 (feature details with user scenarios), Section 11 (UI/UX), and the User Scenarios in §6.6. These explain what you will see and interact with.
+>
+> **As a Developer**: Focus on Sections 5 (architecture), 7 (component schemas), 8 (AI agent spec), 9 (sync protocol), 10 (ethics enforcement), 12 (data model), and 13–15 (NFRs, risks, delivery). These are engineering-ready specifications.
 
 ---
 
@@ -42,6 +58,10 @@ COE v1.x is a plan-driven orchestration layer. It breaks ideas into tasks, hands
 - An ethics and rights system (FreedomGuard_AI) with selectable freedom modules, configurable sensitivity levels, and a runtime ethics auditor that blocks harmful code generation.
 
 These capabilities transform COE from a planning-and-tracking tool into a complete visual development environment where users design, generate, review, and deploy software without leaving VS Code.
+
+> **User View**: You open the COE sidebar, click "New Design," and a canvas appears. Drag buttons, forms, and logic blocks from a component library onto the canvas. Type "add login form with email and password" into the AI command bar — the agent generates the code, shows you a diff, and waits for your approval. Close your laptop at home, open your work PC — everything is synced. The AI never generates harmful code because FreedomGuard_AI blocks it before you even see it.
+>
+> **Developer View**: The `DesignerEngine` (existing) gets a webview-based canvas frontend. A new `CodingAgentService` wraps LLM calls with a 6-intent classifier, ethics gate, and diff generation pipeline. `SyncService` implements 3-backend synchronization with vector clocks and advisory locking. `EthicsEngine` sits in the code generation pipeline between LLM output and user approval. All state is stored in 8 new SQLite tables (§12). All events flow through the existing EventBus with 15+ new event types (§12.4).
 
 ---
 
@@ -1734,6 +1754,37 @@ Add to the existing `COEEventType` union in `src/core/event-bus.ts`:
 | Ethics audit completeness | 100% (every AI output is logged, no exceptions) |
 | Undo/redo reliability | 100-step history with persistence across sessions |
 
+### 13.6 Testing Strategy
+
+All v2.0 features follow the COE testing conventions defined in the project's jest.config.js (100% coverage threshold).
+
+| Layer | Strategy | Tools | Coverage Target |
+|-------|----------|-------|-----------------|
+| **Unit Tests** | Every service class gets a dedicated test file | Jest + ts-jest | 100% statement, branch, function, line |
+| **Component Schema Tests** | Validate all 60+ component schemas against the registry | `component-schema.test.ts` | All schema types |
+| **Integration Tests** | Service-to-service interactions (CodingAgent → Ethics → DB) | Jest with temp directories | All critical paths |
+| **Snapshot Tests** | Code generation output stability | Jest snapshots | All component types × all export formats |
+| **E2E Tests** | Webapp pages, API endpoints, designer workflows | Playwright | All 10 webapp pages, all API routes |
+| **Sync Protocol Tests** | Multi-device simulation with conflict scenarios | Jest + mock network | All 3 backends, all conflict types |
+| **Ethics Engine Tests** | Property-based testing of ethical rule enforcement | Jest + custom generators | 100% of rules, all sensitivity levels |
+| **Performance Benchmarks** | Canvas rendering, code generation latency | Custom benchmarks | p95 targets in §13.1 |
+
+> **User View**: You don't interact with tests directly, but they protect you. Every AI-generated code snippet, every ethics check, every sync operation is verified by automated tests before a release. If a test fails, that feature doesn't ship.
+>
+> **Developer View**: Tests live in `tests/*.test.ts`. Database tests use `fs.mkdtempSync()` for isolation. HTTP servers must call `server.closeAllConnections()` before `server.close()`. The `vscode` module is mocked via `tests/__mocks__/vscode.ts`. Run `npx jest --coverage` to verify.
+
+**Test File Mapping:**
+
+| Service | Test File | Focus |
+|---------|-----------|-------|
+| CodingAgentService | `coding-agent.test.ts` | Intent classification, code generation, ethics gate |
+| EthicsEngine | `ethics-engine.test.ts` | Module enforcement, sensitivity levels, absolute blocks |
+| SyncService | `sync-service.test.ts` | Backend registration, vector clocks, package exchange |
+| ConflictResolver | `conflict-resolver.test.ts` | 5 strategies, field-level merge, SHA-256 checksums |
+| ComponentSchemaService | `component-schema.test.ts` | Schema registry, validation, code templates |
+| DesignerEngine | `designer-engine.test.ts` | Snap grid, alignment, layout, code export |
+| SecurityManager | `security-manager.test.ts` | Input validation, sanitization, path traversal |
+
 ---
 
 ## 14. Dependencies & Risks
@@ -1910,4 +1961,7 @@ Add to the existing `COEEventType` union in `src/core/event-bus.ts`:
 | [07 - Program Lifecycle](07-Program-Lifecycle-and-Evolution.md) | Lifecycle phases; designer integrates into Growth and Evolution |
 | [08 - Context Management](08-Context-Management-and-Safety.md) | Safety systems; ethics framework extends this |
 | [09 - Features & Capabilities](09-Features-and-Capabilities.md) | Feature catalog; 15+ new features added |
-| [10 - AI Baseline](10-AI-Funshin-Basline-Gole.md) | AI operating principles; coding agent and ethics agent follow these |
+| [10 - AI Operating Principles](10-AI-Operating-Principles.md) | AI operating principles; coding agent and ethics agent follow these |
+| [12 - Agile Stories](12-Agile-Stories-and-Tasks.md) | User stories and developer tasks decomposed from this PRD |
+| [13 - Implementation Plan](13-Implementation-Plan.md) | Engineering implementation with API shapes, database schemas, sync protocol |
+| [14 - AI Agent Behavior Spec](14-AI-Agent-Behavior-Spec.md) | Detailed behavioral specification for the AI coding agent defined in §8 |

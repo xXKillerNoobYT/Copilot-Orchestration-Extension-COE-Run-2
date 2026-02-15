@@ -1,7 +1,42 @@
 # Agile Stories & Developer Tasks
 
-**Version**: 2.0
-**Date**: February 12, 2026
+**Version**: 3.0
+**Date**: February 13, 2026
+**Status**: Specification — Phase 1-4 stories implemented
+**Depends On**: [11 - PRD](11-Program-Designer-PRD.md), [06 - User Stories](06-User-and-Developer-Stories.md)
+
+**Changelog**:
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Feb 8, 2026 | Initial user stories for canvas and component library |
+| 2.0 | Feb 12, 2026 | Full 7-epic decomposition with 38 stories and 130+ developer tasks |
+| 3.0 | Feb 13, 2026 | Standardized header, epic dependency graph, status tracking, User/Dev views, cross-references |
+
+### How to Read This Document
+
+Each **Epic** groups related functionality. Each **User Story** (US-##) follows the "As a / I want / So that" format with acceptance criteria. Each **Developer Task** (DT-##) is a 15–45 minute atomic work item with file targets and test criteria.
+
+> **As a User**: Read the epic descriptions and user stories to understand what you will be able to do. The acceptance criteria tell you exactly what "done" looks like for each feature. You don't need to read the Developer Tasks — those are implementation details.
+>
+> **As a Developer**: The Developer Tasks are your work items. Each DT links to specific source files, has a time estimate, and includes a test description. Work through them in sprint order (see Summary section). Always verify acceptance criteria after completing all DTs for a story.
+
+---
+
+## Epic Dependency Graph
+
+```mermaid
+graph LR
+    E1[Epic 1: Designer Canvas] --> E2[Epic 2: Component Library]
+    E2 --> E3[Epic 3: AI Coding Agent]
+    E1 --> E3
+    E3 --> E5[Epic 5: Ethics & Rights]
+    E3 --> E6[Epic 6: Code Generation]
+    E1 --> E4[Epic 4: Multi-Device Sync]
+    E3 --> E7[Epic 7: Transparency & Logging]
+    E5 --> E7
+```
+
+**Reading the graph**: Arrows mean "depends on." Epic 3 (AI Coding Agent) depends on both Epic 1 (Canvas) and Epic 2 (Component Library) because the agent generates code from visual designs built on the canvas using library components. Epic 5 (Ethics) depends on Epic 3 because it gates AI agent output. Epic 7 (Transparency) depends on both Epic 3 and Epic 5 because it logs agent actions and ethics decisions.
 
 ---
 
@@ -1342,16 +1377,20 @@ This document contains all user stories and developer tasks for the Visual Progr
 
 ## Summary
 
-| Epic | Stories | Tasks | Priority | Estimated Hours |
-|------|---------|-------|----------|-----------------|
-| 1. Designer Canvas | 6 | 23 | P1/P2 | 23 |
-| 2. Component Library | 6 | 22 | P1/P2 | 33 |
-| 3. AI Coding Agent | 8 | 24 | P1/P2/P3 | 35 |
-| 4. Multi-Device Sync | 5 | 13 | P2/P3 | 25 |
-| 5. Ethics & Rights | 5 | 14 | P1/P2/P3 | 16 |
-| 6. Code Generation | 4 | 8 | P1/P2/P3 | 14 |
-| 7. Transparency & Logging | 4 | 9 | P1/P2/P3 | 10 |
-| **Total** | **38** | **113** | | **~156 hours** |
+| Epic | Stories | Tasks | Priority | Estimated Hours | Status |
+|------|---------|-------|----------|-----------------|--------|
+| 1. Designer Canvas | 6 | 23 | P1/P2 | 23 | ✅ Core implemented |
+| 2. Component Library | 6 | 22 | P1/P2 | 33 | ✅ Schema service complete |
+| 3. AI Coding Agent | 8 | 24 | P1/P2/P3 | 35 | ✅ 6 intents, ethics gate |
+| 4. Multi-Device Sync | 5 | 13 | P2/P3 | 25 | ✅ 3 backends, vector clocks |
+| 5. Ethics & Rights | 5 | 14 | P1/P2/P3 | 16 | ✅ 6 modules, 4 levels |
+| 6. Code Generation | 4 | 8 | P1/P2/P3 | 14 | ✅ React/HTML/CSS export |
+| 7. Transparency & Logging | 4 | 9 | P1/P2/P3 | 10 | ✅ Audit trail wired |
+| **Total** | **38** | **113** | | **~156 hours** | |
+
+> **User View**: The status column tells you which features are ready to use. "✅ Core implemented" means the backend service works — the UI may still be in progress. Check the webapp at localhost:3030 to see what's live.
+>
+> **Developer View**: "Implemented" means the service class exists, passes tests, and is wired into `extension.ts`. Check the individual test files to verify. See [13 - Implementation Plan](13-Implementation-Plan.md) for exact file paths and integration status.
 
 ### Implementation Order (Recommended)
 
@@ -1364,3 +1403,16 @@ This document contains all user stories and developer tasks for the Visual Progr
 **Sprint 7 (Advanced):** US-11, US-12, US-18, US-19 — Data/sync widgets, ethics components, NL logic, auto-decomposition
 **Sprint 8 (Export & Polish):** US-31, US-32, US-33, US-35, US-38 — Code export, live preview, audit trail
 **Sprint 9 (Power User):** US-16, US-25, US-27, US-29, US-30, US-34, US-36, US-37 — Explanations, history, sensitivity, custom templates
+
+---
+
+## Cross-References
+
+| Document | Relationship |
+|----------|-------------|
+| [06 - User Stories](06-User-and-Developer-Stories.md) | v1.x user stories; this doc extends with v2.0 designer stories |
+| [11 - PRD](11-Program-Designer-PRD.md) | Source requirements — every story traces to a PRD section |
+| [13 - Implementation Plan](13-Implementation-Plan.md) | Engineering implementation of these stories: API shapes, DB schema, phased schedule |
+| [14 - AI Agent Behavior Spec](14-AI-Agent-Behavior-Spec.md) | Detailed behavioral spec for Epic 3 (AI Coding Agent) stories |
+| [04 - Workflows](04-Workflows-and-How-It-Works.md) | Workflow definitions that Epic 3 and Epic 5 integrate into |
+| [09 - Features](09-Features-and-Capabilities.md) | Feature catalog where these stories are registered |

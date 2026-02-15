@@ -12,7 +12,8 @@
       "Bash(done)",
       "Bash(dir:*)",
       "Bash(ls:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npx playwright test)"
     ]
   }
 }

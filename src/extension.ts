@@ -22,6 +22,7 @@ import { CodingAgentService } from './core/coding-agent';
 import { ConflictResolver } from './core/conflict-resolver';
 import { SyncService } from './core/sync-service';
 import { getEventBus } from './core/event-bus';
+import { TicketProcessorService } from './core/ticket-processor';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -30,6 +31,7 @@ let orchestrator: Orchestrator;
 let mcpServer: MCPServer;
 let fileWatcher: FileWatcherService;
 let syncService: SyncService;
+let ticketProcessor: TicketProcessorService;
 
 export async function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('COE');
@@ -170,6 +172,13 @@ export async function activate(context: vscode.ExtensionContext) {
         mcpServer = new MCPServer(orchestrator, database, configManager, outputChannel, codingAgentService);
         await mcpServer.initialize();
 
+        // Phase 3b: Initialize ticket auto-processing
+        ticketProcessor = new TicketProcessorService(database, orchestrator, eventBus, configManager, outputChannel);
+        ticketProcessor.start();
+        mcpServer.setTicketProcessor(ticketProcessor);
+        context.subscriptions.push({ dispose: () => ticketProcessor.dispose() });
+        outputChannel.appendLine('TicketProcessorService initialized with dual queues.');
+
         // Phase 4: Initialize UI — single status view (full app opens in browser)
         const statusView = new StatusViewProvider(database, mcpServer);
 
@@ -233,6 +242,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export async function deactivate() {
+    if (ticketProcessor) { ticketProcessor.dispose(); }
     if (syncService) { await syncService.dispose(); }
     if (fileWatcher) { fileWatcher.stop(); }
     if (mcpServer) { mcpServer.dispose(); }

@@ -120,6 +120,8 @@ button, .btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: poin
 .btn-primary:hover { filter: brightness(1.1); }
 .btn-success { background: var(--green); color: var(--bg); }
 .btn-danger { background: var(--red); color: var(--bg); }
+.btn-red { background: var(--red); color: var(--bg); opacity: 0.9; }
+.btn-red:hover { opacity: 1; }
 .btn-secondary { background: var(--bg3); color: var(--text); }
 .btn-secondary:hover { background: var(--surface); }
 .btn-sm { padding: 4px 10px; font-size: 0.8em; }
@@ -575,6 +577,9 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 /* Guided highlight animation */
 .guided-highlight { outline: 2px solid var(--highlight-color, var(--blue)); outline-offset: 4px; animation: pulse-outline 1.5s ease-in-out 2; }
 @keyframes pulse-outline { 0%, 100% { outline-offset: 4px; opacity: 1; } 50% { outline-offset: 8px; opacity: 0.7; } }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes pulse-red { 0%, 100% { background: var(--red); } 50% { background: #991b1b; } }
+.processing-banner { border-left: 3px solid var(--blue); padding: 8px 12px; margin: 8px 0; display: flex; align-items: center; gap: 8px; background: var(--bg); border-radius: 4px; }
 
 /* Wizard dot clickable */
 .wizard-dot { cursor: pointer; }
@@ -603,6 +608,90 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     .status-layout { grid-template-columns: 1fr; }
     .status-tree, .status-detail { display: none; }
 }
+
+/* ==================== DESIGN QA PANEL ==================== */
+.qa-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
+.qa-panel h3 { font-size: 1em; color: var(--blue); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.qa-score { font-size: 2em; font-weight: 700; text-align: center; padding: 8px 0; }
+.qa-score.green { color: var(--green); }
+.qa-score.yellow { color: var(--yellow); }
+.qa-score.red { color: var(--red); }
+.qa-gaps { display: flex; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
+.qa-gap-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; font-size: 0.85em; display: flex; align-items: center; gap: 6px; }
+.qa-gap-item .gap-count { font-weight: 700; font-size: 1.1em; }
+.qa-phases { display: flex; gap: 8px; margin: 12px 0; }
+.qa-phase { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 0.8em; display: flex; align-items: center; gap: 6px; }
+.qa-phase .phase-dot { width: 8px; height: 8px; border-radius: 50%; }
+.qa-phase .phase-dot.done { background: var(--green); }
+.qa-phase .phase-dot.running { background: var(--blue); animation: pulse-dot 1.5s infinite; }
+.qa-phase .phase-dot.pending { background: var(--overlay); }
+.qa-drafts { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+.qa-drafts .draft-count { font-weight: 600; font-size: 0.9em; }
+.qa-drafts .draft-actions { display: flex; gap: 6px; }
+
+/* ==================== QUESTION POPUP ==================== */
+.question-popup-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 350; display: flex; align-items: center; justify-content: center; }
+.question-popup { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 90%; max-width: 560px; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+.question-popup h2 { margin-bottom: 6px; font-size: 1.1em; }
+.question-popup .q-position { font-size: 0.8em; color: var(--overlay); margin-bottom: 16px; }
+.question-popup .q-source-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; margin-bottom: 12px; }
+.question-popup .q-source-badge.planning { background: rgba(137,180,250,0.15); color: var(--blue); }
+.question-popup .q-source-badge.design { background: rgba(203,166,247,0.15); color: var(--mauve); }
+.question-popup .q-source-badge.coding { background: rgba(166,227,161,0.15); color: var(--green); }
+.question-popup .q-source-badge.verification { background: rgba(249,226,175,0.15); color: var(--yellow); }
+.question-popup .q-source-badge.boss { background: rgba(243,139,168,0.15); color: var(--red); }
+.question-popup .q-source-badge.clarity { background: rgba(148,226,213,0.15); color: var(--teal); }
+.question-popup .q-text { font-size: 1em; line-height: 1.5; margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--blue); }
+.question-popup .q-suggested { background: var(--bg3); border-radius: 6px; padding: 10px; margin-bottom: 14px; font-size: 0.9em; }
+.question-popup .q-suggested strong { color: var(--teal); display: block; margin-bottom: 4px; font-size: 0.85em; }
+.question-popup .q-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.question-popup .q-option { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: all 0.15s; }
+.question-popup .q-option:hover { border-color: var(--blue); }
+.question-popup .q-option.selected { border-color: var(--blue); background: rgba(137,180,250,0.08); }
+.question-popup .q-option input[type="radio"] { margin: 0; }
+.question-popup .q-yesno { display: flex; gap: 8px; margin-bottom: 14px; }
+.question-popup .q-yesno button { flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.95em; }
+.question-popup .q-nav-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--subtext); font-size: 0.8em; cursor: pointer; margin-top: 8px; }
+.question-popup .q-nav-btn:hover { border-color: var(--blue); color: var(--blue); }
+.question-popup .q-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: space-between; }
+.question-badge-pulse { animation: pulse-red 1.5s infinite; }
+
+/* ==================== PHASE PROGRESS INDICATOR ==================== */
+.phase-indicator { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 20px; }
+.phase-indicator .phase-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.phase-indicator .phase-version { font-size: 0.8em; color: var(--overlay); }
+.phase-indicator .phase-time { font-size: 0.8em; color: var(--subtext); }
+.phase-stages { display: flex; align-items: center; gap: 0; width: 100%; }
+.phase-stage { flex: 1; position: relative; }
+.phase-stage-label { font-size: 0.75em; color: var(--subtext); text-align: center; margin-bottom: 8px; font-weight: 600; }
+.phase-stage-label.active { color: var(--blue); }
+.phase-stage-label.done { color: var(--green); }
+.phase-dots { display: flex; align-items: center; justify-content: center; gap: 4px; }
+.phase-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--overlay); background: transparent; transition: all 0.2s; }
+.phase-dot.filled { background: var(--green); border-color: var(--green); }
+.phase-dot.current { background: var(--blue); border-color: var(--blue); box-shadow: 0 0 6px rgba(137,180,250,0.5); animation: pulse-dot 1.5s infinite; }
+.phase-dot.empty { background: transparent; border-color: var(--overlay); }
+.phase-connector { flex: 1; height: 2px; background: var(--overlay); margin: 0 2px; }
+.phase-connector.done { background: var(--green); }
+.phase-approve-bar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* ==================== GUIDED TOUR ==================== */
+.guided-tour { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 40px; text-align: center; }
+.guided-tour h2 { font-size: 1.4em; margin-bottom: 8px; color: var(--text); }
+.guided-tour .tour-subtitle { color: var(--subtext); font-size: 1em; margin-bottom: 32px; }
+.guided-tour .tour-stages { display: flex; gap: 24px; justify-content: center; margin-bottom: 32px; flex-wrap: wrap; }
+.guided-tour .tour-stage { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 220px; text-align: center; }
+.guided-tour .tour-stage-num { font-size: 1.6em; font-weight: 700; color: var(--blue); margin-bottom: 8px; }
+.guided-tour .tour-stage-title { font-weight: 600; margin-bottom: 4px; }
+.guided-tour .tour-stage-desc { font-size: 0.85em; color: var(--subtext); line-height: 1.4; }
+
+/* ==================== DRAFT COMPONENT STYLES ==================== */
+.design-el.draft-component { border: 2px dashed var(--yellow) !important; opacity: 0.7; }
+.design-el.draft-component .draft-badge { position: absolute; top: -10px; right: -10px; background: var(--yellow); color: var(--bg); font-size: 0.6em; font-weight: 700; padding: 2px 6px; border-radius: 4px; z-index: 5; pointer-events: none; text-transform: uppercase; }
+.design-el.draft-component .draft-actions { display: none; position: absolute; bottom: -28px; left: 50%; transform: translateX(-50%); gap: 4px; z-index: 10; }
+.design-el.draft-component:hover .draft-actions { display: flex; }
+.design-el.draft-component:hover { opacity: 1; }
+.draft-actions .btn { padding: 2px 8px; font-size: 0.7em; }
 </style>
 </head>
 <body>
@@ -620,6 +709,11 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <button class="tab" data-page="github">GitHub<span class="tab-badge" id="badge-github"></span></button>
         <button class="tab" data-page="settings">Settings<span class="tab-badge" id="badge-settings"></span></button>
         <button class="tab" data-page="system">System<span class="tab-badge" id="badge-system"></span></button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-left:8px">
+        <button class="btn btn-sm btn-secondary" onclick="renderQuestionPopup()" style="position:relative;padding:4px 10px;font-size:0.85em">
+            Questions <span class="tab-badge red" id="badge-questions-nav" style="position:absolute;top:-4px;right:-4px"></span>
+        </button>
     </div>
     <div class="status">
         <span class="ai-level-label">AI:</span>
@@ -710,6 +804,12 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 <div class="page" id="page-planning">
     <h1>Planning</h1>
     <p class="subtitle">Create and manage development plans</p>
+
+    <!-- ===== PHASE PROGRESS INDICATOR ===== -->
+    <div id="phaseIndicatorContainer" style="display:none"></div>
+
+    <!-- ===== GUIDED TOUR (shown when no plans) ===== -->
+    <div id="guidedTourContainer" style="display:none"></div>
 
     <!-- ===== WIZARD SECTION ===== -->
     <div class="section" id="wizardSection">
@@ -1085,6 +1185,41 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                         <button class="btn btn-sm btn-secondary" onclick="openTokenEditor()" style="width:100%;margin-bottom:8px">+ Add Token</button>
                         <div id="tokenList"></div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== DESIGN QA PANEL ==================== -->
+    <div class="section" id="qaSection" style="display:none">
+        <div class="qa-panel" id="qaPanelContent">
+            <h3>Design QA <span class="badge badge-gray" id="qaScoreBadge">--</span></h3>
+            <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+                <div style="text-align:center;min-width:80px">
+                    <div class="qa-score" id="qaScoreValue">--</div>
+                    <div style="font-size:0.8em;color:var(--subtext)">QA Score</div>
+                </div>
+                <div style="flex:1;min-width:200px">
+                    <div class="qa-gaps" id="qaGaps">
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--red)">--</span> Critical</div>
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--yellow)">--</span> Warning</div>
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--overlay)">--</span> Info</div>
+                    </div>
+                    <div class="qa-phases" id="qaPhases">
+                        <div class="qa-phase"><span class="phase-dot pending"></span> Architect Review</div>
+                        <div class="qa-phase"><span class="phase-dot pending"></span> Gap Analysis</div>
+                        <div class="qa-phase"><span class="phase-dot pending"></span> Hardening</div>
+                    </div>
+                </div>
+                <div>
+                    <button class="btn btn-primary btn-sm" id="qaRunBtn" onclick="runDesignQA()">Run QA</button>
+                </div>
+            </div>
+            <div class="qa-drafts" id="qaDrafts" style="display:none">
+                <div class="draft-count" id="qaDraftCount">0 pending drafts</div>
+                <div class="draft-actions">
+                    <button class="btn btn-sm btn-success" onclick="qaBulkDraftAction('approve')">Approve All</button>
+                    <button class="btn btn-sm btn-danger" onclick="qaBulkDraftAction('reject')">Reject All</button>
                 </div>
             </div>
         </div>
@@ -1628,10 +1763,25 @@ async function createChildTicket(parentId) {
 
 function ticketActions(t) {
     var html = '';
-    if (t.status === 'open') html += '<button class="btn btn-sm btn-success" onclick="updateTicketStatus(\\'' + t.id + '\\', \\'resolved\\')">Resolve</button> ';
+    if (t.status === 'open') {
+        if (t.auto_created) {
+            html += '<button class="btn btn-sm btn-red" onclick="cancelAutoTicket(\\'' + t.id + '\\')">Cancel</button> ';
+        } else {
+            html += '<button class="btn btn-sm btn-success" onclick="updateTicketStatus(\\'' + t.id + '\\', \\'resolved\\')">Resolve</button> ';
+        }
+    }
     if (t.status === 'open' || t.status === 'in_review') html += '<button class="btn btn-sm btn-secondary" onclick="createChildTicket(\\'' + t.id + '\\')">+ Sub</button> ';
     if (t.status === 'escalated') html += '<button class="btn btn-sm btn-success" onclick="updateTicketStatus(\\'' + t.id + '\\', \\'resolved\\')">Resolve</button> ';
+    if (t.status === 'in_review' && t.auto_created) {
+        html += '<button class="btn btn-sm btn-red" onclick="cancelAutoTicket(\\'' + t.id + '\\')">Cancel</button> ';
+    }
     return html;
+}
+
+async function cancelAutoTicket(id) {
+    if (!confirm('Cancel this ticket? Processing will stop.')) return;
+    await api('tickets/' + id, { method: 'PUT', body: { status: 'on_hold' } });
+    loadTickets();
 }
 
 async function showTicketDetail(id) {
@@ -1645,13 +1795,49 @@ async function showTicketDetail(id) {
     if (data.child_count > 0) {
         childInfo = '<div class="detail-row"><span>Sub-tickets</span><span>' + data.child_count + ' sub-ticket(s)</span></div>';
     }
+    // Build agent badge
+    var agentBadge = '';
+    if (data.agent_label) {
+        var dotStyle = data.processing_status === 'processing' ? 'display:inline-block;width:8px;height:8px;border-radius:50%;background:' + data.agent_color + ';animation:pulse-dot 1.5s infinite;margin-right:6px;' : '';
+        agentBadge = '<div class="detail-row"><span>Assigned Agent</span><span style="display:flex;align-items:center">' +
+            (dotStyle ? '<span style="' + dotStyle + '"></span>' : '') +
+            '<span style="background:' + data.agent_color + ';color:#fff;padding:2px 8px;border-radius:4px;font-size:0.85em">' + esc(data.agent_label) + '</span>' +
+            (data.processing_status ? '<span style="margin-left:8px;color:var(--subtext);font-size:0.8em">' + esc(data.processing_status) + '</span>' : '') +
+            '</span></div>';
+    }
+    // Stage badge
+    var stageBadge = '';
+    if (data.stage_label) {
+        stageBadge = '<div class="detail-row"><span>Stage</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;background:var(--bg3);color:var(--text)">' + esc(data.stage_label) + '</span></div>';
+    }
+    // Acceptance criteria
+    var criteriaSection = '';
+    if (data.acceptance_criteria) {
+        criteriaSection = '<div style="margin-top:12px"><strong style="color:var(--text)">Acceptance Criteria</strong>' +
+            '<div style="white-space:pre-wrap;color:var(--subtext);padding:8px 12px;background:var(--bg);border-radius:6px;margin-top:4px;border-left:3px solid var(--blue)">' + esc(data.acceptance_criteria) + '</div></div>';
+    }
+    // Verification result
+    var verificationSection = '';
+    if (data.verification_result) {
+        try {
+            var vr = JSON.parse(data.verification_result);
+            var vrColor = vr.passed ? 'var(--green)' : 'var(--red)';
+            verificationSection = '<div style="margin-top:12px"><strong style="color:var(--text)">Verification Result</strong>' +
+                '<div style="padding:8px 12px;background:var(--bg);border-radius:6px;margin-top:4px;border-left:3px solid ' + vrColor + '">' +
+                '<div>Score: ' + (vr.clarity_score || 'N/A') + ' | ' + (vr.passed ? 'PASSED' : 'FAILED') + (vr.attempt_number ? ' (attempt ' + vr.attempt_number + ')' : '') + '</div>' +
+                (vr.failure_details ? '<div style="color:var(--subtext);margin-top:4px">' + esc(vr.failure_details) + '</div>' : '') +
+                '</div></div>';
+        } catch(e) { /* ignore parse errors */ }
+    }
     document.getElementById('ticketDetail').innerHTML = '<div class="detail-panel">' +
         '<h3>TK-' + String(data.ticket_number).padStart(3, '0') + ': ' + esc(data.title) + '</h3>' +
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
         '<div class="detail-row"><span>Priority</span>' + prioBadge(data.priority) + '</div>' +
         '<div class="detail-row"><span>Creator</span><span>' + esc(data.creator) + '</span></div>' +
+        agentBadge + stageBadge +
         parentInfo + childInfo +
         (data.body ? '<div style="margin-top:12px;white-space:pre-wrap;color:var(--subtext);padding:12px;background:var(--bg);border-radius:6px">' + esc(data.body) + '</div>' : '') +
+        criteriaSection + verificationSection +
         '<h3 style="margin-top:16px">Thread (' + replies.length + ')</h3>' +
         replies.map(r =>
             '<div class="thread-reply ' + (r.author === 'user' ? 'user' : 'agent') + '">' +
@@ -2613,23 +2799,34 @@ async function loadPlans() {
         var wizSection = document.getElementById('wizardSection');
         var activePlanSec = document.getElementById('activePlanSection');
 
+        var phaseContainer = document.getElementById('phaseIndicatorContainer');
+        var tourContainer = document.getElementById('guidedTourContainer');
+
         if (plans.length === 0) {
-            // No plans — show the wizard, hide active plan section
-            if (wizSection) wizSection.style.display = '';
+            // No plans — show guided tour, hide wizard initially, hide active plan section
+            if (wizSection) wizSection.style.display = 'none';
             if (activePlanSec) activePlanSec.style.display = 'none';
+            if (phaseContainer) phaseContainer.style.display = 'none';
+            if (tourContainer) tourContainer.style.display = '';
             display.innerHTML = '';
             if (showAllBtn) showAllBtn.style.display = 'none';
+            renderGuidedTour();
             return;
         }
 
-        // Has plans — hide the wizard, show the active plan section prominently
+        // Has plans — hide the wizard and tour, show the active plan section prominently
         if (wizSection) wizSection.style.display = 'none';
+        if (tourContainer) tourContainer.style.display = 'none';
         if (activePlanSec) activePlanSec.style.display = '';
 
         // Find active plan (first active, or most recent)
         var active = plans.find(function(p) { return p.status === 'active'; }) || plans[0];
         activePlanId = active.id;
         saveState('activePlanId', activePlanId);
+
+        // Render phase indicator and QA panel for active plan
+        renderPhaseIndicator(activePlanId);
+        renderQAPanel(activePlanId);
 
         // Parse config to show plan details
         var planConfig = {};
@@ -3058,6 +3255,8 @@ async function loadDesignerForPlan(planId) {
             showNotification('Open the AI chat or click "Generate Design" to create a visual layout.', 'info');
         }
     }
+    // Show QA panel when designer is open
+    renderQAPanel(planId);
 }
 
 function closeDesigner() {
@@ -3070,6 +3269,8 @@ function closeDesigner() {
     dsgCurrentPageId = null;
     saveState('designerPlanId', null);
     closeLivePreview();
+    var qaSection = document.getElementById('qaSection');
+    if (qaSection) qaSection.style.display = 'none';
 }
 
 async function loadDesignerPages() {
@@ -4024,6 +4225,7 @@ let settingsConfig = {};
 
 async function loadSettings() {
     settingsConfig = await api('config');
+    loadSettingsPage();
     showSettingsSection('llm');
 }
 
@@ -4078,6 +4280,41 @@ function showSettingsSection(section) {
             settingRow('Compact Mode', 'Reduce padding and spacing', '<div class="toggle-switch" onclick="this.classList.toggle(\\'on\\')"></div>') +
             settingRow('Font Size', 'Base font size', '<select id="setting-ui-fontSize"><option>Small (13px)</option><option selected>Medium (14px)</option><option>Large (16px)</option></select>', 'setting-ui-fontSize') +
             '</div>',
+
+        'design-quality': () => {
+            var dq = settingsConfig.designQuality || {};
+            return '<div class="settings-section"><h3>Design Quality</h3>' +
+                settingRow('QA Score Threshold', 'Minimum QA score to pass (50-100)', '<input id="setting-dq-threshold" type="range" min="50" max="100" value="' + (dq.qaScoreThreshold || 80) + '" oninput="document.getElementById(\\'dq-threshold-val\\').textContent=this.value" onchange="updateSetting(\\'designQuality.qaScoreThreshold\\', +this.value)"> <span id="dq-threshold-val">' + (dq.qaScoreThreshold || 80) + '</span>', 'setting-dq-threshold') +
+                settingRow('Auto-run QA', 'Automatically run QA after design changes', '<div class="toggle-switch' + (dq.autoRunQA ? ' on' : '') + '" onclick="this.classList.toggle(\\'on\\');updateSetting(\\'designQuality.autoRunQA\\', this.classList.contains(\\'on\\'))"></div>') +
+            '</div>';
+        },
+
+        'ticket-processing': () => {
+            var tp = settingsConfig.ticketProcessing || {};
+            return '<div class="settings-section"><h3>Ticket Processing</h3>' +
+                settingRow('Max Active Tickets', 'Maximum tickets processed simultaneously', '<input id="setting-tp-maxActive" type="number" value="' + (tp.maxActive || 5) + '" min="1" max="20" onchange="updateSetting(\\'ticketProcessing.maxActive\\', +this.value)">', 'setting-tp-maxActive') +
+                settingRow('Max Retries', 'Retry failed ticket processing', '<input id="setting-tp-maxRetries" type="number" value="' + (tp.maxRetries || 3) + '" min="0" max="10" onchange="updateSetting(\\'ticketProcessing.maxRetries\\', +this.value)">', 'setting-tp-maxRetries') +
+                settingRow('Max Clarifications', 'Max clarification rounds per ticket', '<input id="setting-tp-maxClarifications" type="number" value="' + (tp.maxClarifications || 3) + '" min="1" max="10" onchange="updateSetting(\\'ticketProcessing.maxClarifications\\', +this.value)">', 'setting-tp-maxClarifications') +
+            '</div>';
+        },
+
+        'boss-ai': () => {
+            var boss = settingsConfig.bossAgent || {};
+            return '<div class="settings-section"><h3>Boss AI Configuration</h3>' +
+                settingRow('Idle Timeout (minutes)', 'Time before boss triggers idle check', '<input id="setting-boss-idle" type="number" value="' + (boss.idleTimeout || 10) + '" min="1" max="60" onchange="updateSetting(\\'bossAgent.idleTimeout\\', +this.value)">', 'setting-boss-idle') +
+                settingRow('Stuck Phase Timeout (minutes)', 'Time before escalating stuck phases', '<input id="setting-boss-stuck" type="number" value="' + (boss.stuckPhaseTimeout || 30) + '" min="5" max="120" onchange="updateSetting(\\'bossAgent.stuckPhaseTimeout\\', +this.value)">', 'setting-boss-stuck') +
+                settingRow('Task Overload Threshold', 'Max concurrent tasks before warning', '<input id="setting-boss-overload" type="number" value="' + (boss.taskOverloadThreshold || 10) + '" min="3" max="50" onchange="updateSetting(\\'bossAgent.taskOverloadThreshold\\', +this.value)">', 'setting-boss-overload') +
+                settingRow('Escalation Threshold', 'Failures before escalating to user', '<input id="setting-boss-escalation" type="number" value="' + (boss.escalationThreshold || 3) + '" min="1" max="10" onchange="updateSetting(\\'bossAgent.escalationThreshold\\', +this.value)">', 'setting-boss-escalation') +
+            '</div>';
+        },
+
+        'clarity-agent': () => {
+            var clarity = settingsConfig.clarityAgent || {};
+            return '<div class="settings-section"><h3>Clarity Agent</h3>' +
+                settingRow('Auto-resolve Score', 'Minimum clarity score for automatic resolution (0-100)', '<input id="setting-clarity-autoResolve" type="number" value="' + (clarity.autoResolveScore || 85) + '" min="50" max="100" onchange="updateSetting(\\'clarityAgent.autoResolveScore\\', +this.value)">', 'setting-clarity-autoResolve') +
+                settingRow('Clarification Score', 'Below this score, request user clarification (0-100)', '<input id="setting-clarity-clarification" type="number" value="' + (clarity.clarificationScore || 60) + '" min="20" max="100" onchange="updateSetting(\\'clarityAgent.clarificationScore\\', +this.value)">', 'setting-clarity-clarification') +
+            '</div>';
+        },
 
         advanced: () => '<div class="settings-section"><h3>Advanced</h3>' +
             settingRow('Watcher Debounce (ms)', 'File change detection delay', '<input id="setting-advanced-debounce" type="number" value="' + (settingsConfig.watcher?.debounceMs || 2000) + '" onchange="updateSetting(\\'watcher.debounceMs\\', +this.value)">', 'setting-advanced-debounce') +
@@ -5111,6 +5348,683 @@ async function runAiBugCheck() {
     } catch(e) { showNotification('Bug check failed', 'error'); }
 }
 
+// ==================== DESIGN QA PANEL (C7) ====================
+var qaLastResult = null;
+
+async function renderQAPanel(planId) {
+    if (!planId) return;
+    var section = document.getElementById('qaSection');
+    if (section) section.style.display = '';
+
+    // Fetch current drafts
+    try {
+        var drafts = await api('design/drafts?plan_id=' + encodeURIComponent(planId));
+        var draftArr = Array.isArray(drafts) ? drafts : (drafts.data || []);
+        var pendingDrafts = draftArr.filter(function(d) { return d.status === 'pending' || d.status === 'draft'; });
+
+        var draftEl = document.getElementById('qaDrafts');
+        if (pendingDrafts.length > 0 && draftEl) {
+            draftEl.style.display = '';
+            var countEl = document.getElementById('qaDraftCount');
+            if (countEl) countEl.textContent = pendingDrafts.length + ' pending draft' + (pendingDrafts.length !== 1 ? 's' : '');
+        } else if (draftEl) {
+            draftEl.style.display = 'none';
+        }
+    } catch(e) {
+        // Drafts endpoint may not exist yet
+    }
+
+    // If we have cached QA results, render them
+    if (qaLastResult) renderQAResults(qaLastResult);
+}
+
+function renderQAResults(result) {
+    qaLastResult = result;
+    var score = result.score || 0;
+    var scoreClass = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red';
+
+    var scoreEl = document.getElementById('qaScoreValue');
+    if (scoreEl) {
+        scoreEl.textContent = score;
+        scoreEl.className = 'qa-score ' + scoreClass;
+    }
+    var badgeEl = document.getElementById('qaScoreBadge');
+    if (badgeEl) {
+        badgeEl.textContent = score + '/100';
+        badgeEl.className = 'badge badge-' + scoreClass;
+    }
+
+    // Gap counts by severity
+    var gaps = result.gaps || {};
+    var gapsEl = document.getElementById('qaGaps');
+    if (gapsEl) {
+        gapsEl.innerHTML =
+            '<div class="qa-gap-item"><span class="gap-count" style="color:var(--red)">' + (gaps.critical || 0) + '</span> Critical</div>' +
+            '<div class="qa-gap-item"><span class="gap-count" style="color:var(--yellow)">' + (gaps.warning || 0) + '</span> Warning</div>' +
+            '<div class="qa-gap-item"><span class="gap-count" style="color:var(--overlay)">' + (gaps.info || 0) + '</span> Info</div>';
+    }
+
+    // Phase indicators
+    var phases = result.phases || {};
+    var phasesEl = document.getElementById('qaPhases');
+    if (phasesEl) {
+        var phaseNames = ['architect_review', 'gap_analysis', 'hardening'];
+        var phaseLabels = ['Architect Review', 'Gap Analysis', 'Hardening'];
+        phasesEl.innerHTML = phaseNames.map(function(name, i) {
+            var state = phases[name] || 'pending';
+            var dotClass = state === 'done' || state === 'complete' || state === 'completed' ? 'done' : state === 'running' || state === 'in_progress' ? 'running' : 'pending';
+            return '<div class="qa-phase"><span class="phase-dot ' + dotClass + '"></span> ' + phaseLabels[i] + '</div>';
+        }).join('');
+    }
+}
+
+async function runDesignQA() {
+    var planId = currentDesignerPlanId || activePlanId;
+    if (!planId) { showNotification('No plan selected', 'error'); return; }
+
+    var btn = document.getElementById('qaRunBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Running...'; }
+
+    try {
+        var result = await api('design/full-qa', { method: 'POST', body: { plan_id: planId } });
+        renderQAResults(result);
+        showNotification('QA complete: score ' + (result.score || 0), result.score >= 80 ? 'success' : 'warning');
+    } catch(e) {
+        showNotification('QA failed: ' + String(e), 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Run QA'; }
+    }
+}
+
+async function qaBulkDraftAction(action) {
+    var planId = currentDesignerPlanId || activePlanId;
+    if (!planId) return;
+
+    try {
+        var drafts = await api('design/drafts?plan_id=' + encodeURIComponent(planId));
+        var draftArr = Array.isArray(drafts) ? drafts : (drafts.data || []);
+        var pending = draftArr.filter(function(d) { return d.status === 'pending' || d.status === 'draft'; });
+
+        for (var i = 0; i < pending.length; i++) {
+            await api('design/drafts/' + pending[i].id + '/' + action, { method: 'POST' });
+        }
+        showNotification(pending.length + ' draft(s) ' + action + 'd', 'success');
+        renderQAPanel(planId);
+    } catch(e) {
+        showNotification('Bulk ' + action + ' failed: ' + String(e), 'error');
+    }
+}
+
+// ==================== QUESTION POPUP (E3) ====================
+var questionQueue = [];
+var questionCurrentIndex = 0;
+
+async function renderQuestionPopup() {
+    var planId = currentDesignerPlanId || activePlanId;
+    if (!planId) return;
+
+    try {
+        var result = await api('questions/queue?plan_id=' + encodeURIComponent(planId));
+        questionQueue = Array.isArray(result) ? result : (result.questions || result.data || []);
+    } catch(e) {
+        questionQueue = [];
+    }
+
+    updateQuestionBadge();
+
+    if (questionQueue.length === 0) {
+        var body = document.getElementById('questionPopupBody');
+        if (body) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--subtext)"><div style="font-size:2em;margin-bottom:8px">&#10003;</div><div style="font-size:1.1em;font-weight:600">All caught up!</div><div style="font-size:0.9em;margin-top:4px">No pending questions right now.</div></div>';
+        document.getElementById('questionPopupOverlay').style.display = 'flex';
+        document.getElementById('questionPosition').textContent = '';
+        return;
+    }
+
+    questionCurrentIndex = 0;
+    renderCurrentQuestion();
+    document.getElementById('questionPopupOverlay').style.display = 'flex';
+}
+
+function renderCurrentQuestion() {
+    if (questionCurrentIndex >= questionQueue.length) {
+        closeQuestionPopup();
+        showNotification('All questions answered!', 'success');
+        return;
+    }
+
+    var q = questionQueue[questionCurrentIndex];
+    var posEl = document.getElementById('questionPosition');
+    if (posEl) posEl.textContent = 'Question ' + (questionCurrentIndex + 1) + ' of ' + questionQueue.length;
+
+    var agentClass = (q.source_agent || '').toLowerCase().replace(/agent$/i, '').replace(/\s+/g, '');
+    var body = '';
+
+    // Source badge
+    body += '<div class="q-source-badge ' + esc(agentClass) + '">' + esc(q.source_agent || 'System') + '</div>';
+
+    // Question text
+    body += '<div class="q-text">' + esc(q.question || q.text || '') + '</div>';
+
+    // AI suggested answer
+    if (q.suggested_answer || q.ai_suggestion) {
+        body += '<div class="q-suggested"><strong>AI Suggested Answer:</strong>' + esc(q.suggested_answer || q.ai_suggestion) + '</div>';
+    }
+
+    // Response controls based on question type
+    var qType = q.question_type || q.type || 'text';
+
+    if (qType === 'multiple_choice' && q.options && q.options.length > 0) {
+        body += '<div class="q-options" id="qOptions">';
+        q.options.forEach(function(opt, i) {
+            body += '<label class="q-option" onclick="selectQuestionOption(this)"><input type="radio" name="qAnswer" value="' + esc(opt) + '"> ' + esc(opt) + '</label>';
+        });
+        body += '<label class="q-option" onclick="selectQuestionOption(this)"><input type="radio" name="qAnswer" value="__other"> Other: <input type="text" id="qOtherText" style="width:200px;margin-left:6px;padding:4px 8px" onclick="event.stopPropagation()" placeholder="Type your answer..."></label>';
+        body += '</div>';
+    } else if (qType === 'yes_no') {
+        body += '<div class="q-yesno">';
+        body += '<button class="btn btn-success" onclick="submitQuestionAnswer(\\'' + q.id + '\\', \\'yes\\')">Yes</button>';
+        body += '<button class="btn btn-danger" onclick="submitQuestionAnswer(\\'' + q.id + '\\', \\'no\\')">No</button>';
+        body += '</div>';
+    } else {
+        body += '<div class="form-group"><textarea id="qTextAnswer" placeholder="Type your answer..." rows="3"></textarea></div>';
+    }
+
+    // Navigation hint
+    if (q.navigation_area || q.context_area) {
+        body += '<button class="q-nav-btn" onclick="navigateToArea(\\'' + esc(q.navigation_area || q.context_area) + '\\')">Go to: ' + esc(q.navigation_area || q.context_area) + '</button>';
+    }
+
+    // Actions
+    body += '<div class="q-actions">';
+    body += '<button class="btn btn-secondary btn-sm" onclick="dismissQuestion(\\'' + q.id + '\\')">Dismiss</button>';
+    if (qType !== 'yes_no') {
+        body += '<button class="btn btn-primary" onclick="submitCurrentQuestion(\\'' + q.id + '\\', \\'' + esc(qType) + '\\')">Submit Answer</button>';
+    }
+    body += '</div>';
+
+    var bodyEl = document.getElementById('questionPopupBody');
+    if (bodyEl) bodyEl.innerHTML = body;
+}
+
+function selectQuestionOption(el) {
+    document.querySelectorAll('#qOptions .q-option').forEach(function(o) { o.classList.remove('selected'); });
+    el.classList.add('selected');
+    var radio = el.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+}
+
+async function submitCurrentQuestion(questionId, qType) {
+    var answer = '';
+    if (qType === 'multiple_choice') {
+        var checked = document.querySelector('input[name="qAnswer"]:checked');
+        if (!checked) { showNotification('Please select an option', 'warning'); return; }
+        answer = checked.value;
+        if (answer === '__other') {
+            var otherInput = document.getElementById('qOtherText');
+            answer = otherInput ? otherInput.value.trim() : '';
+            if (!answer) { showNotification('Please enter your answer', 'warning'); return; }
+        }
+    } else {
+        var textArea = document.getElementById('qTextAnswer');
+        answer = textArea ? textArea.value.trim() : '';
+        if (!answer) { showNotification('Please enter your answer', 'warning'); return; }
+    }
+
+    await submitQuestionAnswer(questionId, answer);
+}
+
+async function submitQuestionAnswer(questionId, answer) {
+    try {
+        await api('questions/' + questionId + '/answer', { method: 'POST', body: { answer: answer } });
+        showNotification('Answer submitted', 'success');
+        questionQueue.splice(questionCurrentIndex, 1);
+        updateQuestionBadge();
+        if (questionQueue.length === 0) {
+            closeQuestionPopup();
+            showNotification('All questions answered!', 'success');
+        } else {
+            if (questionCurrentIndex >= questionQueue.length) questionCurrentIndex = 0;
+            renderCurrentQuestion();
+        }
+    } catch(e) {
+        showNotification('Failed to submit answer: ' + String(e), 'error');
+    }
+}
+
+async function dismissQuestion(questionId) {
+    try {
+        await api('questions/' + questionId + '/dismiss', { method: 'POST' });
+        showNotification('Question dismissed', 'info');
+        questionQueue.splice(questionCurrentIndex, 1);
+        updateQuestionBadge();
+        if (questionQueue.length === 0) {
+            closeQuestionPopup();
+        } else {
+            if (questionCurrentIndex >= questionQueue.length) questionCurrentIndex = 0;
+            renderCurrentQuestion();
+        }
+    } catch(e) {
+        showNotification('Failed to dismiss: ' + String(e), 'error');
+    }
+}
+
+function closeQuestionPopup() {
+    var overlay = document.getElementById('questionPopupOverlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function navigateToArea(area) {
+    closeQuestionPopup();
+    var lower = (area || '').toLowerCase();
+    if (lower.indexOf('design') >= 0 || lower.indexOf('visual') >= 0) {
+        switchToTab('planning');
+    } else if (lower.indexOf('task') >= 0) {
+        switchToTab('tasks');
+    } else if (lower.indexOf('code') >= 0 || lower.indexOf('coding') >= 0) {
+        switchToTab('coding');
+    } else if (lower.indexOf('setting') >= 0) {
+        switchToTab('settings');
+    } else {
+        switchToTab('planning');
+    }
+}
+
+function updateQuestionBadge() {
+    var count = questionQueue.length;
+    var badgeEl = document.getElementById('badge-questions-nav');
+    if (badgeEl) {
+        badgeEl.textContent = count > 0 ? String(count) : '';
+        // Pulse red if any P1 questions
+        var hasP1 = questionQueue.some(function(q) { return q.priority === 'P1'; });
+        badgeEl.className = 'tab-badge' + (count > 0 ? ' red' : '') + (hasP1 ? ' question-badge-pulse' : '');
+    }
+}
+
+// ==================== PHASE PROGRESS INDICATOR (F7) ====================
+var phaseData = null;
+
+async function renderPhaseIndicator(planId) {
+    if (!planId) return;
+    var container = document.getElementById('phaseIndicatorContainer');
+    if (!container) return;
+
+    try {
+        var result = await api('plans/' + planId + '/phase');
+        phaseData = result;
+    } catch(e) {
+        // Phase endpoint may not exist yet, try to derive from plan data
+        try {
+            var plan = await api('plans/' + planId);
+            phaseData = { current_phase: plan.phase || plan.status || 'planning', version: plan.version || '1.0', time_in_phase: '' };
+        } catch(e2) {
+            container.style.display = 'none';
+            return;
+        }
+    }
+
+    container.style.display = '';
+    var currentPhase = (phaseData.current_phase || phaseData.phase || 'planning').toLowerCase();
+
+    // Define stages and their phases
+    var stages = [
+        { label: 'Plan & Design', phases: ['planning', 'designing', 'design_review', 'designreview', 'task_generation', 'taskgeneration'] },
+        { label: 'Code', phases: ['coding', 'design_update', 'designupdate'] },
+        { label: 'Verify', phases: ['verification', 'complete', 'completed'] }
+    ];
+
+    // Determine which stage is current/complete
+    var currentStageIdx = -1;
+    var currentPhaseIdx = -1;
+    for (var s = 0; s < stages.length; s++) {
+        for (var p = 0; p < stages[s].phases.length; p++) {
+            if (stages[s].phases[p] === currentPhase) {
+                currentStageIdx = s;
+                currentPhaseIdx = p;
+                break;
+            }
+        }
+        if (currentStageIdx >= 0) break;
+    }
+    if (currentStageIdx < 0) currentStageIdx = 0;
+
+    var html = '<div class="phase-indicator">';
+    html += '<div class="phase-header">';
+    html += '<span class="phase-version">Version ' + esc(phaseData.version || '1.0') + '</span>';
+    if (phaseData.time_in_phase) {
+        html += '<span class="phase-time">In current phase: ' + esc(phaseData.time_in_phase) + '</span>';
+    }
+    html += '</div>';
+    html += '<div class="phase-stages">';
+
+    stages.forEach(function(stage, sIdx) {
+        var stageState = sIdx < currentStageIdx ? 'done' : sIdx === currentStageIdx ? 'active' : '';
+        html += '<div class="phase-stage">';
+        html += '<div class="phase-stage-label ' + stageState + '">' + stage.label + '</div>';
+        html += '<div class="phase-dots">';
+
+        stage.phases.forEach(function(ph, pIdx) {
+            var dotState = '';
+            if (sIdx < currentStageIdx) {
+                dotState = 'filled';
+            } else if (sIdx === currentStageIdx) {
+                if (pIdx < currentPhaseIdx) dotState = 'filled';
+                else if (pIdx === currentPhaseIdx) dotState = 'current';
+                else dotState = 'empty';
+            } else {
+                dotState = 'empty';
+            }
+            html += '<div class="phase-dot ' + dotState + '" title="' + esc(ph) + '"></div>';
+            if (pIdx < stage.phases.length - 1) {
+                var connDone = sIdx < currentStageIdx || (sIdx === currentStageIdx && pIdx < currentPhaseIdx);
+                html += '<div class="phase-connector' + (connDone ? ' done' : '') + '"></div>';
+            }
+        });
+
+        html += '</div></div>';
+        if (sIdx < stages.length - 1) {
+            var connDone = sIdx < currentStageIdx;
+            html += '<div class="phase-connector' + (connDone ? ' done' : '') + '" style="min-width:20px"></div>';
+        }
+    });
+
+    html += '</div>';
+
+    // Approve Design button during design_review phase
+    if (currentPhase === 'design_review' || currentPhase === 'designreview') {
+        html += '<div class="phase-approve-bar">';
+        html += '<span style="font-size:0.9em;color:var(--subtext)">Design is ready for review</span>';
+        html += '<button class="btn btn-success btn-sm" onclick="approveDesignPhase(\\'' + planId + '\\')">Approve Design</button>';
+        html += '</div>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function approveDesignPhase(planId) {
+    if (!confirm('Approve this design and move to the coding phase?')) return;
+    try {
+        await api('plans/' + planId + '/approve-design', { method: 'POST' });
+        showNotification('Design approved! Moving to coding phase.', 'success');
+        renderPhaseIndicator(planId);
+    } catch(e) {
+        showNotification('Approval failed: ' + String(e), 'error');
+    }
+}
+
+// ==================== GUIDED TOUR (D4) ====================
+function renderGuidedTour() {
+    var container = document.getElementById('guidedTourContainer');
+    if (!container) return;
+
+    container.style.display = '';
+    container.innerHTML = '<div class="guided-tour">' +
+        '<h2>Welcome to COE</h2>' +
+        '<p class="tour-subtitle">Your AI-powered development orchestrator. Let\\\'s build something great.</p>' +
+        '<div class="tour-stages">' +
+            '<div class="tour-stage">' +
+                '<div class="tour-stage-num">1</div>' +
+                '<div class="tour-stage-title">Plan & Design</div>' +
+                '<div class="tour-stage-desc">Define your project, design the UI, set priorities. The AI helps generate tasks and review architecture.</div>' +
+            '</div>' +
+            '<div class="tour-stage">' +
+                '<div class="tour-stage-num">2</div>' +
+                '<div class="tour-stage-title">Code Implementation</div>' +
+                '<div class="tour-stage-desc">AI coding agents pick up tasks one at a time via MCP. You review, provide feedback, iterate.</div>' +
+            '</div>' +
+            '<div class="tour-stage">' +
+                '<div class="tour-stage-num">3</div>' +
+                '<div class="tour-stage-title">Verification</div>' +
+                '<div class="tour-stage-desc">Automated testing, design QA, and human verification ensure quality before completion.</div>' +
+            '</div>' +
+        '</div>' +
+        '<button class="btn btn-primary" onclick="startFirstPlan()" style="padding:12px 32px;font-size:1em">Create Your First Plan</button>' +
+    '</div>';
+}
+
+function startFirstPlan() {
+    var container = document.getElementById('guidedTourContainer');
+    if (container) container.style.display = 'none';
+    var wizSection = document.getElementById('wizardSection');
+    if (wizSection) wizSection.style.display = '';
+    showCreatePlanWizard();
+}
+
+// ==================== SETTINGS PAGE ENHANCEMENTS (H/Step 34) ====================
+function loadSettingsPage() {
+    var nav = document.querySelector('.settings-nav');
+    if (!nav) return;
+
+    // Add new settings sections to nav if not already there
+    var existingItems = nav.querySelectorAll('.settings-nav-item');
+    var hasDesignQuality = false;
+    var hasTicketProcessing = false;
+    var hasBossAi = false;
+    var hasClarity = false;
+    existingItems.forEach(function(item) {
+        if (item.dataset.settings === 'design-quality') hasDesignQuality = true;
+        if (item.dataset.settings === 'ticket-processing') hasTicketProcessing = true;
+        if (item.dataset.settings === 'boss-ai') hasBossAi = true;
+        if (item.dataset.settings === 'clarity-agent') hasClarity = true;
+    });
+
+    // Insert new nav items before Advanced
+    var advancedItem = nav.querySelector('[data-settings="advanced"]');
+    if (!hasDesignQuality && advancedItem) {
+        var dqItem = document.createElement('div');
+        dqItem.className = 'settings-nav-item';
+        dqItem.dataset.settings = 'design-quality';
+        dqItem.textContent = 'Design Quality';
+        dqItem.onclick = function() { showSettingsSection('design-quality'); };
+        nav.insertBefore(dqItem, advancedItem);
+    }
+    if (!hasTicketProcessing && advancedItem) {
+        var tpItem = document.createElement('div');
+        tpItem.className = 'settings-nav-item';
+        tpItem.dataset.settings = 'ticket-processing';
+        tpItem.textContent = 'Ticket Processing';
+        tpItem.onclick = function() { showSettingsSection('ticket-processing'); };
+        nav.insertBefore(tpItem, advancedItem);
+    }
+    if (!hasBossAi && advancedItem) {
+        var bItem = document.createElement('div');
+        bItem.className = 'settings-nav-item';
+        bItem.dataset.settings = 'boss-ai';
+        bItem.textContent = 'Boss AI';
+        bItem.onclick = function() { showSettingsSection('boss-ai'); };
+        nav.insertBefore(bItem, advancedItem);
+    }
+    if (!hasClarity && advancedItem) {
+        var cItem = document.createElement('div');
+        cItem.className = 'settings-nav-item';
+        cItem.dataset.settings = 'clarity-agent';
+        cItem.textContent = 'Clarity Agent';
+        cItem.onclick = function() { showSettingsSection('clarity-agent'); };
+        nav.insertBefore(cItem, advancedItem);
+    }
+}
+
+// ==================== SSE EVENT LISTENERS (D1-D3) ====================
+var sseConnection = null;
+var sseReconnectTimer = null;
+var processingBannerPlanId = null;
+
+function initSSE() {
+    if (sseConnection) { try { sseConnection.close(); } catch(e) { /* ignore */ } }
+
+    try {
+        sseConnection = new EventSource(API.replace('/api', '') + '/events');
+    } catch(e) {
+        console.warn('SSE connection failed:', e);
+        return;
+    }
+
+    sseConnection.onopen = function() {
+        console.log('SSE connected');
+        if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+    };
+
+    sseConnection.onerror = function() {
+        console.warn('SSE connection error, reconnecting in 10s...');
+        if (!sseReconnectTimer) {
+            sseReconnectTimer = setTimeout(function() { sseReconnectTimer = null; initSSE(); }, 10000);
+        }
+    };
+
+    // Plan events
+    sseConnection.addEventListener('plan:tasks_generated', function(e) {
+        loadTasks();
+        showNotification('Tasks have been generated', 'success');
+    });
+
+    sseConnection.addEventListener('plan:config_updated', function(e) {
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) loadPlans();
+    });
+
+    // Design events
+    sseConnection.addEventListener('design:generated', function(e) {
+        var planId = currentDesignerPlanId;
+        if (planId && typeof loadDesignerForPlan === 'function') {
+            loadDesignerForPlan(planId);
+        }
+    });
+
+    sseConnection.addEventListener('design:draft_approved', function(e) {
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) renderQAPanel(planId);
+        showNotification('Design draft approved', 'success');
+    });
+
+    sseConnection.addEventListener('design:draft_rejected', function(e) {
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) renderQAPanel(planId);
+        showNotification('Design draft rejected', 'info');
+    });
+
+    // Ticket events
+    sseConnection.addEventListener('ticket:resolved', function(e) {
+        loadTickets();
+        updateTabBadges();
+    });
+
+    sseConnection.addEventListener('ticket:replied', function(e) {
+        loadTickets();
+        updateTabBadges();
+    });
+
+    // Phase events
+    sseConnection.addEventListener('phase:changed', function(e) {
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) renderPhaseIndicator(planId);
+        showNotification('Phase changed', 'info');
+    });
+
+    // Question events
+    sseConnection.addEventListener('question:created', function(e) {
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) {
+            api('questions/queue?plan_id=' + encodeURIComponent(planId)).then(function(result) {
+                questionQueue = Array.isArray(result) ? result : (result.questions || result.data || []);
+                updateQuestionBadge();
+            });
+        }
+    });
+
+    // Ticket processing events
+    sseConnection.addEventListener('ticket:processing_started', function(e) {
+        showProcessingBanner(true, e.data);
+    });
+
+    sseConnection.addEventListener('ticket:processing_completed', function(e) {
+        showProcessingBanner(false);
+        loadTickets();
+    });
+}
+
+function showProcessingBanner(show, data) {
+    var existingBanner = document.getElementById('processingBanner');
+    if (!show) {
+        if (existingBanner) existingBanner.remove();
+        return;
+    }
+    if (existingBanner) return; // Already showing
+
+    var msg = 'Processing ticket...';
+    if (data) {
+        try { var parsed = JSON.parse(data); msg = 'Processing: ' + (parsed.title || parsed.ticket_id || 'ticket'); } catch(e) { /* ignore */ }
+    }
+
+    var banner = document.createElement('div');
+    banner.id = 'processingBanner';
+    banner.className = 'processing-banner';
+    banner.innerHTML = '<span class="spinner"></span> ' + esc(msg);
+    var mainEl = document.querySelector('.main');
+    if (mainEl) mainEl.insertBefore(banner, mainEl.firstChild);
+}
+
+// ==================== DRAFT COMPONENT RENDERING (C4) ====================
+// This enhances the existing renderDesignElement function to handle draft components
+
+var _origRenderDesignElement = null;
+
+function installDraftRendering() {
+    // Check if already installed
+    if (_origRenderDesignElement) return;
+
+    // Wait for renderDesignElement to be defined
+    if (typeof renderDesignElement !== 'function') {
+        setTimeout(installDraftRendering, 500);
+        return;
+    }
+
+    _origRenderDesignElement = renderDesignElement;
+
+    // Override with draft-aware version
+    renderDesignElement = function(comp) {
+        var baseHtml = _origRenderDesignElement(comp);
+        if (!comp.is_draft) return baseHtml;
+
+        // Add draft classes and badge
+        baseHtml = baseHtml.replace('class="design-el', 'class="design-el draft-component');
+
+        // Insert draft badge and hover actions before the closing </div>
+        var lastDivIdx = baseHtml.lastIndexOf('</div>');
+        var draftInsert = '<div class="draft-badge">DRAFT</div>' +
+            '<div class="draft-actions">' +
+            '<button class="btn btn-sm btn-success" onclick="event.stopPropagation();approveDraftComponent(\\'' + comp.id + '\\')">Approve</button>' +
+            '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();rejectDraftComponent(\\'' + comp.id + '\\')">Reject</button>' +
+            '</div>';
+        baseHtml = baseHtml.slice(0, lastDivIdx) + draftInsert + baseHtml.slice(lastDivIdx);
+
+        return baseHtml;
+    };
+}
+
+async function approveDraftComponent(compId) {
+    try {
+        await api('design/components/' + compId + '/approve', { method: 'POST' });
+        showNotification('Component approved', 'success');
+        if (dsgCurrentPageId) loadPageComponents(dsgCurrentPageId);
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) renderQAPanel(planId);
+    } catch(e) {
+        showNotification('Approve failed: ' + String(e), 'error');
+    }
+}
+
+async function rejectDraftComponent(compId) {
+    try {
+        await api('design/components/' + compId + '/reject', { method: 'POST' });
+        showNotification('Component rejected', 'info');
+        if (dsgCurrentPageId) loadPageComponents(dsgCurrentPageId);
+        var planId = currentDesignerPlanId || activePlanId;
+        if (planId) renderQAPanel(planId);
+    } catch(e) {
+        showNotification('Reject failed: ' + String(e), 'error');
+    }
+}
+
 // ==================== INIT ====================
 (function restoreState() {
     var savedTab = loadState('activeTab', 'dashboard');
@@ -5124,6 +6038,20 @@ async function runAiBugCheck() {
     if (savedDesignerPlan && savedTab === 'planning') {
         setTimeout(function() { loadDesignerForPlan(savedDesignerPlan); }, 300);
     }
+    // Initialize SSE for live updates
+    setTimeout(initSSE, 1000);
+    // Install draft component rendering
+    setTimeout(installDraftRendering, 500);
+    // Load question badge count
+    setTimeout(function() {
+        var planId = loadState('activePlanId', null);
+        if (planId) {
+            api('questions/queue?plan_id=' + encodeURIComponent(planId)).then(function(result) {
+                questionQueue = Array.isArray(result) ? result : (result.questions || result.data || []);
+                updateQuestionBadge();
+            }).catch(function() { /* ignore */ });
+        }
+    }, 1500);
 })();
 setInterval(() => {
     if (document.getElementById('page-dashboard').classList.contains('active')) loadDashboard();
@@ -5595,6 +6523,18 @@ switchToTab = function(pageName) {
 <button class="ai-chat-toggle-btn" id="aiChatToggleBtn" onclick="toggleAiChat()" title="AI Chat">
     &#x1F4AC;
 </button>
+
+<!-- Question Popup Overlay -->
+<div class="question-popup-overlay" id="questionPopupOverlay" style="display:none">
+    <div class="question-popup" id="questionPopupContent">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <h2 id="questionPopupTitle">Question</h2>
+            <button style="background:none;border:none;color:var(--subtext);cursor:pointer;font-size:1.3em;padding:0 4px" onclick="closeQuestionPopup()">&times;</button>
+        </div>
+        <div class="q-position" id="questionPosition">Question 1 of 1</div>
+        <div id="questionPopupBody"></div>
+    </div>
+</div>
 
 </body>
 </html>`;
