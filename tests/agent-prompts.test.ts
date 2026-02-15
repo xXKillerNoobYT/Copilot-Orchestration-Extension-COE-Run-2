@@ -27,14 +27,18 @@ describe('Agent Prompt Content Tests', () => {
     describe('Orchestrator', () => {
         const prompt = getPrompt(Orchestrator);
 
-        test('contains all 6 intent categories', () => {
-            for (const cat of ['verification', 'planning', 'question', 'research', 'custom', 'general']) {
+        test('contains all 13 intent categories', () => {
+            for (const cat of [
+                'verification', 'ui_testing', 'observation', 'review',
+                'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
+                'planning', 'question', 'research', 'custom', 'general'
+            ]) {
                 expect(prompt).toContain(cat);
             }
         });
 
         test('contains tie-breaking rules', () => {
-            expect(prompt).toContain('verification > planning > question > research > custom > general');
+            expect(prompt).toContain('verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general');
         });
 
         test('specifies output format as single word', () => {
@@ -153,27 +157,35 @@ describe('Agent Prompt Content Tests', () => {
     describe('BossAgent', () => {
         const prompt = getPrompt(BossAgent);
 
+        test('identifies Boss AI as top-level supervisor', () => {
+            expect(prompt).toContain('top-level supervisor');
+            expect(prompt).toContain('active decision-maker');
+        });
+
+        test('specifies Boss AI runs on startup, between tickets, and when idle', () => {
+            expect(prompt).toContain('system startup');
+            expect(prompt).toContain('ticket completion');
+            expect(prompt).toContain('5 minutes when idle');
+        });
+
         test('specifies task overload threshold > 20', () => {
-            expect(prompt).toContain('20 pending');
+            expect(prompt).toContain('task count > 20');
+            expect(prompt).toContain('PAUSE_INTAKE');
         });
 
-        test('specifies agent failure as CRITICAL', () => {
-            expect(prompt).toContain('Agent failure');
-            expect(prompt).toContain('CRITICAL');
-        });
-
-        test('specifies drift threshold > 20%', () => {
-            expect(prompt).toContain('20%');
-        });
-
-        test('specifies escalated tickets threshold > 5', () => {
-            expect(prompt).toContain('5 escalated');
+        test('specifies action verbs for ticket creation', () => {
+            expect(prompt).toContain('CREATE_VERIFICATION');
+            expect(prompt).toContain('CREATE_PLANNING');
+            expect(prompt).toContain('CREATE_CODING');
+            expect(prompt).toContain('ESCALATE_USER');
+            expect(prompt).toContain('RECOVER_STUCK');
         });
 
         test('specifies response format fields', () => {
             expect(prompt).toContain('ASSESSMENT');
             expect(prompt).toContain('ISSUES');
             expect(prompt).toContain('ACTIONS');
+            expect(prompt).toContain('NEXT_TICKET');
             expect(prompt).toContain('ESCALATE');
         });
     });

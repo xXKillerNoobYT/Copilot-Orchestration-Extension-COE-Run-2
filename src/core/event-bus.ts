@@ -79,13 +79,18 @@ export type COEEventType =
     | 'ticket:queued' | 'ticket:processing_started' | 'ticket:processing_completed'
     | 'ticket:cancelled' | 'ticket:unblocked'
     | 'ticket:verification_started' | 'ticket:verification_passed' | 'ticket:verification_failed'
-    | 'ticket:retry'
+    | 'ticket:retry' | 'ticket:requeued' | 'ticket:recovered' | 'ticket:review_flagged'
+    | 'ticket:review_passed' | 'ticket:escalated_orphan'
     // Question queue (v4.0)
     | 'question:created' | 'question:answered' | 'question:auto_answered'
     | 'question:dismissed' | 'question:conflict_detected'
     // Boss AI (v4.0)
     | 'boss:health_check_started' | 'boss:health_check_completed'
     | 'boss:idle_watchdog_triggered'
+    // Boss AI between-ticket orchestration (v4.2)
+    | 'boss:inter_ticket_started' | 'boss:inter_ticket_completed'
+    | 'boss:startup_assessment_started' | 'boss:startup_assessment_completed'
+    | 'boss:picked_next_ticket'
     // Phase management (v4.0)
     | 'phase:changed' | 'phase:gate_checked' | 'phase:gate_passed' | 'phase:gate_blocked'
     // Impact analysis (v4.0)

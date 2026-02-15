@@ -165,7 +165,7 @@ export class GitHubIntegration {
     }
 
     private processPRWebhook(event: WebhookEvent): void {
-        const prNumber = (event.payload.number as number) || 0;
+        const prNumber = (event.payload.number as number) ?? 0;
         const prId = `pr-${prNumber}`;
 
         if (event.action === "opened" || event.action === "reopened") {

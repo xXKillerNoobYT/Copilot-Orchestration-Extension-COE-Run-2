@@ -165,7 +165,7 @@ Example 2 — Low quality design (score 32):
         sections.push('');
         sections.push('=== PAGES (' + pages.length + ') ===');
         for (const p of pages) {
-            const depth = p.depth || 0;
+            const depth = p.depth ?? 0;
             const indent = '  '.repeat(depth);
             sections.push(indent + '- ' + p.name + ' (route: ' + p.route + ', size: ' + p.width + 'x' + p.height + ', depth: ' + depth + ')');
         }

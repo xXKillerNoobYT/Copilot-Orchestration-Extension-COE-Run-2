@@ -124,6 +124,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Phase 2e: Initialize v2.0 services
         const eventBus = getEventBus();
+        orchestrator.setEventBus(eventBus);
+        outputChannel.appendLine('EventBus wired into Orchestrator.');
 
         const transparencyLogger = new TransparencyLogger(database, eventBus, outputChannel);
         outputChannel.appendLine('TransparencyLogger initialized.');

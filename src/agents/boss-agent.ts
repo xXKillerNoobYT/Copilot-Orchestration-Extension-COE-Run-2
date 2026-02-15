@@ -1,60 +1,85 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse } from '../types';
+import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus } from '../types';
 
+/**
+ * Boss AI — top-level supervisor of the COE system (per True Plan 03 hierarchy).
+ *
+ * The Boss AI sits at the top of the agent tree:
+ *   Boss AI → Orchestrator → Planning Team → Specialist Agents → Review Agent
+ *
+ * It is the ACTIVE decision-maker:
+ *   - Picks which ticket goes next
+ *   - Creates verification tickets when coding is done
+ *   - Creates planning tickets when sub-tasks are needed
+ *   - Detects problems and creates corrective tickets
+ *   - Runs on startup, between every ticket, and every 5 min when idle
+ *
+ * All agent communication runs through the ticket system.
+ * Boss AI creates tickets to dispatch work to the right teams.
+ */
 export class BossAgent extends BaseAgent {
     readonly name = 'Boss AI';
     readonly type = AgentType.Boss;
     readonly systemPrompt = `You are the Boss AI — the top-level supervisor of the Copilot Orchestration Extension (COE).
 
-## Your ONE Job
-Monitor system health, detect problems, resolve conflicts, and escalate critical issues to the user. You are the last line of defense before things go wrong.
+## Your Role
+You are the active decision-maker. You don't just monitor — you DIRECT.
+You oversee the Orchestrator, Planning Team, and Verification Team.
+All communication goes through tickets. You create tickets to dispatch work.
 
-## When You Activate (Thresholds)
-You ONLY activate when at least one of these conditions is true:
-- **CRITICAL: Task overload** — More than 20 pending/ready tasks at once
-- **CRITICAL: Agent failure** — Any agent in "error" status
-- **CRITICAL: Plan drift** — More than 20% of verified tasks don't match plan acceptance criteria
-- **WARNING: Escalation backlog** — More than 5 escalated tickets unresolved
-- **WARNING: Repeated failures** — More than 3 task failures in the last 24 hours
-- **WARNING: Stale tickets** — Tickets open for more than 48 hours with no reply
-- **INFO: User escalation request** — User explicitly asked for Boss AI review
-- **INFO: Post-cycle review** — All P1 tasks completed (time for retrospective)
+## When You Run
+- On system startup (assess and recover)
+- Between every ticket completion (decide what's next)
+- Every 5 minutes when idle (scan for issues)
+- When escalated by another agent
 
 ## Response Format
-You MUST respond in EXACTLY this format (4 fields, each on its own line):
+Respond with EXACTLY these 5 fields:
 
-ASSESSMENT: [One paragraph system health summary. State: total tasks, completed tasks, pending tasks, open tickets, escalated tickets, agents in error. End with overall status: HEALTHY, WARNING, or CRITICAL.]
-ISSUES: [Numbered list of detected issues. Each issue states: what's wrong, severity (CRITICAL/WARNING/INFO), and which threshold was triggered. If no issues: "None detected."]
-ACTIONS: [Numbered list of recommended actions. Each action is ONE specific step. Format: "1. [Action verb] [what] [where]". Maximum 5 actions.]
-ESCALATE: [true or false. Set to true if ANY issue is CRITICAL or if you are unsure about the correct action.]
+ASSESSMENT: [One paragraph system health. Total tasks, completed, pending, open tickets, escalated tickets, agents status. End with: HEALTHY, WARNING, or CRITICAL.]
+ISSUES: [Numbered issues. Each: what's wrong, severity, threshold. If none: "None detected."]
+ACTIONS: [Numbered actions. Each: "1. [VERB] [what] [where]". Max 5. Use these verbs: CREATE_VERIFICATION, CREATE_PLANNING, CREATE_CODING, ESCALATE_USER, RECOVER_STUCK, REPRIORITIZE, PAUSE_INTAKE.]
+NEXT_TICKET: [The ticket ID or number that should be processed next, if any. "none" if queue is empty.]
+ESCALATE: [true or false]
+
+## Action Verbs
+- CREATE_VERIFICATION: Create a ticket for the Verification Team to verify a completed coding ticket
+- CREATE_PLANNING: Create a ticket for the Planning Team to decompose or plan work
+- CREATE_CODING: Create a ticket for coding work
+- ESCALATE_USER: Create a question/feedback for the user to answer
+- RECOVER_STUCK: Recover a stuck or orphaned ticket
+- REPRIORITIZE: Recommend changing a ticket's priority
+- PAUSE_INTAKE: Stop accepting new tickets until backlog clears
 
 ## Rules
-1. Never activate if ALL thresholds are within normal range — just return "System healthy"
-2. When resolving conflicts, ALWAYS prefer the plan over individual agent opinions
-3. When suggesting improvements, be specific: cite the pattern, the impact, and the proposed change
-4. Never change task priorities yourself — recommend changes and let the Orchestrator or user decide
-5. Never delete tasks or tickets — only recommend status changes
-6. If task count exceeds 20, recommend pausing new plan creation until count drops below 15
+1. Prefer the plan over individual agent opinions
+2. Never delete tasks or tickets
+3. Be specific: cite the pattern, impact, and proposed change
+4. If task count > 20, recommend PAUSE_INTAKE
+5. When coding tickets complete, CREATE_VERIFICATION for them`;
 
-## Example — Healthy system
-ASSESSMENT: System is operating normally. 45 total tasks: 30 verified, 8 in progress, 7 pending. 12 tickets: 10 resolved, 2 open. All agents idle. Status: HEALTHY.
-ISSUES: None detected.
-ACTIONS: None needed.
-ESCALATE: false
-
-## Example — Critical issues
-ASSESSMENT: System is under stress. 52 total tasks: 20 verified, 12 in progress, 20 pending. 8 tickets: 3 resolved, 2 open, 3 escalated. Planning agent in error state. Status: CRITICAL.
-ISSUES: 1. Task overload: 20 pending tasks equals the limit (CRITICAL, threshold: >20 pending). 2. Planning agent in error state (CRITICAL, threshold: agent failure). 3. 3 escalated tickets unresolved for >24 hours (WARNING, threshold: escalation backlog).
-ACTIONS: 1. Pause new plan creation until pending tasks drop below 15. 2. Restart Planning agent and check last error in audit log. 3. Review 3 escalated tickets and assign to user for manual resolution. 4. Run verification on the 12 in-progress tasks to check for stuck work.
-ESCALATE: true`;
-
+    /**
+     * Check system health and return an assessment with ACTIONABLE decisions.
+     *
+     * Returns both a text assessment (for logging/display) and a structured
+     * actions array that the TicketProcessor can execute immediately.
+     *
+     * This is the Boss AI's primary decision function. It:
+     * 1. Gathers system state (deterministic)
+     * 2. Checks thresholds and detects issues (deterministic)
+     * 3. Generates concrete actions based on detected issues (deterministic)
+     * 4. Optionally asks the LLM for nuanced assessment (when issues exist)
+     */
     async checkSystemHealth(): Promise<AgentResponse> {
         const stats = this.database.getStats();
         const readyTasks = this.database.getReadyTasks();
         const agents = this.database.getAllAgents();
-        const recentAudit = this.database.getAuditLog(20);
+        const recentAudit = this.database.getAuditLog(200);
         const openTickets = this.database.getTicketsByStatus('open');
         const escalatedTickets = this.database.getTicketsByStatus('escalated');
+        const resolvedTickets = this.database.getTicketsByStatus('resolved');
+
+        // ==================== GATHER STATE ====================
 
         const healthReport = [
             `System Health Check`,
@@ -64,32 +89,49 @@ ESCALATE: true`;
             `Recent audit entries: ${recentAudit.length}`,
         ].join('\n');
 
-        const context: AgentContext = { conversationHistory: [] };
+        // ==================== DETECT ISSUES (deterministic) ====================
 
-        // Check thresholds (matches True Plan 03 thresholds)
         const issues: string[] = [];
+        const actions: AgentAction[] = [];
 
         // CRITICAL: Task overload (>20 pending)
         if (readyTasks.length > 20) {
             issues.push(`CRITICAL: Task overload — ${readyTasks.length} pending tasks (limit: 20)`);
+            actions.push({
+                type: 'log',
+                payload: { action: 'pause_intake', reason: `${readyTasks.length} pending tasks exceeds limit of 20` },
+            });
         }
 
         // CRITICAL: Agent failure (any agent in error state)
         const failedAgents = agents.filter(a => a.status === 'error');
         if (failedAgents.length > 0) {
             issues.push(`CRITICAL: Agent failure — ${failedAgents.map(a => a.name).join(', ')} in error state`);
+            actions.push({
+                type: 'escalate',
+                payload: { reason: `Agent(s) in error state: ${failedAgents.map(a => a.name).join(', ')}` },
+            });
         }
 
         // CRITICAL: Plan drift (>20% verified tasks with issues)
         const activePlan = this.database.getActivePlan();
         if (activePlan) {
             const planTasks = this.database.getTasksByPlan(activePlan.id);
-            const verifiedTasks = planTasks.filter(t => t.status === 'verified');
             const failedTasks = planTasks.filter(t => t.status === 'failed' || t.status === 'needs_recheck');
             if (planTasks.length > 0) {
                 const driftPercent = Math.round((failedTasks.length / planTasks.length) * 100);
                 if (driftPercent > 20) {
                     issues.push(`CRITICAL: Plan drift — ${driftPercent}% of tasks failed/need recheck (${failedTasks.length}/${planTasks.length})`);
+                    // Create planning ticket to investigate and fix drift
+                    actions.push({
+                        type: 'create_ticket',
+                        payload: {
+                            title: `Plan drift correction: ${failedTasks.length} of ${planTasks.length} tasks need attention`,
+                            operation_type: 'boss_directive',
+                            priority: TicketPriority.P1,
+                            body: `Boss AI detected plan drift at ${driftPercent}%. Failed tasks:\n${failedTasks.map(t => `- ${t.title} (${t.status})`).join('\n')}`,
+                        },
+                    });
                 }
             }
         }
@@ -97,6 +139,10 @@ ESCALATE: true`;
         // WARNING: Escalation backlog (>5 escalated tickets)
         if (escalatedTickets.length > 5) {
             issues.push(`WARNING: Escalation backlog — ${escalatedTickets.length} escalated tickets unresolved (limit: 5)`);
+            actions.push({
+                type: 'escalate',
+                payload: { reason: `${escalatedTickets.length} escalated tickets need user attention` },
+            });
         }
 
         // WARNING: Repeated failures (>3 in last 24h)
@@ -114,17 +160,87 @@ ESCALATE: true`;
         const staleTickets = openTickets.filter(t => t.created_at < twoDaysAgo);
         if (staleTickets.length > 0) {
             issues.push(`WARNING: Stale tickets — ${staleTickets.length} ticket(s) open for >48 hours with no reply`);
+            // Recover stale tickets
+            for (const stale of staleTickets.slice(0, 3)) {
+                actions.push({
+                    type: 'create_ticket',
+                    payload: {
+                        title: `Recover stale ticket: TK-${stale.ticket_number} "${stale.title}"`,
+                        operation_type: 'boss_directive',
+                        priority: TicketPriority.P2,
+                        body: `Boss AI detected ticket TK-${stale.ticket_number} open >48 hours. Original: ${stale.title}`,
+                        blocking_ticket_id: stale.id,
+                    },
+                });
+            }
         }
 
+        // ==================== PROACTIVE WORK GENERATION ====================
+
+        // Look for completed coding tickets that haven't been verified yet
+        const recentlyResolved = resolvedTickets.filter(t => {
+            const isRecent = t.updated_at > new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const isCoding = t.operation_type === 'code_generation' || t.deliverable_type === 'code_generation';
+            const notVerified = t.verification_result !== 'passed' && t.verification_result !== 'verified';
+            return isRecent && isCoding && notVerified;
+        });
+
+        for (const codingTicket of recentlyResolved.slice(0, 3)) {
+            // Check if a verification ticket already exists for this one
+            const existingVerify = openTickets.find(t =>
+                t.title.includes(`verify:`) && t.title.includes(codingTicket.ticket_number?.toString() || codingTicket.id)
+            );
+            if (!existingVerify) {
+                actions.push({
+                    type: 'create_ticket',
+                    payload: {
+                        title: `verify: TK-${codingTicket.ticket_number} "${codingTicket.title}"`,
+                        operation_type: 'verification',
+                        priority: TicketPriority.P2,
+                        body: `Boss AI: Verify the output of completed coding ticket TK-${codingTicket.ticket_number}.\n\nOriginal ticket: ${codingTicket.title}\nAcceptance criteria: ${codingTicket.acceptance_criteria || 'Match original requirements'}`,
+                        blocking_ticket_id: codingTicket.id,
+                        deliverable_type: 'verification',
+                    },
+                });
+            }
+        }
+
+        // INFO: Post-cycle review (all P1 tasks completed)
+        if (activePlan) {
+            const planTasks = this.database.getTasksByPlan(activePlan.id);
+            const p1Tasks = planTasks.filter(t => t.priority === 'P1');
+            if (p1Tasks.length > 0) {
+                const completedP1 = p1Tasks.filter(t => t.status === 'verified');
+                if (completedP1.length === p1Tasks.length) {
+                    const remainingTasks = planTasks.filter(t => t.status !== 'verified');
+                    issues.push(`INFO: Post-cycle review — All ${p1Tasks.length} P1 tasks completed. ${remainingTasks.length} lower-priority tasks remaining. Consider retrospective.`);
+                }
+            }
+        }
+
+        // ==================== BUILD RESPONSE ====================
+
+        const context: AgentContext = { conversationHistory: [] };
+
         if (issues.length > 0) {
-            return this.processMessage(
+            // Ask LLM for nuanced assessment when issues exist
+            const llmResponse = await this.processMessage(
                 `${healthReport}\n\nDetected issues:\n${issues.join('\n')}`,
                 context
             );
+            // Merge deterministic actions with any LLM might suggest
+            return {
+                content: llmResponse.content,
+                actions: [...actions, ...(llmResponse.actions || [])],
+                confidence: llmResponse.confidence,
+                tokensUsed: llmResponse.tokensUsed,
+            };
         }
 
+        // Healthy system — return deterministic actions only (no LLM call needed)
         return {
-            content: `System healthy. ${readyTasks.length} tasks ready, ${openTickets.length} tickets open.`,
+            content: `ASSESSMENT: System healthy. ${readyTasks.length} tasks ready, ${openTickets.length} tickets open. Status: HEALTHY.\nISSUES: None detected.\nACTIONS: ${actions.length > 0 ? actions.length + ' proactive actions generated.' : 'None needed.'}\nNEXT_TICKET: ${readyTasks.length > 0 ? 'Queue has items.' : 'none'}\nESCALATE: false`,
+            actions,
         };
     }
 }

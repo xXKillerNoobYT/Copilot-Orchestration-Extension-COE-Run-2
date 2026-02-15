@@ -191,6 +191,14 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
                 const parsed = JSON.parse(jsonMatch[0]);
 
                 if (parsed.plan_name && parsed.tasks) {
+                    // Enforce max 100 tasks per plan (True Plan 03 limit)
+                    if (parsed.tasks.length > 100) {
+                        this.outputChannel.appendLine(`[${this.name}] Plan "${parsed.plan_name}" has ${parsed.tasks.length} tasks — truncating to 100. Consider creating phases for remaining work.`);
+                        this.database.addAuditLog(this.name, 'plan_truncated',
+                            `Plan "${parsed.plan_name}" had ${parsed.tasks.length} tasks, truncated to 100`);
+                        parsed.tasks = parsed.tasks.slice(0, 100);
+                    }
+
                     // Create the plan
                     const plan = this.database.createPlan(parsed.plan_name, JSON.stringify(parsed));
                     this.database.updatePlan(plan.id, { status: PlanStatus.Active });
@@ -203,7 +211,7 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
                             title: taskDef.title,
                             description: taskDef.description || '',
                             priority: (taskDef.priority as TaskPriority) || TaskPriority.P2,
-                            estimated_minutes: taskDef.estimated_minutes || 30,
+                            estimated_minutes: taskDef.estimated_minutes ?? 30,
                             acceptance_criteria: taskDef.acceptance_criteria || '',
                             plan_id: plan.id,
                             dependencies: [],
@@ -229,7 +237,7 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
                     // Auto-decompose tasks that are too large (>45 minutes)
                     let decomposedCount = 0;
                     for (const taskDef of parsed.tasks) {
-                        const estMinutes = taskDef.estimated_minutes || 30;
+                        const estMinutes = taskDef.estimated_minutes ?? 30;
                         if (estMinutes > 45) {
                             const taskId = taskIdMap[taskDef.title];
                             if (taskId) {

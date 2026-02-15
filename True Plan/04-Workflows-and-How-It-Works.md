@@ -237,6 +237,11 @@ flowchart TB
 - **Tiered retry**: Auto-retry 3x → Boss classifies severity → minor: keep retrying → major: escalate to user
 - **Ghost Tickets**: When a task is blocked by unanswered question → auto-creates P1 Ghost Ticket for user → 3-strike dismiss rule
 - **Phase gates**: After ticket resolution, automatically check if current phase can advance
+- **Peek-then-remove**: Queue entries are peeked (not popped) before processing — only removed after successful completion. Prevents ticket orphaning on agent errors.
+- **Review gate**: Non-communication tickets pass through the Review Agent after agent processing. Auto-approved tickets proceed to verification; flagged tickets are held (`processing_status: 'holding'`) for user review.
+- **Error recovery**: Agent errors increment `errorRetryCount` (max 3). After 3 failures, ticket is escalated with a Ghost Ticket. Status resets to `Open` for re-queue.
+- **Startup recovery**: On extension activation, `recoverOrphanedTickets()` scans for tickets stuck in `in_review` (not `holding`) and re-queues them.
+- **Idle watchdog recovery**: After 5-min idle timeout, the watchdog also recovers tickets stuck with `processing_status: 'processing'`.
 
 ## Workflow 5b: User Communication Queue — IMPLEMENTED (v2.0)
 

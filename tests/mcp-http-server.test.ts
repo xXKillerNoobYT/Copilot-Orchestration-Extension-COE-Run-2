@@ -833,8 +833,8 @@ describe('MCP Server startup edge cases', () => {
         orchestrator.callAgent = originalCallAgent;
     });
 
-    test('POST /call — askQuestion with zero confidence (line 177 zero is falsy)', async () => {
-        // Zero confidence should trigger the || 80 fallback since 0 || 80 = 80
+    test('POST /call — askQuestion with zero confidence preserves zero (not coerced to 80)', async () => {
+        // v4.1 fix: Zero confidence is a valid value and should be preserved (using ?? instead of ||)
         const originalCallAgent = orchestrator.callAgent.bind(orchestrator);
         orchestrator.callAgent = jest.fn().mockResolvedValue({
             content: 'Uncertain answer',
@@ -849,7 +849,7 @@ describe('MCP Server startup edge cases', () => {
         });
         expect(res.status).toBe(200);
         expect(res.data.success).toBe(true);
-        expect(res.data.data.confidence).toBe(80); // 0 || 80 = 80
+        expect(res.data.data.confidence).toBe(0); // 0 ?? 80 = 0 (zero is valid)
 
         orchestrator.callAgent = originalCallAgent;
     });

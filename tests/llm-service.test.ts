@@ -23,6 +23,7 @@ describe('LLMService', () => {
             startupTimeoutSeconds: 5,
             streamStallTimeoutSeconds: 3,
             maxTokens: 100,
+            maxInputTokens: 4000,
             ...overrides,
         };
     }
@@ -687,6 +688,7 @@ describe('LLMService', () => {
             startupTimeoutSeconds: 88,
             streamStallTimeoutSeconds: 77,
             maxTokens: 500,
+            maxInputTokens: 4000,
         };
         llmService.updateConfig(newConfig);
         // Verify internal config was updated by checking model via a property

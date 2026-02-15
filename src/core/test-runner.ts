@@ -113,9 +113,9 @@ export class TestRunnerService {
     }
 
     private extractFromJestJson(json: Record<string, unknown>): TestRunResult {
-        const passed = (json.numPassedTests as number) || 0;
-        const failed = (json.numFailedTests as number) || 0;
-        const pending = (json.numPendingTests as number) || 0;
+        const passed = (json.numPassedTests as number) ?? 0;
+        const failed = (json.numFailedTests as number) ?? 0;
+        const pending = (json.numPendingTests as number) ?? 0;
 
         // Extract coverage from snapshot
         let coverage: number | null = null;

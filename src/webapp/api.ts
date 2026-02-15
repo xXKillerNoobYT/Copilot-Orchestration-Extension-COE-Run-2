@@ -114,15 +114,22 @@ function resolveAgentForTicket(ticket: { operation_type?: string; title: string;
 } {
     // If explicitly set, use that
     if (ticket.processing_agent) {
+        // v4.1 (Bug 6B): Complete color + label mappings for all 15 agents
         const agentColors: Record<string, string> = {
             planning: '#4a9eff', verification: '#22c55e', coding: '#a855f7',
             boss: '#eab308', design_architect: '#4a9eff', gap_hunter: '#4a9eff',
             design_hardener: '#4a9eff', decision_memory: '#6366f1',
+            review: '#10b981', ui_testing: '#f97316', observation: '#8b5cf6',
+            clarity: '#06b6d4', answer: '#3b82f6', research: '#14b8a6',
+            custom: '#ec4899',
         };
         const agentLabels: Record<string, string> = {
             planning: 'Planning Team', verification: 'Verification Team', coding: 'Coding Agent',
             boss: 'Boss AI', design_architect: 'Design Architect', gap_hunter: 'Gap Hunter',
             design_hardener: 'Design Hardener', decision_memory: 'Decision Memory',
+            review: 'Review Agent', ui_testing: 'UI Testing', observation: 'Observation Agent',
+            clarity: 'Clarity Agent', answer: 'Answer Agent', research: 'Research Agent',
+            custom: 'Custom Agent',
         };
         return {
             agentName: ticket.processing_agent,
@@ -171,8 +178,12 @@ function repairJson(raw: string): { parsed: any; repaired: boolean; error: strin
     if (unquotedKeyFixed !== text) { text = unquotedKeyFixed; repairs.push('fixed_unquoted_keys'); }
 
     // Step 5: Fix control characters in strings (raw newlines/tabs inside quoted strings)
+    // v4.1 (Bug 6C): Use lookbehind to avoid double-escaping already-escaped sequences
     const controlFixed = text.replace(/"([^"]*?)"/g, (_match, content) => {
-        const cleaned = content.replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '\\r');
+        const cleaned = content
+            .replace(/(?<!\\)\n/g, '\\n')
+            .replace(/(?<!\\)\t/g, '\\t')
+            .replace(/(?<!\\)\r/g, '\\r');
         return '"' + cleaned + '"';
     });
     if (controlFixed !== text) { text = controlFixed; repairs.push('fixed_control_chars'); }
@@ -493,7 +504,7 @@ function formatAgentResponse(response: {
         parts.push(response.explanation);
     }
 
-    if (response.files.length > 0) {
+    if (response.files?.length > 0) {
         for (const file of response.files) {
             parts.push(`\n📄 ${file.name}:`);
             parts.push('```' + file.language + '\n' + file.content + '\n```');
@@ -502,7 +513,7 @@ function formatAgentResponse(response: {
         parts.push('```' + response.language + '\n' + response.code + '\n```');
     }
 
-    if (response.warnings.length > 0) {
+    if (response.warnings?.length > 0) {
         parts.push('\n⚠️ ' + response.warnings.join('\n⚠️ '));
     }
 
@@ -524,7 +535,8 @@ export async function handleApiRequest(
     database: Database,
     orchestrator: Orchestrator,
     config: ConfigManager,
-    codingAgentService?: CodingAgentService
+    codingAgentService?: CodingAgentService,
+    ticketProcessor?: import('../core/ticket-processor').TicketProcessorService
 ): Promise<boolean> {
     if (!pathname.startsWith('/api/')) return false;
 
@@ -602,7 +614,7 @@ export async function handleApiRequest(
                 acceptance_criteria: (body.acceptance_criteria as string) || '',
                 plan_id: (body.plan_id as string) || undefined,
                 parent_task_id: (body.parent_task_id as string) || undefined,
-                sort_order: (body.sort_order as number) || 0,
+                sort_order: (body.sort_order as number) ?? 0,
                 dependencies: (body.dependencies as string[]) || [],
             });
             eventBus.emit('task:created', 'webapp', { taskId: task.id, title: task.title });
@@ -716,13 +728,84 @@ export async function handleApiRequest(
                 body.clarity_score as number | undefined
             );
             eventBus.emit('ticket:replied', 'webapp', { ticketId: replyTicketId, replyId: reply.id });
+
+            // v4.1: If ticket is held for user review, user reply unblocks it
+            const replyAuthor = (body.author as string) || 'user';
+            if (replyAuthor === 'user') {
+                const ticket = database.getTicket(replyTicketId);
+                if (ticket && ticket.processing_status === 'holding') {
+                    database.updateTicket(replyTicketId, {
+                        processing_status: 'queued',
+                    });
+                    database.addTicketReply(replyTicketId, 'system',
+                        'User provided feedback — ticket unblocked and re-queued for processing.');
+                    eventBus.emit('ticket:unblocked', 'webapp', { ticketId: replyTicketId });
+                }
+            }
+
             json(res, reply, 201);
+            return true;
+        }
+
+        // v4.1: Ticket run history (WS1A + WS2+6)
+        const runTicketId = extractParam(route, 'tickets/:id/runs');
+        if (runTicketId && method === 'GET') {
+            const runs = database.getTicketRuns(runTicketId);
+            json(res, runs);
+            return true;
+        }
+
+        const latestRunTicketId = extractParam(route, 'tickets/:id/runs/latest');
+        if (latestRunTicketId && method === 'GET') {
+            const run = database.getLatestTicketRun(latestRunTicketId);
+            if (!run) { json(res, { error: 'No runs found for this ticket' }, 404); return true; }
+            json(res, run);
+            return true;
+        }
+
+        // v4.1: AI Suggestion endpoints (WS2C)
+        if (route === 'suggestions' && method === 'GET') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const planId = url.searchParams.get('plan_id');
+            const status = url.searchParams.get('status') as string | null;
+            if (!planId) { json(res, { error: 'plan_id is required' }, 400); return true; }
+            const suggestions = database.getAISuggestionsByPlan(planId, status ?? undefined);
+            json(res, suggestions);
+            return true;
+        }
+
+        const suggestApproveId = extractParam(route, 'suggestions/:id/approve');
+        if (suggestApproveId && method === 'POST') {
+            const result = database.approveSuggestion(suggestApproveId);
+            if (!result) { json(res, { error: 'Suggestion not found' }, 404); return true; }
+            eventBus.emit('ai:suggestion_accepted', 'webapp', { suggestionId: suggestApproveId });
+            json(res, result);
+            return true;
+        }
+
+        const suggestRejectId = extractParam(route, 'suggestions/:id/reject');
+        if (suggestRejectId && method === 'POST') {
+            const body = await parseBody(req);
+            const reason = (body.reason as string) || undefined;
+            const result = database.rejectSuggestion(suggestRejectId, reason);
+            if (!result) { json(res, { error: 'Suggestion not found' }, 404); return true; }
+            eventBus.emit('ai:suggestion_dismissed', 'webapp', { suggestionId: suggestRejectId, reason });
+            json(res, result);
+            return true;
+        }
+
+        const suggestTargetType = extractParam(route, 'suggestions/target/:id');
+        if (suggestTargetType && method === 'GET') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const targetType = url.searchParams.get('type') || 'component';
+            const suggestions = database.getSuggestionsByTarget(targetType, suggestTargetType);
+            json(res, suggestions);
             return true;
         }
 
         // Single ticket operations
         const ticketId = extractParam(route, 'tickets/:id');
-        if (ticketId && !route.includes('/replies') && !route.includes('/children') && method === 'GET') {
+        if (ticketId && !route.includes('/replies') && !route.includes('/children') && !route.includes('/runs') && method === 'GET') {
             const ticket = database.getTicket(ticketId);
             if (!ticket) { json(res, { error: 'Ticket not found' }, 404); return true; }
             const replies = database.getTicketReplies(ticketId);
@@ -1574,7 +1657,7 @@ export async function handleApiRequest(
                 depth,
                 name: (body.name as string) || 'Untitled Page',
                 route: (body.route as string) || '/',
-                sort_order: (body.sort_order as number) || 0,
+                sort_order: (body.sort_order as number) ?? 0,
                 width: (body.width as number) || 1440,
                 height: (body.height as number) || 900,
                 background: (body.background as string) || '#1e1e2e',
@@ -1640,9 +1723,9 @@ export async function handleApiRequest(
                 type: (body.type as string) || 'container',
                 name: (body.name as string) || 'Component',
                 parent_id: (body.parent_id as string) || undefined,
-                sort_order: (body.sort_order as number) || 0,
-                x: (body.x as number) || 0,
-                y: (body.y as number) || 0,
+                sort_order: (body.sort_order as number) ?? 0,
+                x: (body.x as number) ?? 0,
+                y: (body.y as number) ?? 0,
                 width: (body.width as number) || 200,
                 height: (body.height as number) || 100,
                 styles: (body.styles as Record<string, unknown>) || {},
@@ -2001,8 +2084,14 @@ export async function handleApiRequest(
             const url = new URL(req.url || '', 'http://localhost');
             const planId = url.searchParams.get('plan_id');
             if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
-            const status = url.searchParams.get('status') || undefined;
-            json(res, database.getElementIssuesByPlan(planId, status));
+            const elementId = url.searchParams.get('element_id');
+            const elementType = url.searchParams.get('element_type') || 'component';
+            if (elementId) {
+                json(res, database.getElementIssuesByElement(elementId, elementType));
+            } else {
+                const status = url.searchParams.get('status') || undefined;
+                json(res, database.getElementIssuesByPlan(planId, status));
+            }
             return true;
         }
 
@@ -2049,6 +2138,80 @@ export async function handleApiRequest(
         if (issueId && method === 'DELETE') {
             database.deleteElementIssue(issueId);
             json(res, { success: true });
+            return true;
+        }
+
+        // ==================== ELEMENT STATUS (v4.2) ====================
+        if (route === 'element-status' && method === 'GET') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const planId = url.searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const elementId = url.searchParams.get('element_id');
+            const elementType = url.searchParams.get('element_type') || 'component';
+            if (elementId) {
+                const status = database.getOrCreateElementStatus(elementId, elementType as 'component' | 'page', planId);
+                json(res, status);
+            } else {
+                json(res, database.getElementStatusByPlan(planId));
+            }
+            return true;
+        }
+
+        if (route === 'element-status' && method === 'PUT') {
+            const body = await parseBody(req);
+            if (!body.element_id || !body.plan_id) { json(res, { error: 'element_id and plan_id required' }, 400); return true; }
+            const updated = database.updateElementStatus(
+                body.element_id as string,
+                (body.element_type as string) || 'component',
+                body.plan_id as string,
+                body as any
+            );
+            eventBus.emit('status:element_updated', 'webapp', { elementId: body.element_id, planId: body.plan_id });
+            json(res, updated);
+            return true;
+        }
+
+        if (route === 'page-readiness' && method === 'GET') {
+            const url = new URL(req.url || '', 'http://localhost');
+            const planId = url.searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const pages = database.getDesignPagesByPlan(planId);
+            const summaries = pages.map(page => {
+                const { readiness_pct, readiness_level } = database.calculatePageReadiness(page.id, planId);
+                const components = database.getDesignComponentsByPage(page.id);
+                const openIssues = database.getElementIssuesByElement(page.id, 'page').filter(i => i.status === 'open').length;
+                // count component issues too
+                let compIssues = 0;
+                const statusByImpl: Record<string, number> = {};
+                for (const comp of components) {
+                    const cIssues = database.getElementIssuesByElement(comp.id, 'component').filter(i => i.status === 'open');
+                    compIssues += cIssues.length;
+                    const cStatus = database.getElementStatus(comp.id, 'component', planId);
+                    const implStatus = cStatus ? cStatus.implementation_status : 'not_started';
+                    statusByImpl[implStatus] = (statusByImpl[implStatus] || 0) + 1;
+                }
+                // Get page lifecycle stage from phase
+                const plan = database.getPlan(planId);
+                const phase = plan ? (plan as any).current_phase || 'planning' : 'planning';
+                const stageMap: Record<string, string> = {
+                    'planning': 'design', 'designing': 'design', 'design_review': 'design', 'task_generation': 'design',
+                    'coding': 'coding', 'design_update': 'coding',
+                    'verification': 'verification', 'complete': 'verification'
+                };
+                const lifecycleStage = stageMap[phase] || 'design';
+                return {
+                    page_id: page.id,
+                    page_name: page.name,
+                    total_elements: components.length,
+                    elements_by_status: statusByImpl,
+                    readiness_pct,
+                    readiness_level,
+                    open_issues: openIssues + compIssues,
+                    pending_questions: 0,
+                    lifecycle_stage: lifecycleStage,
+                };
+            });
+            json(res, summaries);
             return true;
         }
 
@@ -2106,11 +2269,20 @@ Only return the JSON array, nothing else.`;
                         title: s.title || 'Untitled',
                         description: s.description || '',
                         reasoning: s.reasoning || '',
+                        goal: s.goal || '',
+                        source_agent: 'planning',
+                        target_type: s.target_type ?? null,
+                        target_id: s.target_id ?? null,
+                        current_value: s.current_value ?? null,
+                        suggested_value: s.suggested_value ? JSON.stringify(s.suggested_value) : null,
                         action_type: s.action_type ?? null,
                         action_payload: s.action_payload || {},
                         priority: s.priority || 'P2',
                         status: 'pending',
                         ticket_id: null,
+                        approved_at: null,
+                        rejected_at: null,
+                        rejection_reason: null,
                     });
                     created.push(suggestion);
                 }
@@ -2168,6 +2340,21 @@ Only return the JSON array, nothing else.`;
             const updated = database.answerAIQuestion(answerQuestionId, body.answer as string);
             if (!updated) { json(res, { error: 'Question not found' }, 404); return true; }
             eventBus.emit('ai:question_answered', 'webapp', { questionId: answerQuestionId });
+
+            // v4.1: If this question is linked to a ticket, unblock it
+            const question = database.getAIQuestion(answerQuestionId);
+            if (question && (question as any).source_ticket_id) {
+                const linkedTicket = database.getTicket((question as any).source_ticket_id);
+                if (linkedTicket && linkedTicket.processing_status === 'holding') {
+                    database.updateTicket(linkedTicket.id, {
+                        processing_status: 'queued',
+                    });
+                    database.addTicketReply(linkedTicket.id, 'system',
+                        `User answered AI feedback question — ticket unblocked. Answer: ${(body.answer as string).substring(0, 200)}`);
+                    eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
+                }
+            }
+
             json(res, updated);
             return true;
         }
@@ -2286,8 +2473,13 @@ Only return the JSON object, nothing else.`;
                                 plan_id: planId, component_id: null, page_id: null,
                                 type: 'implementation_blocker', title: detail.area,
                                 description: detail.description, reasoning: 'Identified during plan review',
+                                goal: 'Resolve implementation blocker before proceeding',
+                                source_agent: 'planning',
+                                target_type: null, target_id: null,
+                                current_value: null, suggested_value: null,
                                 action_type: null, action_payload: {}, priority: TicketPriority.P1,
                                 status: 'pending', ticket_id: null,
+                                approved_at: null, rejected_at: null, rejection_reason: null,
                             });
                             suggestionsGenerated++;
                         } else {
@@ -3722,6 +3914,33 @@ Only return the JSON array.`;
             }
         }
 
+        // v4.1: Fallback answer endpoint (popup may call without ai/ prefix)
+        {
+            const fallbackAnswerId = extractParam(route, 'questions/:id/answer');
+            if (fallbackAnswerId && method === 'POST') {
+                const body = await parseBody(req);
+                if (!body.answer) { json(res, { error: 'answer required' }, 400); return true; }
+                const updated = database.answerAIQuestion(fallbackAnswerId, body.answer as string);
+                if (!updated) { json(res, { error: 'Question not found' }, 404); return true; }
+                eventBus.emit('ai:question_answered', 'webapp', { questionId: fallbackAnswerId });
+
+                // Unblock linked ticket if held
+                const question = database.getAIQuestion(fallbackAnswerId);
+                if (question && (question as any).source_ticket_id) {
+                    const linkedTicket = database.getTicket((question as any).source_ticket_id);
+                    if (linkedTicket && linkedTicket.processing_status === 'holding') {
+                        database.updateTicket(linkedTicket.id, { processing_status: 'queued' });
+                        database.addTicketReply(linkedTicket.id, 'system',
+                            `User answered AI feedback — ticket unblocked.`);
+                        eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
+                    }
+                }
+
+                json(res, updated);
+                return true;
+            }
+        }
+
         // ==================== PHASE STATUS (F1) ====================
 
         // GET /api/plans/:id/phase — get current phase info
@@ -3775,6 +3994,8 @@ Only return the JSON array.`;
                 clarityClarificationScore: cfg.clarityClarificationScore ?? 70,
                 llmEndpoint: cfg.llm.endpoint,
                 llmModel: cfg.llm.model,
+                llmMaxTokens: cfg.llm.maxTokens,
+                llmMaxInputTokens: cfg.llm.maxInputTokens ?? 4000,
             });
             return true;
         }
@@ -3782,19 +4003,69 @@ Only return the JSON array.`;
         if (route === 'settings' && method === 'PUT') {
             const body = await parseBody(req);
             const updates: Record<string, unknown> = {};
-            if (body.designQaScoreThreshold !== undefined) updates.designQaScoreThreshold = Math.max(50, Number(body.designQaScoreThreshold));
-            if (body.maxActiveTickets !== undefined) updates.maxActiveTickets = Number(body.maxActiveTickets);
-            if (body.maxTicketRetries !== undefined) updates.maxTicketRetries = Number(body.maxTicketRetries);
-            if (body.maxClarificationRounds !== undefined) updates.maxClarificationRounds = Number(body.maxClarificationRounds);
-            if (body.bossIdleTimeoutMinutes !== undefined) updates.bossIdleTimeoutMinutes = Number(body.bossIdleTimeoutMinutes);
-            if (body.bossStuckPhaseMinutes !== undefined) updates.bossStuckPhaseMinutes = Number(body.bossStuckPhaseMinutes);
-            if (body.bossTaskOverloadThreshold !== undefined) updates.bossTaskOverloadThreshold = Number(body.bossTaskOverloadThreshold);
-            if (body.bossEscalationThreshold !== undefined) updates.bossEscalationThreshold = Number(body.bossEscalationThreshold);
-            if (body.clarityAutoResolveScore !== undefined) updates.clarityAutoResolveScore = Number(body.clarityAutoResolveScore);
-            if (body.clarityClarificationScore !== undefined) updates.clarityClarificationScore = Number(body.clarityClarificationScore);
+            const safeNum = (val: unknown, fallback?: number): number | undefined => {
+                const n = Number(val);
+                return isNaN(n) ? fallback : n;
+            };
+            if (body.designQaScoreThreshold !== undefined) { const v = safeNum(body.designQaScoreThreshold); if (v !== undefined) updates.designQaScoreThreshold = Math.max(50, v); }
+            if (body.maxActiveTickets !== undefined) { const v = safeNum(body.maxActiveTickets); if (v !== undefined) updates.maxActiveTickets = v; }
+            if (body.maxTicketRetries !== undefined) { const v = safeNum(body.maxTicketRetries); if (v !== undefined) updates.maxTicketRetries = v; }
+            if (body.maxClarificationRounds !== undefined) { const v = safeNum(body.maxClarificationRounds); if (v !== undefined) updates.maxClarificationRounds = v; }
+            if (body.bossIdleTimeoutMinutes !== undefined) { const v = safeNum(body.bossIdleTimeoutMinutes); if (v !== undefined) updates.bossIdleTimeoutMinutes = v; }
+            if (body.bossStuckPhaseMinutes !== undefined) { const v = safeNum(body.bossStuckPhaseMinutes); if (v !== undefined) updates.bossStuckPhaseMinutes = v; }
+            if (body.bossTaskOverloadThreshold !== undefined) { const v = safeNum(body.bossTaskOverloadThreshold); if (v !== undefined) updates.bossTaskOverloadThreshold = v; }
+            if (body.bossEscalationThreshold !== undefined) { const v = safeNum(body.bossEscalationThreshold); if (v !== undefined) updates.bossEscalationThreshold = v; }
+            if (body.clarityAutoResolveScore !== undefined) { const v = safeNum(body.clarityAutoResolveScore); if (v !== undefined) updates.clarityAutoResolveScore = v; }
+            if (body.clarityClarificationScore !== undefined) { const v = safeNum(body.clarityClarificationScore); if (v !== undefined) updates.clarityClarificationScore = v; }
             config.updateConfig(updates as any);
             eventBus.emit('system:config_updated', 'webapp', { fields: Object.keys(updates) });
             json(res, { success: true });
+            return true;
+        }
+
+        // ==================== PROCESSING STATUS ====================
+        if (route === 'processing/status' && method === 'GET') {
+            const params = new URL(req.url || '', 'http://localhost').searchParams;
+            const planId = params.get('plan_id');
+            const queueStatus = ticketProcessor ? ticketProcessor.getStatus() : {
+                mainQueueSize: 0, bossQueueSize: 0,
+                mainProcessing: false, bossProcessing: false,
+                lastActivityTimestamp: 0, idleMinutes: 0,
+                bossState: 'idle' as const, bossNextCheckMs: 0,
+            };
+            const allTickets = database.getAllTickets();
+            const totalTickets = allTickets.length;
+            const resolvedTickets = allTickets.filter((t: { status: string }) => t.status === 'resolved').length;
+            const processingTicket = allTickets.find((t: { processing_status: string | null }) => t.processing_status === 'processing');
+            json(res, {
+                isProcessing: queueStatus.mainProcessing || queueStatus.bossProcessing,
+                mainQueueSize: queueStatus.mainQueueSize,
+                bossQueueSize: queueStatus.bossQueueSize,
+                totalTickets,
+                resolvedTickets,
+                percentComplete: totalTickets > 0 ? Math.round((resolvedTickets / totalTickets) * 100) : 0,
+                currentTicket: processingTicket ? {
+                    id: processingTicket.id,
+                    ticket_number: processingTicket.ticket_number,
+                    title: processingTicket.title,
+                    status: processingTicket.status,
+                    processing_status: processingTicket.processing_status,
+                    processing_agent: processingTicket.processing_agent,
+                    stage: processingTicket.stage,
+                } : null,
+                phase: planId ? (database as any).getPlanPhase?.(planId) ?? null : null,
+                lastActivityTimestamp: queueStatus.lastActivityTimestamp,
+                idleMinutes: queueStatus.idleMinutes,
+                bossState: queueStatus.bossState,
+                bossNextCheckMs: queueStatus.bossNextCheckMs,
+            });
+            return true;
+        }
+
+        // ==================== TICKET RECOVERY ====================
+        if (route === 'tickets/recover-stuck' && method === 'POST') {
+            const recovered = ticketProcessor ? ticketProcessor.recoverStuckTickets() : 0;
+            json(res, { recovered, message: `Recovered ${recovered} stuck tickets` });
             return true;
         }
 

@@ -51,7 +51,8 @@ export enum AgentType {
     DesignArchitect = 'design_architect',
     GapHunter = 'gap_hunter',
     DesignHardener = 'design_hardener',
-    DecisionMemory = 'decision_memory'
+    DecisionMemory = 'decision_memory',
+    Review = 'review'
 }
 
 export enum AgentStatus {
@@ -206,6 +207,9 @@ export interface Ticket {
     retry_count: number;
     max_retries: number;
     stage: number;
+    // v4.1 — Error tracking for AI retry context
+    last_error: string | null;
+    last_error_at: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -307,7 +311,10 @@ export interface LLMConfig {
     timeoutSeconds: number;
     startupTimeoutSeconds: number;
     streamStallTimeoutSeconds: number;
+    /** Max tokens for output generation (sent to API as max_tokens). Default: 30000. */
     maxTokens: number;
+    /** Max tokens for input prompt (hard limit from LM Studio). Default: 4000. Prompts exceeding this are truncated with a warning. */
+    maxInputTokens: number;
 }
 
 export interface LLMMessage {
@@ -1315,7 +1322,7 @@ export type IssueStatus = 'open' | 'resolved' | 'wontfix';
 export type PlanMode = 'frontend' | 'backend' | 'fullstack';
 export type SuggestionType = 'layout' | 'missing_component' | 'ux_issue' | 'implementation_blocker' | 'plan_update' | 'architecture' | 'review_request' | 'general';
 export type SuggestionActionType = 'add_component' | 'modify_component' | 'create_ticket' | 'update_task' | 'add_task' | 'modify_plan' | null;
-export type SuggestionStatus = 'pending' | 'accepted' | 'dismissed' | 'applied';
+export type SuggestionStatus = 'pending' | 'accepted' | 'dismissed' | 'applied' | 'rejected';
 export type QuestionCategory = 'frontend' | 'backend' | 'ux' | 'architecture' | 'data' | 'general';
 export type QuestionType = 'yes_no' | 'choice' | 'text' | 'confirm';
 export type QuestionStatus = 'pending' | 'answered' | 'autofilled' | 'dismissed';
@@ -1325,6 +1332,46 @@ export interface ElementStatusData {
     implementation_status: ImplementationStatus;
     has_questions: boolean;
     checklist: Array<{ item: string; done: boolean; mode: PlanMode }>;
+}
+
+/** Phase-aware lifecycle stage for element status */
+export type LifecycleStage = 'design' | 'coding' | 'testing' | 'verification';
+
+/** Persisted per-element status record (stored in element_status table) */
+export interface ElementStatus {
+    id: string;
+    element_id: string;
+    element_type: 'component' | 'page';
+    plan_id: string;
+    /** Current implementation status */
+    implementation_status: ImplementationStatus;
+    /** Which lifecycle stage this element is in */
+    lifecycle_stage: LifecycleStage;
+    /** Readiness percentage 0-100 for current stage */
+    readiness_pct: number;
+    /** Computed readiness level */
+    readiness_level: ReadinessLevel;
+    /** Per-mode (frontend/backend) status JSON */
+    mode_status: Record<PlanMode, ImplementationStatus>;
+    /** Checklist items JSON */
+    checklist: Array<{ item: string; done: boolean; mode: PlanMode }>;
+    /** Notes/comments */
+    notes: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Summary of a page's readiness across all its elements */
+export interface PageReadinessSummary {
+    page_id: string;
+    page_name: string;
+    total_elements: number;
+    elements_by_status: Record<ImplementationStatus, number>;
+    readiness_pct: number;
+    readiness_level: ReadinessLevel;
+    open_issues: number;
+    pending_questions: number;
+    lifecycle_stage: LifecycleStage;
 }
 
 export interface ElementIssue {
@@ -1350,11 +1397,29 @@ export interface AISuggestion {
     title: string;
     description: string;
     reasoning: string;
+    /** The goal this suggestion achieves */
+    goal: string;
+    /** Which agent generated this suggestion */
+    source_agent: string | null;
+    /** What kind of entity is being targeted */
+    target_type: 'page' | 'component' | 'token' | 'flow' | 'property' | 'requirement' | null;
+    /** ID of the target entity */
+    target_id: string | null;
+    /** Current value before the change (JSON) */
+    current_value: string | null;
+    /** Proposed new value (JSON) */
+    suggested_value: string | null;
     action_type: SuggestionActionType;
     action_payload: Record<string, unknown>;
     priority: TicketPriority;
     status: SuggestionStatus;
     ticket_id: string | null;
+    /** When the suggestion was approved */
+    approved_at: string | null;
+    /** When the suggestion was rejected */
+    rejected_at: string | null;
+    /** Reason for rejection (if rejected) */
+    rejection_reason: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -1387,6 +1452,7 @@ export interface AIQuestion {
     previous_decision_id?: string | null;
     conflict_decision_id?: string | null;
     technical_context?: string | null;
+    friendly_message?: string | null;
 }
 
 export interface PlanVersion {
@@ -1587,4 +1653,171 @@ export interface TicketVerificationResult {
     passed: boolean;
     attempt_number: number;
     failure_details?: string;
+}
+
+// --- Per-Ticket Run Logging Types (v4.1) ---
+
+/** Status of a single ticket processing run */
+export type TicketRunStatus = 'started' | 'completed' | 'failed' | 'review_passed' | 'review_flagged';
+
+/** A single processing run for a ticket — each retry gets its own run log */
+export interface TicketRun {
+    id: string;
+    ticket_id: string;
+    run_number: number;
+    agent_name: string;
+    status: TicketRunStatus;
+    /** The prompt/message sent to the agent */
+    prompt_sent: string;
+    /** The agent's response content */
+    response_received: string | null;
+    /** JSON of review agent scores/decision (if review gate ran) */
+    review_result: string | null;
+    /** JSON of verification result (clarity + deliverable check) */
+    verification_result: string | null;
+    /** Error message if the run failed */
+    error_message: string | null;
+    /** Error stack trace (truncated to 2000 chars) */
+    error_stack: string | null;
+    /** Tokens consumed by LLM during this run */
+    tokens_used: number | null;
+    /** Total processing time for this run in milliseconds */
+    duration_ms: number;
+    started_at: string;
+    completed_at: string | null;
+}
+
+// --- Enhanced Component Property Types (v4.1) ---
+
+/** Structured UX notes with templates and free-text */
+export interface UXNotes {
+    templates: {
+        /** "As a user, I expect..." */
+        user_expectation: string;
+        /** "When an error occurs, the user sees..." */
+        error_state: string;
+        /** "While loading, the user sees..." */
+        loading_state: string;
+        /** "When there is no data, the user sees..." */
+        empty_state: string;
+    };
+    /** Additional free-form UX notes */
+    freeform: string;
+}
+
+/** Structured DX notes with templates and free-text */
+export interface DXNotes {
+    templates: {
+        /** "Implement using..." */
+        implementation: string;
+        /** "Required libraries/APIs..." */
+        dependencies: string;
+        /** Estimated implementation complexity */
+        complexity: 'low' | 'medium' | 'high';
+        /** "API endpoints needed..." */
+        api_endpoints: string;
+    };
+    /** Additional free-form developer notes */
+    freeform: string;
+}
+
+/** Page-level UX notes with templates */
+export interface PageUXNotes {
+    templates: {
+        /** "The user journey through this page..." */
+        user_journey: string;
+        /** "Users arrive here from..." */
+        entry_points: string;
+        /** "Users leave this page to..." */
+        exit_points: string;
+        /** "When errors occur on this page..." */
+        error_handling: string;
+    };
+    freeform: string;
+}
+
+/** Page-level DX notes with templates */
+export interface PageDXNotes {
+    templates: {
+        /** "Implement this page using..." */
+        implementation: string;
+        /** "This page depends on..." */
+        dependencies: string;
+        complexity: 'low' | 'medium' | 'high';
+        /** "Testing approach for this page..." */
+        testing_notes: string;
+    };
+    freeform: string;
+}
+
+/** Component interaction specification */
+export interface ComponentInteraction {
+    /** Event type: click, hover, submit, change, focus, blur, etc. */
+    event: string;
+    /** What happens: navigate, api_call, toggle, validate, etc. */
+    action: string;
+    /** Target page/component/endpoint */
+    target?: string;
+    /** Human-readable description of the interaction */
+    description?: string;
+}
+
+/** Component data binding specification */
+export interface ComponentDataBinding {
+    /** Field name in the data source */
+    field: string;
+    /** Data source name or endpoint */
+    source: string;
+    /** Data type: string, number, boolean, array, object */
+    type: string;
+}
+
+/** Component accessibility properties */
+export interface ComponentAccessibility {
+    aria_label?: string;
+    aria_role?: string;
+    tab_index?: number;
+    /** Text read by screen readers in addition to visible content */
+    screen_reader_text?: string;
+}
+
+/** Component validation rule for form elements */
+export interface ComponentValidationRule {
+    /** Rule type: required, min_length, max_length, pattern, custom */
+    rule: string;
+    /** Error message shown when validation fails */
+    message: string;
+}
+
+/** Component visual state variant */
+export interface ComponentState {
+    /** State name: default, hover, active, disabled, loading, error, empty, focused */
+    name: string;
+    /** Style overrides for this state */
+    styles: Partial<ComponentStyles>;
+    /** When this state is active: "on hover", "when loading", "if disabled", etc. */
+    conditions: string;
+}
+
+/** Enhanced component properties — stored in DesignComponent.props JSON */
+export interface EnhancedComponentProps {
+    ux_notes?: UXNotes;
+    dx_notes?: DXNotes;
+    interactions?: ComponentInteraction[];
+    data_bindings?: ComponentDataBinding[];
+    accessibility?: ComponentAccessibility;
+    validation_rules?: ComponentValidationRule[];
+    states?: ComponentState[];
+    [key: string]: unknown;
+}
+
+/** Enhanced page metadata — stored in DesignPage meta JSON column */
+export interface EnhancedPageMeta {
+    ux_notes?: PageUXNotes;
+    dx_notes?: PageDXNotes;
+    auth_required?: boolean;
+    data_sources?: Array<{ name: string; endpoint: string; type: string }>;
+    seo?: { title: string; description: string };
+    loading_strategy?: 'eager' | 'lazy' | 'ssr';
+    [key: string]: unknown;
 }

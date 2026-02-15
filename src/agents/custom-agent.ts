@@ -150,13 +150,16 @@ export class CustomAgentRunner extends BaseAgent {
             const raw = fs.readFileSync(filePath, 'utf-8');
             const parsed = yaml.load(raw) as Record<string, unknown>;
 
-            // Force hardlock permissions
+            // Force hardlock permissions + enforce limits (True Plan 03: max 20 goals, 50 checklist)
+            const rawGoals = ((parsed.goals as CustomAgentConfig['goals']) || []).slice(0, 20);
+            const rawChecklist = ((parsed.checklist as CustomAgentConfig['checklist']) || []).slice(0, 50);
+
             return {
                 name: (parsed.name as string) || path.basename(filePath, path.extname(filePath)),
                 description: (parsed.description as string) || '',
                 systemPrompt: (parsed.systemPrompt as string) || (parsed.system_prompt as string) || '',
-                goals: (parsed.goals as CustomAgentConfig['goals']) || [],
-                checklist: (parsed.checklist as CustomAgentConfig['checklist']) || [],
+                goals: rawGoals,
+                checklist: rawChecklist,
                 routingKeywords: (parsed.routingKeywords as string[]) || (parsed.routing_keywords as string[]) || [],
                 permissions: {
                     readFiles: true,
@@ -202,6 +205,10 @@ export class CustomAgentRunner extends BaseAgent {
         // Force hardlock
         config.permissions.writeFiles = false;
         config.permissions.executeCode = false;
+
+        // Enforce True Plan 03 limits: max 20 goals, 50 checklist items
+        if (config.goals.length > 20) config.goals = config.goals.slice(0, 20);
+        if (config.checklist.length > 50) config.checklist = config.checklist.slice(0, 50);
 
         const filePath = path.join(this.customAgentsDir, `${config.name}.yaml`);
         fs.writeFileSync(filePath, yaml.dump(config), 'utf-8');

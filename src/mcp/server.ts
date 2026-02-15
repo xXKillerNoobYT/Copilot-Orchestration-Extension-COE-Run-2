@@ -4,10 +4,11 @@ import { Database } from '../core/database';
 import { ConfigManager } from '../core/config';
 import { Orchestrator } from '../agents/orchestrator';
 import { CodingAgentService } from '../core/coding-agent';
-import { AgentContext, TaskStatus } from '../types';
+import { AgentContext, TaskStatus, TicketPriority, TaskPriority } from '../types';
 import { handleApiRequest } from '../webapp/api';
 import { getAppHtml } from '../webapp/app';
 import { TicketProcessorService } from '../core/ticket-processor';
+import { getEventBus, COEEvent } from '../core/event-bus';
 
 interface MCPToolDefinition {
     name: string;
@@ -89,7 +90,8 @@ export class MCPServer {
                 }
             }
 
-            const task = this.orchestrator.getNextTask();
+            // v4.1 (WS1D): Use atomic claimNextReadyTask to prevent two MCP clients getting the same task
+            const task = this.database.claimNextReadyTask();
             if (!task) {
                 return {
                     success: false,
@@ -100,9 +102,8 @@ export class MCPServer {
                 };
             }
 
-            // Mark as in progress
-            this.database.updateTask(task.id, { status: TaskStatus.InProgress });
-            this.database.addAuditLog('mcp', 'get_next_task', `Task "${task.title}" assigned to coding agent`);
+            // Task already claimed (status set to InProgress by claimNextReadyTask)
+            this.database.addAuditLog('mcp', 'get_next_task', `Task "${task.title}" atomically claimed by coding agent`);
 
             // Build context bundle
             const plan = task.plan_id ? this.database.getPlan(task.plan_id) : null;
@@ -110,9 +111,14 @@ export class MCPServer {
             const depTasks = task.dependencies.map(id => this.database.getTask(id)).filter(Boolean);
 
             // v3.0: Build enhanced context with design + data model references
+            // v4.1: Only include design context when task is design-related (optimization)
             const planConfig = plan ? JSON.parse(plan.config_json || '{}') : {};
             let designContext: Record<string, unknown> | null = null;
-            if (task.plan_id) {
+            const designKeywords = ['design', 'page', 'component', 'layout', 'ui', 'ux', 'style', 'css', 'visual', 'template'];
+            const taskText = `${task.title} ${task.description}`.toLowerCase();
+            const isDesignRelated = designKeywords.some(kw => taskText.includes(kw))
+                || (task as any).source_page_ids;
+            if (task.plan_id && isDesignRelated) {
                 const pages = this.database.getDesignPagesByPlan(task.plan_id);
                 const dataModels = this.database.getDataModelsByPlan(task.plan_id);
                 const answeredQuestions = this.database.getAIQuestionsByPlan(task.plan_id, 'answered');
@@ -248,7 +254,7 @@ export class MCPServer {
                 success: true,
                 data: {
                     answer: response.content,
-                    confidence: response.confidence || 80,
+                    confidence: response.confidence ?? 80,
                     sources: response.sources || [],
                     escalated: response.actions?.some(a => a.type === 'escalate') || false,
                 },
@@ -288,7 +294,7 @@ export class MCPServer {
                 this.database.createTask({
                     title: `Investigate repeated errors on: ${task?.title || taskId}`,
                     description: `Error has occurred ${recentErrors.length} times.\n\nLatest error: ${errorMessage}\n\nStack trace: ${stackTrace || 'N/A'}`,
-                    priority: 'P1' as any,
+                    priority: TaskPriority.P1,
                     plan_id: task?.plan_id,
                     dependencies: [taskId],
                 });
@@ -296,7 +302,7 @@ export class MCPServer {
                 this.database.createTicket({
                     title: `Repeated errors on task: ${task?.title || taskId}`,
                     body: `This task has encountered ${recentErrors.length} errors. An investigation task has been created.`,
-                    priority: 'P1' as any,
+                    priority: TicketPriority.P1,
                     creator: 'system',
                     task_id: taskId,
                 });
@@ -415,6 +421,66 @@ export class MCPServer {
                 },
             };
         });
+
+        // Tool 7: getTicketHistory (v4.1 — WS1A)
+        this.registerTool({
+            name: 'getTicketHistory',
+            description: 'Get the processing run history for a ticket. Returns all run logs so the AI can learn from previous failures.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    ticket_id: { type: 'string', description: 'ID of the ticket to get history for' },
+                },
+                required: ['ticket_id'],
+            },
+        }, async (args) => {
+            const ticketId = args.ticket_id as string;
+            const ticket = this.database.getTicket(ticketId);
+            if (!ticket) {
+                return {
+                    success: false,
+                    error: `Ticket not found: ${ticketId}`,
+                    error_code: 'NOT_FOUND',
+                };
+            }
+
+            const runs = this.database.getTicketRuns(ticketId);
+            const replies = this.database.getTicketReplies(ticketId);
+
+            return {
+                success: true,
+                data: {
+                    ticket_id: ticketId,
+                    ticket_number: ticket.ticket_number,
+                    title: ticket.title,
+                    status: ticket.status,
+                    processing_status: ticket.processing_status,
+                    last_error: ticket.last_error,
+                    last_error_at: ticket.last_error_at,
+                    retry_count: ticket.retry_count,
+                    runs: runs.map(r => ({
+                        run_number: r.run_number,
+                        agent_name: r.agent_name,
+                        status: r.status,
+                        prompt_sent: r.prompt_sent.substring(0, 500),
+                        response_received: r.response_received?.substring(0, 500) ?? null,
+                        review_result: r.review_result,
+                        verification_result: r.verification_result,
+                        error_message: r.error_message,
+                        error_stack: r.error_stack?.substring(0, 500) ?? null,
+                        tokens_used: r.tokens_used,
+                        duration_ms: r.duration_ms,
+                        started_at: r.started_at,
+                        completed_at: r.completed_at,
+                    })),
+                    recent_replies: replies.slice(-10).map(r => ({
+                        author: r.author,
+                        body: r.body.substring(0, 300),
+                        created_at: r.created_at,
+                    })),
+                },
+            };
+        });
     }
 
     private registerTool(
@@ -526,9 +592,9 @@ export class MCPServer {
                             return;
                         }
 
-                        // Handle notifications (no response needed)
+                        // Handle notifications (no response needed — 204 No Content)
                         if (rpc.method === 'notifications/initialized') {
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.writeHead(204);
                             res.end();
                             return;
                         }
@@ -625,6 +691,40 @@ export class MCPServer {
                 return;
             }
 
+            // GET /events — SSE for webapp live updates (named events)
+            if (req.method === 'GET' && url.pathname === '/events') {
+                const eventBus = getEventBus();
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*',
+                });
+                res.write('event: connected\ndata: {}\n\n');
+
+                const sseHandler = (event: COEEvent) => {
+                    try {
+                        res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+                    } catch {
+                        /* istanbul ignore next -- connection closed mid-write */
+                    }
+                };
+                eventBus.on('*', sseHandler);
+
+                const pingInterval = setInterval(() => {
+                    try { res.write(': ping\n\n'); } catch {
+                        /* istanbul ignore next -- race: SSE connection drops mid-ping */
+                        clearInterval(pingInterval);
+                    }
+                }, 30000);
+
+                req.on('close', () => {
+                    eventBus.off('*', sseHandler);
+                    clearInterval(pingInterval);
+                });
+                return;
+            }
+
             // GET /health
             if (req.method === 'GET' && url.pathname === '/health') {
                 const stats = this.database.getStats();
@@ -646,7 +746,7 @@ export class MCPServer {
 
             // /api/* — REST API for web app
             if (url.pathname.startsWith('/api/')) {
-                const handled = await handleApiRequest(req, res, url.pathname, this.database, this.orchestrator, this.config, this.codingAgentService);
+                const handled = await handleApiRequest(req, res, url.pathname, this.database, this.orchestrator, this.config, this.codingAgentService, this.ticketProcessor ?? undefined);
                 if (handled) return;
             }
 
@@ -696,6 +796,9 @@ export class MCPServer {
 
     dispose(): void {
         if (this.server) {
+            // v4.1: Fix — must close all connections before closing the server
+            // Without this, lingering connections keep the server alive and tests hang.
+            this.server.closeAllConnections();
             this.server.close();
             this.server = null;
         }

@@ -274,6 +274,13 @@ export class SyncService {
             this.outputChannel.appendLine(
                 `[SyncService] Failed to connect: ${err}`
             );
+            // Bug 6E: Emit system:error so the UI can notify the user
+            this.emitEvent('system:error', {
+                source: 'sync_service',
+                operation: 'configure',
+                error: err instanceof Error ? err.message : String(err),
+                backend: savedConfig.backend,
+            });
         }
 
         this.logTransparency('configure', `Sync configured with ${savedConfig.backend} backend`);
@@ -620,6 +627,12 @@ export class SyncService {
                 this.outputChannel.appendLine(
                     `[SyncService] Auto-sync error: ${err}`
                 );
+                // Bug 6E: Surface auto-sync failures to UI
+                this.emitEvent('system:error', {
+                    source: 'sync_service',
+                    operation: 'auto_sync',
+                    error: err instanceof Error ? err.message : String(err),
+                });
             }
         }, intervalMs);
 

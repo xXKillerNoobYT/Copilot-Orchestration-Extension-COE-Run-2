@@ -102,6 +102,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             startupTimeoutSeconds: 10,
             streamStallTimeoutSeconds: 10,
             maxTokens: 500,
+            maxInputTokens: 4000,
         };
         const llm = new LLMService(llmConfig, outputChannel);
 
@@ -184,7 +185,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
     // ---------------------------------------------------------------
     // Test 2: tools/list returns all 6 tools
     // ---------------------------------------------------------------
-    test('tools/list returns all 6 tools with name, description, and inputSchema', async () => {
+    test('tools/list returns all 7 tools with name, description, and inputSchema', async () => {
         const { status, body } = await rpcRequest(JSON.stringify({
             jsonrpc: '2.0',
             id: 2,
@@ -199,7 +200,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
 
         const tools = body.result.tools;
         expect(Array.isArray(tools)).toBe(true);
-        expect(tools.length).toBe(6);
+        expect(tools.length).toBe(7);
 
         // Verify each tool has the required MCP fields
         const expectedToolNames = [
@@ -209,6 +210,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             'getErrors',
             'callCOEAgent',
             'scanCodeBase',
+            'getTicketHistory',
         ];
 
         const toolNames = tools.map((t: any) => t.name);

@@ -6,6 +6,7 @@ A VS Code extension that orchestrates AI coding agents. It breaks projects into 
 
 ## How We Work Together
 
+
 The developer is the **designer** — they provide the vision, the architecture, and the general direction. You are the **coder** — you take those ideas and implement them with high detail and high quality. The developer may explain things loosely or give a general idea; your job is to carry that out in a thorough, production-grade fashion.
 
 - **Ask clarifying questions when planning** — Before diving into implementation, ask about ambiguous requirements, unclear scope, or conflicting instructions. Better to ask once than to build the wrong thing.

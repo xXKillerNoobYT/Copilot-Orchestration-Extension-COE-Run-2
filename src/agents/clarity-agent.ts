@@ -45,6 +45,39 @@ SCORE: 45
 ASSESSMENT: needs_clarification
 FEEDBACK: 1. Which table should the new column be added to? You mentioned "the main table" but there are 9 tables. 2. Should the column be nullable or required? 3. What is the maximum size of data this column needs to store?`;
 
+    /**
+     * Rewrite a raw technical/agent message into a friendly, user-facing version.
+     * Used to populate `friendly_message` on AI feedback questions.
+     *
+     * This is a best-effort rewrite — if the LLM fails, returns the original text.
+     */
+    async rewriteForUser(rawMessage: string, sourceAgent?: string): Promise<string> {
+        if (!rawMessage || rawMessage.length < 20) {
+            return rawMessage; // Too short to rewrite
+        }
+
+        const context: AgentContext = { conversationHistory: [] };
+
+        try {
+            const response = await this.processMessage(
+                `Rewrite the following technical AI agent message into a clear, friendly message for a non-technical user. ` +
+                `Keep it concise (2-4 sentences). Remove jargon, ticket numbers, and internal references. ` +
+                `Focus on what the user needs to know or do. Do NOT add greetings or sign-offs.\n\n` +
+                `Source: ${sourceAgent || 'System'}\n` +
+                `Original message:\n${rawMessage}`,
+                context
+            );
+
+            // Use the full response as the friendly message
+            const friendly = response.content.trim();
+            return friendly || rawMessage;
+        } catch {
+            /* istanbul ignore next */
+            this.outputChannel.appendLine(`[ClarityAgent] rewriteForUser failed, using raw message`);
+            return rawMessage;
+        }
+    }
+
     async reviewReply(ticketId: string, replyBody: string): Promise<{ score: number; clear: boolean; feedback: string }> {
         const ticket = this.database.getTicket(ticketId);
         if (!ticket) {

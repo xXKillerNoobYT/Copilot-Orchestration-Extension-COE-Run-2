@@ -13,7 +13,8 @@
       "Bash(dir:*)",
       "Bash(ls:*)",
       "Bash(findstr:*)",
-      "Bash(npx playwright test)"
+      "Bash(npx playwright test)",
+      "Bash(design \")"
     ]
   }
 }

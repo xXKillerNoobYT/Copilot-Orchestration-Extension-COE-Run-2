@@ -44,8 +44,12 @@ export class LLMService {
             return cached;
         }
 
+        // Enforce input token limit — truncate messages if prompt is too large
+        const maxInputTokens = this.config.maxInputTokens ?? 4000;
+        const truncatedMessages = this.enforceInputTokenLimit(messages, maxInputTokens);
+
         const request: LLMRequest = {
-            messages,
+            messages: truncatedMessages,
             max_tokens: options?.maxTokens ?? this.config.maxTokens,
             temperature: options?.temperature ?? 0.7,
             stream: options?.stream ?? true,
@@ -227,6 +231,15 @@ export class LLMService {
             }
 
             this.outputChannel.appendLine(`LLM response: ${tokensUsed} tokens, finish=${finishReason}`);
+
+            // Output overflow warning (not error) for streaming responses
+            if (finishReason === 'length') {
+                this.outputChannel.appendLine(
+                    `[LLMService] WARNING: Output truncated (finish_reason=length). ` +
+                    `Response was ${fullContent.length} chars. Agent may need to resume or rephrase.`
+                );
+            }
+
             return {
                 content: fullContent,
                 tokens_used: tokensUsed,
@@ -304,10 +317,19 @@ export class LLMService {
             };
 
             const content = data.choices?.[0]?.message?.content || '';
-            const tokensUsed = data.usage?.total_tokens || 0;
+            const tokensUsed = data.usage?.total_tokens ?? 0;
             const finishReason = data.choices?.[0]?.finish_reason || 'stop';
 
             this.outputChannel.appendLine(`LLM response: ${tokensUsed} tokens, finish=${finishReason}`);
+
+            // Output overflow warning (not error) — the agent may need to resume
+            if (finishReason === 'length') {
+                this.outputChannel.appendLine(
+                    `[LLMService] WARNING: Output truncated (finish_reason=length). ` +
+                    `Response was ${content.length} chars. Agent may need to resume or rephrase.`
+                );
+            }
+
             return {
                 content,
                 tokens_used: tokensUsed,
@@ -398,9 +420,11 @@ export class LLMService {
         try {
             const result = await this.testConnection();
             this.lastHealthCheck = { healthy: result.success, timestamp: Date.now() };
+            this.lastHealthReason = result.success ? undefined : this.classifyHealthReason(result.message);
             return result.success;
         } catch {
             this.lastHealthCheck = { healthy: false, timestamp: Date.now() };
+            this.lastHealthReason = 'unknown';
             return false;
         }
     }
@@ -409,7 +433,104 @@ export class LLMService {
         return this.lastHealthCheck?.healthy ?? true; // optimistic default
     }
 
+    /**
+     * v4.1 (Bug 6D): Returns structured health status with reason.
+     * Callers can distinguish between LM Studio down, overloaded, or model error.
+     */
+    getHealthStatus(): { healthy: boolean; reason?: 'connection_refused' | 'timeout' | 'model_error' | 'unknown' } {
+        return {
+            healthy: this.lastHealthCheck?.healthy ?? true,
+            reason: this.lastHealthReason,
+        };
+    }
+
+    private lastHealthReason?: 'connection_refused' | 'timeout' | 'model_error' | 'unknown';
+
+    private classifyHealthReason(message: string): 'connection_refused' | 'timeout' | 'model_error' | 'unknown' {
+        const lower = message.toLowerCase();
+        if (lower.includes('econnrefused') || lower.includes('connection refused') || lower.includes('fetch failed')) {
+            return 'connection_refused';
+        }
+        if (lower.includes('timeout') || lower.includes('aborted') || lower.includes('aborterror')) {
+            return 'timeout';
+        }
+        if (lower.includes('model') || lower.includes('404') || lower.includes('500')) {
+            return 'model_error';
+        }
+        return 'unknown';
+    }
+
     // ==================== CACHE ====================
+
+    /**
+     * Enforce input token limit by truncating messages if they exceed the max.
+     * Uses rough estimation: ~4 chars per token (English average).
+     *
+     * Strategy:
+     *   1. System message is preserved (never truncated)
+     *   2. Most recent user message is preserved
+     *   3. Middle messages are trimmed from oldest-first
+     *   4. If still over limit, the user message content is truncated
+     *
+     * This ensures the agent always sees the system prompt and latest request,
+     * while older conversation context is dropped to fit the limit.
+     */
+    private enforceInputTokenLimit(messages: LLMMessage[], maxTokens: number): LLMMessage[] {
+        const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
+        const totalTokens = messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+
+        if (totalTokens <= maxTokens) return messages;
+
+        this.outputChannel.appendLine(
+            `[LLMService] WARNING: Input prompt ~${totalTokens} tokens exceeds limit of ${maxTokens}. Truncating.`
+        );
+
+        // Separate system message (always keep), last user message (always keep), and middle messages
+        const systemMsg = messages.find(m => m.role === 'system');
+        const lastUserIdx = messages.length - 1;
+        const lastMsg = messages[lastUserIdx];
+        const middleMessages = messages.filter((m, i) => m !== systemMsg && i !== lastUserIdx);
+
+        const result: LLMMessage[] = [];
+        let usedTokens = 0;
+
+        // Always include system message
+        if (systemMsg) {
+            usedTokens += estimateTokens(systemMsg.content);
+            result.push(systemMsg);
+        }
+
+        // Reserve space for last message (at least 500 tokens)
+        const reserveForLast = Math.min(estimateTokens(lastMsg.content), maxTokens - usedTokens);
+        const budgetForMiddle = maxTokens - usedTokens - reserveForLast;
+
+        // Add middle messages newest-first (reverse order), keep as many as fit
+        let middleTokens = 0;
+        const keptMiddle: LLMMessage[] = [];
+        for (let i = middleMessages.length - 1; i >= 0; i--) {
+            const msgTokens = estimateTokens(middleMessages[i].content);
+            if (middleTokens + msgTokens <= budgetForMiddle) {
+                keptMiddle.unshift(middleMessages[i]);
+                middleTokens += msgTokens;
+            }
+        }
+        result.push(...keptMiddle);
+
+        // Add last message — truncate if needed
+        const remainingBudget = maxTokens - usedTokens - middleTokens;
+        const lastTokens = estimateTokens(lastMsg.content);
+        if (lastTokens <= remainingBudget) {
+            result.push(lastMsg);
+        } else {
+            const maxChars = remainingBudget * 4;
+            this.outputChannel.appendLine(
+                `[LLMService] WARNING: Truncating last message from ${lastMsg.content.length} to ${maxChars} chars`
+            );
+            result.push({ ...lastMsg, content: lastMsg.content.substring(0, maxChars) + '\n\n[Content truncated to fit input token limit]' });
+        }
+
+        return result;
+    }
 
     private computeCacheKey(messages: LLMMessage[], options?: Record<string, unknown>): string {
         const payload = JSON.stringify({ messages, options });

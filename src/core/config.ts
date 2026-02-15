@@ -11,7 +11,8 @@ const DEFAULT_CONFIG: COEConfig = {
         timeoutSeconds: 1800,
         startupTimeoutSeconds: 300,
         streamStallTimeoutSeconds: 60,
-        maxTokens: 4000,
+        maxTokens: 30000,
+        maxInputTokens: 4000,
     },
     taskQueue: {
         maxPending: 20,
@@ -32,6 +33,7 @@ const DEFAULT_CONFIG: COEConfig = {
         clarity: { contextLimit: 4000, enabled: true },
         boss: { contextLimit: 5000, enabled: true },
         custom: { contextLimit: 4000, enabled: true },
+        review: { contextLimit: 4000, enabled: true },
     },
     // Model profiles: context windows and output limits for token budget management
     models: {
@@ -155,25 +157,28 @@ export class ConfigManager {
         if (model) this.config.llm.model = model;
 
         const timeout = vsConfig.get<number>('llm.timeoutSeconds');
-        if (timeout) this.config.llm.timeoutSeconds = timeout;
+        if (timeout != null) this.config.llm.timeoutSeconds = timeout;
 
         const startupTimeout = vsConfig.get<number>('llm.startupTimeoutSeconds');
-        if (startupTimeout) this.config.llm.startupTimeoutSeconds = startupTimeout;
+        if (startupTimeout != null) this.config.llm.startupTimeoutSeconds = startupTimeout;
 
         const maxTokens = vsConfig.get<number>('llm.maxTokens');
-        if (maxTokens) this.config.llm.maxTokens = maxTokens;
+        if (maxTokens != null) this.config.llm.maxTokens = maxTokens;
+
+        const maxInputTokens = vsConfig.get<number>('llm.maxInputTokens');
+        if (maxInputTokens != null) this.config.llm.maxInputTokens = maxInputTokens;
 
         const streamStall = vsConfig.get<number>('llm.streamStallTimeoutSeconds');
-        if (streamStall) this.config.llm.streamStallTimeoutSeconds = streamStall;
+        if (streamStall != null) this.config.llm.streamStallTimeoutSeconds = streamStall;
 
         const maxPending = vsConfig.get<number>('taskQueue.maxPending');
-        if (maxPending) this.config.taskQueue.maxPending = maxPending;
+        if (maxPending != null) this.config.taskQueue.maxPending = maxPending;
 
         const verDelay = vsConfig.get<number>('verification.delaySeconds');
-        if (verDelay) this.config.verification.delaySeconds = verDelay;
+        if (verDelay != null) this.config.verification.delaySeconds = verDelay;
 
         const debounce = vsConfig.get<number>('watcher.debounceMs');
-        if (debounce) this.config.watcher.debounceMs = debounce;
+        if (debounce != null) this.config.watcher.debounceMs = debounce;
     }
 
     private startWatching(): void {
@@ -212,7 +217,7 @@ export class ConfigManager {
     }
 
     getAgentContextLimit(agentType: string): number {
-        return this.config.agents[agentType]?.contextLimit || 4000;
+        return this.config.agents[agentType]?.contextLimit ?? 4000;
     }
 
     isAgentEnabled(agentType: string): boolean {

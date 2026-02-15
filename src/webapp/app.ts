@@ -490,6 +490,48 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .mode-btn { padding: 4px 10px; border-radius: 4px; border: 1px solid var(--overlay); background: transparent; color: var(--text); cursor: pointer; font-size: 0.8em; }
 .mode-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
+/* ==================== ELEMENT STATUS CARDS ==================== */
+.status-tree-readiness { margin-left: auto; font-size: 0.7em; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+.status-tree-readiness.green { background: rgba(166,227,161,0.2); color: var(--green); }
+.status-tree-readiness.yellow { background: rgba(249,226,175,0.2); color: var(--yellow); }
+.status-tree-readiness.red { background: rgba(243,139,168,0.2); color: var(--red); }
+.element-status-card { background: var(--surface); border-radius: 8px; padding: 10px 12px; cursor: pointer; border: 2px solid transparent; transition: border-color 0.2s, background 0.2s; }
+.element-status-card:hover { background: var(--overlay); }
+.element-status-card.selected { border-color: var(--blue); }
+.element-status-card .el-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.element-status-card .el-card-name { font-weight: 600; font-size: 0.88em; }
+.element-status-card .el-card-type { font-size: 0.72em; color: var(--subtext); background: var(--overlay); padding: 1px 6px; border-radius: 4px; }
+.element-status-card .el-card-bar { height: 6px; background: var(--mantle); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.element-status-card .el-card-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.element-status-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.72em; font-weight: 600; }
+.element-status-badge.not_started { background: var(--overlay); color: var(--subtext); }
+.element-status-badge.planned { background: rgba(249,226,175,0.2); color: var(--yellow); }
+.element-status-badge.in_progress { background: rgba(137,180,250,0.2); color: var(--blue); }
+.element-status-badge.implemented { background: rgba(166,227,161,0.2); color: var(--green); }
+.element-status-badge.verified { background: rgba(148,226,213,0.2); color: var(--teal, #94e2d5); }
+.element-status-badge.has_issues { background: rgba(243,139,168,0.2); color: var(--red); }
+/* v4.2: Large status badge for page cards — prominent status display */
+.element-status-badge-lg { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 0.82em; font-weight: 700; text-transform: capitalize; letter-spacing: 0.02em; }
+.element-status-badge-lg.not_started { background: var(--overlay); color: var(--subtext); }
+.element-status-badge-lg.planned { background: rgba(249,226,175,0.25); color: var(--yellow); }
+.element-status-badge-lg.in_progress { background: rgba(137,180,250,0.25); color: var(--blue); }
+.element-status-badge-lg.implemented { background: rgba(166,227,161,0.25); color: var(--green); }
+.element-status-badge-lg.verified { background: rgba(148,226,213,0.25); color: var(--teal, #94e2d5); }
+.element-status-badge-lg.has_issues { background: rgba(243,139,168,0.25); color: var(--red); }
+.el-card-status-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.el-card-pct { font-size: 0.85em; font-weight: 700; }
+.lifecycle-stage-label { font-size: 0.75em; padding: 2px 8px; border-radius: 4px; font-weight: 600; margin-left: 8px; }
+.lifecycle-stage-label.design { background: rgba(203,166,247,0.2); color: var(--mauve, #cba6f7); }
+.lifecycle-stage-label.coding { background: rgba(137,180,250,0.2); color: var(--blue); }
+.lifecycle-stage-label.testing { background: rgba(249,226,175,0.2); color: var(--yellow); }
+.lifecycle-stage-label.verification { background: rgba(166,227,161,0.2); color: var(--green); }
+.page-elements-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--overlay); }
+.page-elements-header h4 { margin: 0; font-size: 0.9em; }
+.page-readiness-mini { display: flex; align-items: center; gap: 8px; }
+.page-readiness-mini .mini-bar { width: 80px; height: 6px; background: var(--mantle); border-radius: 3px; overflow: hidden; }
+.page-readiness-mini .mini-bar-fill { height: 100%; border-radius: 3px; }
+.page-readiness-mini .mini-pct { font-size: 0.8em; font-weight: 600; }
+
 /* ==================== AI PANELS ==================== */
 .ai-panels { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 .ai-panel { background: var(--surface); border-radius: 8px; border: 1px solid var(--overlay); }
@@ -686,12 +728,21 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .guided-tour .tour-stage-desc { font-size: 0.85em; color: var(--subtext); line-height: 1.4; }
 
 /* ==================== DRAFT COMPONENT STYLES ==================== */
-.design-el.draft-component { border: 2px dashed var(--yellow) !important; opacity: 0.7; }
+.design-el.draft-component { border: 2px dashed var(--yellow) !important; opacity: 0.7; cursor: pointer; }
 .design-el.draft-component .draft-badge { position: absolute; top: -10px; right: -10px; background: var(--yellow); color: var(--bg); font-size: 0.6em; font-weight: 700; padding: 2px 6px; border-radius: 4px; z-index: 5; pointer-events: none; text-transform: uppercase; }
-.design-el.draft-component .draft-actions { display: none; position: absolute; bottom: -28px; left: 50%; transform: translateX(-50%); gap: 4px; z-index: 10; }
-.design-el.draft-component:hover .draft-actions { display: flex; }
-.design-el.draft-component:hover { opacity: 1; }
+.design-el.draft-component .draft-actions { display: none; position: absolute; bottom: -36px; left: 50%; transform: translateX(-50%); gap: 4px; z-index: 10; background: var(--bg2); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,0.3); white-space: nowrap; }
+.design-el.draft-component.draft-selected .draft-actions { display: flex; }
+.design-el.draft-component.draft-selected { opacity: 1; border-color: var(--blue) !important; }
+.design-el.draft-component:hover { opacity: 0.85; }
 .draft-actions .btn { padding: 2px 8px; font-size: 0.7em; }
+/* ==================== PROJECT STATUS SELECTED ==================== */
+.status-card-selected { border: 2px solid var(--blue) !important; background: var(--surface) !important; }
+/* ==================== PROGRESS DASHBOARD ==================== */
+.progress-dashboard { padding: 16px; margin-bottom: 16px; border-left: 3px solid var(--blue); background: var(--surface); border-radius: 8px; }
+.progress-dashboard h3 { margin: 0; font-size: 1em; display: flex; align-items: center; gap: 6px; }
+.progress-dashboard .pd-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 0.85em; }
+.progress-dashboard .pd-label { color: var(--subtext); font-size: 0.85em; }
+.progress-dashboard .pd-value { font-weight: 600; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -712,7 +763,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:8px">
         <button class="btn btn-sm btn-secondary" onclick="renderQuestionPopup()" style="position:relative;padding:4px 10px;font-size:0.85em">
-            Questions <span class="tab-badge red" id="badge-questions-nav" style="position:absolute;top:-4px;right:-4px"></span>
+            AI Feedback <span class="tab-badge red" id="badge-questions-nav" style="position:absolute;top:-4px;right:-4px"></span>
         </button>
     </div>
     <div class="status">
@@ -778,7 +829,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <h1>Tickets</h1>
         <button class="btn btn-primary" onclick="openModal('ticketModal')">+ New Ticket</button>
     </div>
-    <p class="subtitle">Questions and decisions that need human input</p>
+    <p class="subtitle">Tickets and decisions that need human input</p>
     <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center">
         <label style="font-size:0.85em;color:var(--subtext)">Type:
             <select id="ticketOperationFilter" onchange="loadTickets()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em">
@@ -788,7 +839,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <option value="design_change">Design Changes</option>
                 <option value="coding_session">Coding Sessions</option>
                 <option value="verification">Verification</option>
-                <option value="ai_question">AI Questions</option>
+                <option value="ai_question">AI Feedback</option>
                 <option value="suggestion">Suggestions</option>
             </select>
         </label>
@@ -807,6 +858,26 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 
     <!-- ===== PHASE PROGRESS INDICATOR ===== -->
     <div id="phaseIndicatorContainer" style="display:none"></div>
+
+    <!-- ===== LIVE PROGRESS DASHBOARD ===== -->
+    <div id="progressDashboard" class="progress-dashboard" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3><span class="spinner" id="pdSpinner" style="width:14px;height:14px;border-width:2px;display:none"></span><span id="pdStatusIcon" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:var(--overlay);margin-right:6px"></span> Processing Progress</h3>
+            <span id="pdElapsedTime" style="font-size:0.8em;color:var(--overlay)"></span>
+        </div>
+        <div class="progress-wrap" style="margin-bottom:12px">
+            <div class="progress-bar"><div class="progress-fill" id="pdProgressFill" style="width:0%"></div></div>
+            <div class="progress-text" id="pdProgressText">0% complete</div>
+        </div>
+        <div class="pd-grid">
+            <div><div class="pd-label">Current Ticket</div><div class="pd-value" id="pdCurrentTicket" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px">--</div></div>
+            <div><div class="pd-label">Queue Depth</div><div class="pd-value" id="pdQueueDepth">0 remaining</div></div>
+            <div><div class="pd-label">Phase</div><div class="pd-value" id="pdPhase">--</div></div>
+        </div>
+        <div id="pdAgentBadge" style="margin-top:10px;display:none">
+            <span class="badge" id="pdAgentLabel" style="font-size:0.8em"></span>
+        </div>
+    </div>
 
     <!-- ===== GUIDED TOUR (shown when no plans) ===== -->
     <div id="guidedTourContainer" style="display:none"></div>
@@ -1281,10 +1352,10 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </div>
         <div class="ai-panel" id="aiQuestionsPanel">
             <div class="ai-panel-header" onclick="toggleAiPanel('aiQuestionsPanel')">
-                <h3>AI Questions <span class="badge badge-yellow" id="aiQuestionsCount">0</span></h3>
+                <h3>AI Feedback <span class="badge badge-yellow" id="aiQuestionsCount">0</span></h3>
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();autofillAiQuestions()">Autofill All</button>
             </div>
-            <div class="ai-panel-body" id="aiQuestionsBody"><div class="empty">No questions yet.</div></div>
+            <div class="ai-panel-body" id="aiQuestionsBody"><div class="empty">No AI feedback requests yet.</div></div>
         </div>
     </div>
 
@@ -1457,7 +1528,7 @@ let wizStep = 0;
 function saveState(key, val) { try { localStorage.setItem('coe_' + key, JSON.stringify(val)); } catch(e) { if (e && e.name === 'QuotaExceededError') { console.warn('localStorage quota exceeded for key:', key); } } }
 function loadState(key, fallback) { try { var v = localStorage.getItem('coe_' + key); return v ? JSON.parse(v) : fallback; } catch(e) { return fallback; } }
 
-function switchToTab(pageName) {
+function switchToTab(pageName, skipHistory) {
     document.querySelectorAll('.topnav .tab').forEach(function(t) { t.classList.remove('active'); });
     document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
     var tab = document.querySelector('.topnav .tab[data-page="' + pageName + '"]');
@@ -1465,6 +1536,10 @@ function switchToTab(pageName) {
     var page = document.getElementById('page-' + pageName);
     if (page) page.classList.add('active');
     saveState('activeTab', pageName);
+    // v4.1 (WS4E): Browser history navigation
+    if (!skipHistory) {
+        try { history.pushState({ page: pageName }, '', '#' + pageName); } catch(e) { /* ignore */ }
+    }
     loadPage(pageName);
 }
 
@@ -1493,17 +1568,75 @@ document.querySelectorAll('.sys-tab').forEach(btn => {
     });
 });
 
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+// v4.1 (WS4D): Modal focus trap for accessibility
+var _modalTriggerElement = null;
+function openModal(id) {
+    _modalTriggerElement = document.activeElement;
+    var modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.add('open');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    // Focus first focusable element
+    var focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length) setTimeout(function() { focusable[0].focus(); }, 50);
+    // Trap focus within modal
+    modal._trapHandler = function(e) {
+        if (e.key === 'Escape') { closeModal(id); return; }
+        if (e.key !== 'Tab') return;
+        var els = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (!els.length) return;
+        var first = els[0], last = els[els.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', modal._trapHandler);
+}
+function closeModal(id) {
+    var modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.remove('open');
+    if (modal._trapHandler) { document.removeEventListener('keydown', modal._trapHandler); modal._trapHandler = null; }
+    if (_modalTriggerElement) { try { _modalTriggerElement.focus(); } catch(e) {} _modalTriggerElement = null; }
+}
+
+// v4.1 (WS4C): Toast notification system
+var _toastQueue = [];
+var _visibleToasts = 0;
+function showToast(msg, type) {
+    if (!type) type = 'info';
+    if (_visibleToasts >= 3) { _toastQueue.push({ msg: msg, type: type }); return; }
+    _visibleToasts++;
+    var toast = document.createElement('div');
+    toast.setAttribute('role', 'alert');
+    toast.style.cssText = 'position:fixed;bottom:' + (16 + (_visibleToasts - 1) * 56) + 'px;right:16px;z-index:10001;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity 0.3s,transform 0.3s;transform:translateX(0);max-width:400px;';
+    toast.style.background = type === 'error' ? '#ef4444' : type === 'warning' ? '#f59e0b' : '#3b82f6';
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(function() {
+        toast.style.opacity = '0'; toast.style.transform = 'translateX(100px)';
+        setTimeout(function() {
+            document.body.removeChild(toast);
+            _visibleToasts--;
+            if (_toastQueue.length) { var next = _toastQueue.shift(); showToast(next.msg, next.type); }
+        }, 300);
+    }, 5000);
+}
 
 // ==================== API HELPERS ====================
 async function api(path, opts) {
     if (!opts) opts = {};
-    var res = await fetch(API + '/' + path, {
-        headers: { 'Content-Type': 'application/json' },
-        method: opts.method || 'GET',
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    try {
+        var res = await fetch(API + '/' + path, {
+            headers: { 'Content-Type': 'application/json' },
+            method: opts.method || 'GET',
+            body: opts.body ? JSON.stringify(opts.body) : undefined,
+        });
+    } catch(networkErr) {
+        // v4.1 (WS4C): Network error → persistent banner
+        showToast('Server unreachable: ' + (networkErr.message || 'network error'), 'error');
+        throw networkErr;
+    }
     var data;
     try {
         data = await res.json();
@@ -1511,6 +1644,10 @@ async function api(path, opts) {
         throw new Error('API error on ' + path + ': invalid response (HTTP ' + res.status + ')');
     }
     if (!res.ok) {
+        // v4.1: Show toast for API errors
+        if (res.status >= 500) showToast('Server error, retrying...', 'error');
+        else if (res.status === 404) showToast('Not found: ' + path, 'warning');
+        else if (res.status >= 400) showToast((data && data.error) || 'Request failed', 'warning');
         throw new Error((data && data.error) || 'API error: HTTP ' + res.status);
     }
     // Unwrap paginated responses: { data: [...], total, page, limit, totalPages }
@@ -1575,10 +1712,24 @@ function loadPage(page) {
         case 'tasks': loadTasks(); break;
         case 'tickets': loadTickets(); break;
         case 'planning': loadPlans().then(function() {
-            // Auto-load the active plan's designer if one exists
+            // Auto-load the designer only if the plan has design data
             var savedPlan = activePlanId || loadState('activePlanId', null);
             if (savedPlan && !currentDesignerPlanId) {
-                openPlanDesignerFromList(savedPlan);
+                api('design/pages?plan_id=' + encodeURIComponent(savedPlan)).then(function(pages) {
+                    var pageList = Array.isArray(pages) ? pages : (pages.pages || []);
+                    if (pageList.length > 0) {
+                        openPlanDesignerFromList(savedPlan);
+                    }
+                }).catch(function() { /* no design data, skip */ });
+            }
+            // Check if generation was in progress and restore dashboard
+            if (loadState('generationInProgress', false)) {
+                showProgressDashboard(true);
+                var savedStart = loadState('generationStartTime', null);
+                if (savedStart) {
+                    pdStartTime = savedStart;
+                    startElapsedTimer();
+                }
             }
         }); break;
         case 'agents': loadAgents(); break;
@@ -1754,8 +1905,8 @@ async function createChildTicket(parentId) {
     var title = prompt('Sub-ticket title:');
     if (!title) return;
     try {
-        await api('tickets', { method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ title: title, parent_ticket_id: parentId, creator: 'user' }) });
+        await api('tickets', { method: 'POST',
+            body: { title: title, parent_ticket_id: parentId, creator: 'user' } });
         showNotification('Sub-ticket created', 'success');
         loadTickets();
     } catch(e) { showNotification('Failed to create sub-ticket', 'error'); }
@@ -1829,6 +1980,49 @@ async function showTicketDetail(id) {
                 '</div></div>';
         } catch(e) { /* ignore parse errors */ }
     }
+    // v4.1 (WS4F): Error info display
+    var errorSection = '';
+    if (data.last_error) {
+        errorSection = '<div style="margin-top:12px"><strong style="color:var(--red)">Last Error</strong>' +
+            '<div style="padding:8px 12px;background:var(--bg);border-radius:6px;margin-top:4px;border-left:3px solid var(--red);color:var(--red)">' +
+            '<div>' + esc(data.last_error) + '</div>' +
+            (data.last_error_at ? '<div style="color:var(--subtext);font-size:0.8em;margin-top:4px">' + esc(data.last_error_at) + '</div>' : '') +
+            '</div></div>';
+    }
+
+    // v4.1 (WS4F): Run history section — fetch run logs
+    var runHistoryHtml = '';
+    try {
+        var runs = await api('tickets/' + id + '/runs');
+        if (runs && runs.length > 0) {
+            runHistoryHtml = '<div style="margin-top:16px"><h3>Run History (' + runs.length + ')</h3>';
+            runHistoryHtml += '<div style="display:flex;gap:6px;margin-bottom:8px">';
+            runs.forEach(function(r) {
+                var color = r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : r.status === 'review_flagged' ? 'var(--yellow)' : 'var(--blue)';
+                runHistoryHtml += '<span style="width:10px;height:10px;border-radius:50%;background:' + color + ';display:inline-block" title="Run #' + r.run_number + ': ' + r.status + '"></span>';
+            });
+            runHistoryHtml += '</div>';
+            runs.forEach(function(r) {
+                var color = r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : r.status === 'review_flagged' ? '#f59e0b' : 'var(--blue)';
+                var badgeLabel = r.status.replace('_', ' ');
+                runHistoryHtml += '<details style="margin-bottom:6px;background:var(--bg);border-radius:6px;padding:8px 12px;border-left:3px solid ' + color + '">';
+                runHistoryHtml += '<summary style="cursor:pointer;font-size:0.9em;display:flex;align-items:center;gap:8px">';
+                runHistoryHtml += '<strong>Run #' + r.run_number + '</strong>';
+                runHistoryHtml += '<span style="background:' + color + ';color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em">' + esc(badgeLabel) + '</span>';
+                runHistoryHtml += '<span style="color:var(--subtext);font-size:0.8em">' + esc(r.agent_name) + '</span>';
+                if (r.duration_ms) runHistoryHtml += '<span style="color:var(--overlay);font-size:0.8em">' + (r.duration_ms / 1000).toFixed(1) + 's</span>';
+                if (r.tokens_used) runHistoryHtml += '<span style="color:var(--overlay);font-size:0.8em">' + r.tokens_used + ' tokens</span>';
+                runHistoryHtml += '</summary>';
+                if (r.prompt_sent) runHistoryHtml += '<div style="margin-top:6px"><strong style="font-size:0.8em;color:var(--subtext)">Prompt Sent:</strong><pre style="max-height:150px;overflow:auto;font-size:0.8em;background:var(--bg2);padding:6px;border-radius:4px;white-space:pre-wrap">' + esc(r.prompt_sent.substring(0, 500)) + (r.prompt_sent.length > 500 ? '...' : '') + '</pre></div>';
+                if (r.response_received) runHistoryHtml += '<div style="margin-top:4px"><strong style="font-size:0.8em;color:var(--subtext)">Response:</strong><pre style="max-height:150px;overflow:auto;font-size:0.8em;background:var(--bg2);padding:6px;border-radius:4px;white-space:pre-wrap">' + esc(r.response_received.substring(0, 500)) + (r.response_received.length > 500 ? '...' : '') + '</pre></div>';
+                if (r.error_message) runHistoryHtml += '<div style="margin-top:4px;color:var(--red);font-size:0.85em"><strong>Error:</strong> ' + esc(r.error_message) + '</div>';
+                if (r.error_stack) runHistoryHtml += '<details style="margin-top:4px"><summary style="font-size:0.8em;color:var(--overlay);cursor:pointer">Stack trace</summary><pre style="font-size:0.75em;color:var(--subtext);max-height:100px;overflow:auto">' + esc(r.error_stack.substring(0, 500)) + '</pre></details>';
+                runHistoryHtml += '</details>';
+            });
+            runHistoryHtml += '</div>';
+        }
+    } catch(e) { /* run history endpoint may not exist yet */ }
+
     document.getElementById('ticketDetail').innerHTML = '<div class="detail-panel">' +
         '<h3>TK-' + String(data.ticket_number).padStart(3, '0') + ': ' + esc(data.title) + '</h3>' +
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
@@ -1837,7 +2031,7 @@ async function showTicketDetail(id) {
         agentBadge + stageBadge +
         parentInfo + childInfo +
         (data.body ? '<div style="margin-top:12px;white-space:pre-wrap;color:var(--subtext);padding:12px;background:var(--bg);border-radius:6px">' + esc(data.body) + '</div>' : '') +
-        criteriaSection + verificationSection +
+        criteriaSection + verificationSection + errorSection + runHistoryHtml +
         '<h3 style="margin-top:16px">Thread (' + replies.length + ')</h3>' +
         replies.map(r =>
             '<div class="thread-reply ' + (r.author === 'user' ? 'user' : 'agent') + '">' +
@@ -1951,8 +2145,8 @@ function applyWizardEdit() {
     applyBtns.forEach(function(b) { b.disabled = true; b.textContent = 'Applying...'; });
     // Update the plan config via API
     if (pdPlanId) {
-        api('plans/' + pdPlanId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ config_json: JSON.stringify(wizConfig) }) }).then(function() {
+        api('plans/' + pdPlanId, { method: 'PUT',
+            body: { config_json: JSON.stringify(wizConfig) } }).then(function() {
             wizEditMode = false;
             showNotification('Plan config updated', 'success');
             // Restore plan designer view
@@ -2314,9 +2508,24 @@ async function wizGenerate() {
     const desc = wizConfig.description.trim();
     if (!name) { document.getElementById('wizName').focus(); return; }
     if (!desc) { document.getElementById('wizDesc').focus(); showNotification('Please add a project description', 'warning'); return; }
+    // v4.1: Set global AI level immediately from wizard selection before first prompt
+    if (wizConfig.aiLevel) setGlobalAiLevel(wizConfig.aiLevel);
     const out = document.getElementById('wizOutput');
     out.style.display = '';
-    out.innerHTML = '<div class="loading-overlay"><div class="spinner"></div> Generating plan with AI... This may take a moment.</div>';
+    out.textContent = '';
+    var loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'loading-overlay';
+    var spinnerEl = document.createElement('div');
+    spinnerEl.className = 'spinner';
+    loadingOverlay.appendChild(spinnerEl);
+    loadingOverlay.appendChild(document.createTextNode(' Generating plan with AI... This may take a moment.'));
+    out.appendChild(loadingOverlay);
+    // Persist generation state for recovery if user navigates away
+    saveState('generationInProgress', true);
+    saveState('generationStartTime', Date.now());
+    saveState('generationPlanName', name);
+    showProgressDashboard(true);
+    startElapsedTimer();
     const design = {
         layout: wizConfig.layout, theme: wizConfig.theme,
         pages: wizConfig.pages || ['Dashboard'],
@@ -2356,6 +2565,11 @@ async function wizGenerate() {
             // Clear wizard saved state after successful creation
             saveState('wizConfig', null);
             saveState('wizStep', 0);
+            saveState('generationInProgress', false);
+            saveState('generationStartTime', null);
+            saveState('generationPlanName', null);
+            // Dashboard transitions to showing ticket processing status
+            pollProcessingStatus();
             // AI-level-aware design generation and chat activation
             var planAiLevel = design.aiLevel || currentAiLevel || 'suggestions';
             if (planAiLevel === 'hybrid' || planAiLevel === 'smart') {
@@ -2375,11 +2589,17 @@ async function wizGenerate() {
             // Manual mode: don't auto-generate design — user adds components manually
         } else if (data.error) {
             out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(data.error) + '</div>';
+            saveState('generationInProgress', false);
+            showProgressDashboard(false);
         } else {
             out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Unexpected response from server</div>';
+            saveState('generationInProgress', false);
+            showProgressDashboard(false);
         }
     } catch (err) {
         out.innerHTML = '<div class="detail-panel" style="color:var(--red)">Error: ' + esc(String(err)) + '</div>';
+        saveState('generationInProgress', false);
+        showProgressDashboard(false);
     }
 }
 
@@ -2803,12 +3023,14 @@ async function loadPlans() {
         var tourContainer = document.getElementById('guidedTourContainer');
 
         if (plans.length === 0) {
-            // No plans — show guided tour, hide wizard initially, hide active plan section
+            // No plans — show guided tour, hide wizard initially, hide active plan section & dashboard
             if (wizSection) wizSection.style.display = 'none';
             if (activePlanSec) activePlanSec.style.display = 'none';
             if (phaseContainer) phaseContainer.style.display = 'none';
             if (tourContainer) tourContainer.style.display = '';
-            display.innerHTML = '';
+            var pdDashEl = document.getElementById('progressDashboard');
+            if (pdDashEl) pdDashEl.style.display = 'none';
+            while (display.firstChild) display.removeChild(display.firstChild);
             if (showAllBtn) showAllBtn.style.display = 'none';
             renderGuidedTour();
             return;
@@ -2827,6 +3049,10 @@ async function loadPlans() {
         // Render phase indicator and QA panel for active plan
         renderPhaseIndicator(activePlanId);
         renderQAPanel(activePlanId);
+
+        // Always show progress dashboard when a plan exists, start polling
+        showProgressDashboard(false); // show in idle mode initially
+        pollProcessingStatus(); // first poll will upgrade to active if processing
 
         // Parse config to show plan details
         var planConfig = {};
@@ -3183,6 +3409,9 @@ async function loadDesignerForPlan(planId) {
     var planConfig = {};
     try { planConfig = JSON.parse((planData && planData.config_json) || '{}'); } catch(e) {}
     var planDesign = planConfig.design || {};
+    // v4.1: Sync global AI level from plan config when loading a plan
+    var planAiLvl = planDesign.aiLevel || planConfig.aiLevel;
+    if (planAiLvl && planAiLvl !== currentAiLevel) setGlobalAiLevel(planAiLvl);
     var title = document.getElementById('designerTitle');
     if (title) title.textContent = 'Visual Designer' + (planData ? ' \u2014 ' + planData.name : '');
     document.getElementById('designerSection').style.display = '';
@@ -3527,9 +3756,34 @@ function renderLayers() {
     ).join('') || '<div style="padding:8px;font-size:0.8em;color:var(--subtext)">No components</div>';
 }
 
+var selectedDraftComponentId = null;
+
+function selectDraftComponent(compId) {
+    var prev = document.querySelector('.design-el.draft-selected');
+    if (prev) prev.classList.remove('draft-selected');
+    if (selectedDraftComponentId === compId) {
+        selectedDraftComponentId = null;
+        return;
+    }
+    selectedDraftComponentId = compId;
+    var el = document.querySelector('.design-el[data-id="' + compId + '"]');
+    if (el && el.classList.contains('draft-component')) {
+        el.classList.add('draft-selected');
+    }
+}
+
 function selectDesignEl(e, id) {
     if (e) e.stopPropagation();
     dsgSelectedId = id;
+    // Draft click-to-select integration
+    var comp = dsgComponents.find(function(c) { return c.id === id; });
+    if (comp && comp.is_draft) {
+        selectDraftComponent(id);
+    } else if (selectedDraftComponentId) {
+        var prev = document.querySelector('.design-el.draft-selected');
+        if (prev) prev.classList.remove('draft-selected');
+        selectedDraftComponentId = null;
+    }
     renderCanvas();
     renderLayers();
     renderProps();
@@ -3538,6 +3792,9 @@ function selectDesignEl(e, id) {
 function onCanvasClick(e) {
     if (e.target.id === 'designCanvas') {
         dsgSelectedId = null;
+        if (selectedDraftComponentId) {
+            selectedDraftComponentId = null;
+        }
         renderCanvas();
         renderLayers();
         renderProps();
@@ -4237,7 +4494,8 @@ function showSettingsSection(section) {
         llm: () => '<div class="settings-section"><h3>LLM Configuration</h3>' +
             settingRow('API Endpoint', 'URL of the LLM server (LM Studio, Ollama, OpenAI)', '<input id="setting-llm-endpoint" value="' + esc(settingsConfig.llm?.endpoint || '') + '" onchange="updateSetting(\\'llm.endpoint\\', this.value)">', 'setting-llm-endpoint') +
             settingRow('Model', 'Model identifier', '<input id="setting-llm-model" value="' + esc(settingsConfig.llm?.model || '') + '" onchange="updateSetting(\\'llm.model\\', this.value)">', 'setting-llm-model') +
-            settingRow('Max Tokens', 'Maximum response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 4096) + '" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
+            settingRow('Max Output Tokens', 'Maximum output response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 30000) + '" min="100" max="100000" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
+            settingRow('Max Input Tokens', 'Maximum prompt input length (LM Studio limit)', '<input id="setting-llm-maxInputTokens" type="number" value="' + (settingsConfig.llm?.maxInputTokens || 4000) + '" min="500" max="32000" onchange="updateSetting(\\'llm.maxInputTokens\\', +this.value)">', 'setting-llm-maxInputTokens') +
             settingRow('Timeout (seconds)', 'Max total request time', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
             settingRow('Startup Timeout', 'Wait for model load', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 300) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
             settingRow('Stream Stall Timeout', 'Max gap between stream chunks', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 120) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
@@ -4394,7 +4652,13 @@ setInterval(updateTabBadges, 30000);
 // ==================== PROJECT STATUS ====================
 var statusPlanId = null;
 var statusMode = 'fullstack';
+var statusSelectedPage = null;
 var statusSelectedElement = null;
+var statusSelectedElementType = null;
+var statusPages = [];
+var statusPageReadiness = [];
+var statusElementStatuses = {};
+var statusPageComponents = {};
 
 function openStatusView(planId) {
     if (!planId) { showNotification('No plan selected', 'error'); return; }
@@ -4417,18 +4681,39 @@ function setStatusMode(mode) {
 
 async function loadStatusData(planId) {
     try {
-        var pages = await api('design/pages?plan_id=' + encodeURIComponent(planId));
+        var pagesResult = await api('design/pages?plan_id=' + encodeURIComponent(planId));
+        statusPages = Array.isArray(pagesResult) ? pagesResult : (pagesResult.data || []);
         var summary = await api('status/summary?plan_id=' + encodeURIComponent(planId));
-        renderStatusTree(Array.isArray(pages) ? pages : (pages.data || []));
-        var readiness = calculateProjectReadiness(summary);
+        var pageReadinessResult = await api('page-readiness?plan_id=' + encodeURIComponent(planId));
+        statusPageReadiness = Array.isArray(pageReadinessResult) ? pageReadinessResult : [];
+        // Also fetch all element statuses for this plan
+        var allStatuses = await api('element-status?plan_id=' + encodeURIComponent(planId));
+        statusElementStatuses = {};
+        if (Array.isArray(allStatuses)) {
+            allStatuses.forEach(function(s) { statusElementStatuses[s.element_id] = s; });
+        }
+        renderStatusTree(statusPages);
+        // Calculate overall readiness from page readiness summaries
+        var totalReadiness = 0;
+        if (statusPageReadiness.length > 0) {
+            statusPageReadiness.forEach(function(pr) { totalReadiness += pr.readiness_pct; });
+            totalReadiness = Math.round(totalReadiness / statusPageReadiness.length);
+        } else {
+            totalReadiness = calculateProjectReadiness(summary);
+        }
         var fill = document.getElementById('readinessFill');
         if (fill) {
-            fill.style.width = readiness + '%';
-            fill.className = 'readiness-fill ' + (readiness >= 80 ? 'green' : readiness >= 50 ? 'yellow' : 'red');
+            fill.style.width = totalReadiness + '%';
+            fill.className = 'readiness-fill ' + (totalReadiness >= 80 ? 'green' : totalReadiness >= 50 ? 'yellow' : 'red');
         }
         var readLabel = document.getElementById('statusReadinessLabel');
-        if (readLabel) readLabel.textContent = 'Readiness: ' + readiness + '%';
-        renderStatusCanvas(Array.isArray(pages) ? pages : (pages.data || []));
+        if (readLabel) readLabel.textContent = 'Readiness: ' + totalReadiness + '%';
+        // Render center panel based on current selection
+        if (statusSelectedPage) {
+            await renderPageElements(statusSelectedPage);
+        } else {
+            renderStatusCanvas(statusPages);
+        }
     } catch(e) {
         console.error('loadStatusData error:', e);
         var tree = document.getElementById('statusTree');
@@ -4439,15 +4724,17 @@ async function loadStatusData(planId) {
 function renderStatusTree(pages) {
     var tree = document.getElementById('statusTree');
     if (!Array.isArray(pages) || !pages.length) { tree.innerHTML = '<div class="empty">No pages in design</div>'; return; }
-    // Restore element status map from localStorage
-    elementStatusMap = loadState('elementStatusMap', {}) || {};
     var html = '';
     pages.forEach(function(p) {
-        var st = elementStatusMap[p.id] || 'not_started';
-        var dotColor = st === 'verified' ? 'green' : st === 'implemented' ? 'blue' : st === 'in_progress' ? 'peach' : st === 'has_issues' ? 'red' : 'gray';
-        html += '<div class="status-tree-item' + (statusSelectedElement === p.id ? ' active' : '') + '" onclick="selectStatusElement(\\''+p.id+'\\', \\'page\\')">';
-        html += '<span class="status-dot" style="background:var(--' + dotColor + ')"></span>';
-        html += esc(p.name || 'Untitled');
+        var pr = statusPageReadiness.find(function(r) { return r.page_id === p.id; });
+        var pct = pr ? pr.readiness_pct : 0;
+        var pctColor = pct >= 80 ? 'green' : pct >= 50 ? 'yellow' : 'red';
+        var st = statusElementStatuses[p.id];
+        var implStatus = st ? st.implementation_status : 'not_started';
+        html += '<div class="status-tree-item' + (statusSelectedPage === p.id ? ' active' : '') + '" onclick="selectStatusPage(\\''+p.id+'\\')">';
+        html += '<span class="status-dot ' + implStatus + '"></span>';
+        html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.name || 'Untitled') + '</span>';
+        html += '<span class="status-tree-readiness ' + pctColor + '">' + pct + '%</span>';
         html += '</div>';
     });
     tree.innerHTML = html;
@@ -4456,29 +4743,175 @@ function renderStatusTree(pages) {
 function renderStatusCanvas(pages) {
     var canvas = document.getElementById('statusCanvas');
     if (!pages.length) { canvas.innerHTML = '<div class="empty">No pages to display</div>'; return; }
-    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">';
+    // Lifecycle stage from first page readiness
+    var lifecycleStage = statusPageReadiness.length > 0 ? statusPageReadiness[0].lifecycle_stage : 'design';
+    var stageLabels = { design: 'Design & Planning', coding: 'Coding', testing: 'Testing', verification: 'Verification' };
+    var html = '<div class="page-elements-header">';
+    html += '<h4>All Pages <span class="lifecycle-stage-label ' + lifecycleStage + '">' + (stageLabels[lifecycleStage] || lifecycleStage) + '</span></h4>';
+    html += '<div style="font-size:0.8em;color:var(--subtext)">Click a page to see its elements</div>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">';
     pages.forEach(function(p) {
-        html += '<div class="card" style="cursor:pointer;padding:12px" onclick="selectStatusElement(\\''+p.id+'\\', \\'page\\')">';
-        html += '<div style="font-weight:600;font-size:0.9em">' + esc(p.name || 'Untitled') + '</div>';
-        html += '<div style="font-size:0.75em;color:var(--subtext)">' + esc(p.route || '/') + '</div>';
+        var pr = statusPageReadiness.find(function(r) { return r.page_id === p.id; });
+        var pct = pr ? pr.readiness_pct : 0;
+        var pctColor = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--yellow)' : 'var(--red)';
+        var totalEls = pr ? pr.total_elements : 0;
+        var openIssues = pr ? pr.open_issues : 0;
+        var implStatus = statusElementStatuses[p.id] ? statusElementStatuses[p.id].implementation_status : 'not_started';
+        html += '<div class="element-status-card' + (statusSelectedPage === p.id ? ' selected' : '') + '" onclick="selectStatusPage(\\''+p.id+'\\')">';
+        html += '<div class="el-card-header">';
+        html += '<span class="el-card-name">' + esc(p.name || 'Untitled') + '</span>';
+        html += '</div>';
+        html += '<div style="font-size:0.75em;color:var(--subtext);margin-bottom:6px">' + esc(p.route || '/') + ' — ' + totalEls + ' elements';
+        if (openIssues > 0) html += ' — <span style="color:var(--red)">' + openIssues + ' issues</span>';
+        html += '</div>';
+        html += '<div class="el-card-status-row">';
+        html += '<span class="element-status-badge-lg ' + implStatus + '">' + implStatus.replace(/_/g, ' ') + '</span>';
+        html += '<span class="el-card-pct" style="color:' + pctColor + '">' + pct + '%</span>';
+        html += '</div>';
+        html += '<div class="el-card-bar"><div class="el-card-bar-fill" style="width:' + pct + '%;background:' + pctColor + '"></div></div>';
         html += '</div>';
     });
     html += '</div>';
     canvas.innerHTML = html;
 }
 
+async function selectStatusPage(pageId) {
+    if (statusSelectedPage === pageId) {
+        // Deselect — go back to page overview
+        statusSelectedPage = null;
+        statusSelectedElement = null;
+        statusSelectedElementType = null;
+        renderStatusTree(statusPages);
+        renderStatusCanvas(statusPages);
+        renderStatusDetailEmpty();
+        return;
+    }
+    statusSelectedPage = pageId;
+    statusSelectedElement = null;
+    statusSelectedElementType = null;
+    renderStatusTree(statusPages);
+    await renderPageElements(pageId);
+    // Show page-level detail in right panel
+    selectStatusElement(pageId, 'page');
+}
+
+async function renderPageElements(pageId) {
+    var canvas = document.getElementById('statusCanvas');
+    var page = statusPages.find(function(p) { return p.id === pageId; });
+    if (!page) { canvas.innerHTML = '<div class="empty">Page not found</div>'; return; }
+
+    // Fetch components for this page
+    var components;
+    if (statusPageComponents[pageId]) {
+        components = statusPageComponents[pageId];
+    } else {
+        var result = await api('design/components?page_id=' + encodeURIComponent(pageId));
+        components = Array.isArray(result) ? result : [];
+        statusPageComponents[pageId] = components;
+    }
+
+    var pr = statusPageReadiness.find(function(r) { return r.page_id === pageId; });
+    var pagePct = pr ? pr.readiness_pct : 0;
+    var pagePctColor = pagePct >= 80 ? 'var(--green)' : pagePct >= 50 ? 'var(--yellow)' : 'var(--red)';
+    var lifecycleStage = pr ? pr.lifecycle_stage : 'design';
+    var stageLabels = { design: 'Design & Planning', coding: 'Coding', testing: 'Testing', verification: 'Verification' };
+
+    var html = '<div class="page-elements-header">';
+    html += '<h4>' + esc(page.name) + ' <span class="lifecycle-stage-label ' + lifecycleStage + '">' + (stageLabels[lifecycleStage] || lifecycleStage) + '</span></h4>';
+    html += '<div class="page-readiness-mini">';
+    html += '<div class="mini-bar"><div class="mini-bar-fill" style="width:' + pagePct + '%;background:' + pagePctColor + '"></div></div>';
+    html += '<span class="mini-pct" style="color:' + pagePctColor + '">' + pagePct + '%</span>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="statusSelectedPage=null;renderStatusCanvas(statusPages);renderStatusTree(statusPages)">Back</button>';
+    html += '</div></div>';
+
+    if (components.length === 0) {
+        html += '<div class="empty" style="padding:24px">No elements on this page yet. Add components in the Designer.</div>';
+    } else {
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">';
+        components.forEach(function(comp) {
+            var compStatus = statusElementStatuses[comp.id];
+            var implStatus = compStatus ? compStatus.implementation_status : 'not_started';
+            var compPct = 0;
+            if (implStatus === 'verified') compPct = 100;
+            else if (implStatus === 'implemented') compPct = 75;
+            else if (implStatus === 'in_progress') compPct = 50;
+            else if (implStatus === 'planned') compPct = 20;
+            else if (implStatus === 'has_issues') compPct = 30;
+            var compPctColor = compPct >= 80 ? 'var(--green)' : compPct >= 50 ? 'var(--yellow)' : 'var(--red)';
+            var isSelected = statusSelectedElement === comp.id;
+
+            html += '<div class="element-status-card' + (isSelected ? ' selected' : '') + '" onclick="selectStatusElement(\\''+comp.id+'\\', \\'component\\')">';
+            html += '<div class="el-card-header">';
+            html += '<span class="el-card-name">' + esc(comp.name || comp.type) + '</span>';
+            html += '<span class="el-card-type">' + esc(comp.type) + '</span>';
+            html += '</div>';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">';
+            html += '<span class="element-status-badge ' + implStatus + '">' + implStatus.replace(/_/g, ' ') + '</span>';
+            html += '<span style="font-size:0.72em;color:var(--subtext)">' + compPct + '%</span>';
+            html += '</div>';
+            html += '<div class="el-card-bar"><div class="el-card-bar-fill" style="width:' + compPct + '%;background:' + compPctColor + '"></div></div>';
+            html += '</div>';
+        });
+        html += '</div>';
+    }
+    canvas.innerHTML = html;
+}
+
+function renderStatusDetailEmpty() {
+    var detail = document.getElementById('statusDetailContent');
+    detail.innerHTML = '<p style="color:var(--subtext);font-size:0.85em">Select an element from the tree to see details</p>';
+    document.getElementById('elementChatSection').style.display = 'none';
+}
+
 async function selectStatusElement(id, type) {
     statusSelectedElement = id;
+    statusSelectedElementType = type;
+    // Highlight in center panel
+    var cards = document.querySelectorAll('#statusCanvas .element-status-card');
+    cards.forEach(function(card) { card.classList.remove('selected'); });
+    cards.forEach(function(card) {
+        if (card.getAttribute('onclick') && card.getAttribute('onclick').indexOf(id) !== -1) {
+            card.classList.add('selected');
+        }
+    });
+    // Highlight in tree
+    var treeItems = document.querySelectorAll('#statusTree .status-tree-item');
+    treeItems.forEach(function(item) { item.classList.remove('active'); });
+    if (type === 'page') {
+        treeItems.forEach(function(item) {
+            if (item.getAttribute('onclick') && item.getAttribute('onclick').indexOf(id) !== -1) {
+                item.classList.add('active');
+            }
+        });
+    }
     var detail = document.getElementById('statusDetailContent');
     try {
         var issues = await api('status/issues?plan_id=' + encodeURIComponent(statusPlanId) + '&element_id=' + encodeURIComponent(id));
+        var elStatus = statusElementStatuses[id];
+        var curStatus = elStatus ? elStatus.implementation_status : 'not_started';
+        var curStage = elStatus ? elStatus.lifecycle_stage : 'design';
+        var curNotes = elStatus ? elStatus.notes : '';
+
         var html = '<h4>Status</h4>';
-        var curStatus = elementStatusMap[id] || 'not_started';
         html += '<select onchange="updateElementStatus(\\''+id+'\\', \\''+type+'\\', this.value)" style="width:100%;margin-bottom:8px">';
         ['not_started','planned','in_progress','implemented','verified','has_issues'].forEach(function(s) {
             html += '<option value="'+s+'"' + (s === curStatus ? ' selected' : '') + '>' + s.replace(/_/g,' ') + '</option>';
         });
         html += '</select>';
+
+        // Checklist
+        var checklist = elStatus && elStatus.checklist ? elStatus.checklist : [];
+        html += '<h4>Checklist</h4>';
+        html += '<ul class="status-checklist">';
+        checklist.forEach(function(item, i) {
+            html += '<li><input type="checkbox"' + (item.done ? ' checked' : '') + ' onchange="toggleChecklistItem(\\''+id+'\\', \\''+type+'\\', '+i+')">';
+            html += '<span>' + esc(item.item) + '</span>';
+            html += '<span class="element-status-badge ' + item.mode + '" style="margin-left:auto">' + item.mode + '</span></li>';
+        });
+        html += '</ul>';
+        html += '<div style="display:flex;gap:4px;margin-bottom:8px"><input id="newChecklistItem" placeholder="Add checklist item..." style="flex:1"><button class="btn btn-sm btn-secondary" onclick="addChecklistItem(\\''+id+'\\', \\''+type+'\\')">+</button></div>';
+
         html += '<h4>Issues (' + (Array.isArray(issues) ? issues.length : 0) + ')</h4>';
         if (Array.isArray(issues) && issues.length) {
             issues.forEach(function(iss) {
@@ -4488,13 +4921,17 @@ async function selectStatusElement(id, type) {
             });
         }
         html += '<button class="btn btn-sm btn-secondary" onclick="addIssue(\\''+id+'\\', \\''+type+'\\')" style="margin-top:8px">+ Report Issue</button>';
+
+        // Notes
+        html += '<h4 style="margin-top:12px">Notes</h4>';
+        html += '<textarea id="elementNotes" rows="3" style="width:100%;resize:vertical" placeholder="Add notes..." onblur="saveElementNotes(\\''+id+'\\', \\''+type+'\\')">' + esc(curNotes) + '</textarea>';
+
         detail.innerHTML = html;
         document.getElementById('elementChatSection').style.display = '';
         loadElementChat(id, type);
     } catch(e) {
         detail.innerHTML = '<div class="empty">Error loading element details</div>';
     }
-    if (statusPlanId) loadStatusData(statusPlanId);
 }
 
 async function addIssue(elementId, elementType) {
@@ -4502,10 +4939,10 @@ async function addIssue(elementId, elementType) {
     if (!desc) return;
     var severity = prompt('Severity (bug/improvement/question):', 'bug') || 'bug';
     try {
-        await api('status/issues', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await api('status/issues', { method: 'POST', body: {
             element_id: elementId, element_type: elementType, plan_id: statusPlanId,
             description: desc, severity: severity, mode: statusMode
-        })});
+        }});
         showNotification('Issue reported', 'success');
         selectStatusElement(elementId, elementType);
     } catch(e) { showNotification('Failed to report issue', 'error'); }
@@ -4513,20 +4950,69 @@ async function addIssue(elementId, elementType) {
 
 async function resolveIssue(issueId) {
     try {
-        await api('status/issues/' + issueId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ status: 'resolved' })});
+        await api('status/issues/' + issueId, { method: 'PUT', body: { status: 'resolved' } });
         showNotification('Issue resolved', 'success');
-        if (statusSelectedElement) selectStatusElement(statusSelectedElement, 'page');
+        if (statusSelectedElement) selectStatusElement(statusSelectedElement, statusSelectedElementType || 'component');
     } catch(e) { showNotification('Failed to resolve issue', 'error'); }
 }
 
-var elementStatusMap = {};
-function updateElementStatus(id, type, newStatus) {
-    elementStatusMap[id] = newStatus;
-    saveState('elementStatusMap', elementStatusMap);
-    showNotification('Status updated to: ' + newStatus.replace(/_/g, ' '), 'success');
-    // Refresh status tree to show updated status dot
-    if (statusPlanId) loadStatusData(statusPlanId);
+async function updateElementStatus(id, type, newStatus) {
+    try {
+        var result = await api('element-status', { method: 'PUT', body: {
+            element_id: id, element_type: type, plan_id: statusPlanId,
+            implementation_status: newStatus
+        }});
+        statusElementStatuses[id] = result;
+        showNotification('Status updated to: ' + newStatus.replace(/_/g, ' '), 'success');
+        if (statusPlanId) loadStatusData(statusPlanId);
+    } catch(e) { showNotification('Failed to update status', 'error'); }
 }
+
+async function toggleChecklistItem(id, type, index) {
+    var elStatus = statusElementStatuses[id];
+    if (!elStatus || !elStatus.checklist) return;
+    var checklist = elStatus.checklist.slice();
+    checklist[index] = { item: checklist[index].item, done: !checklist[index].done, mode: checklist[index].mode };
+    try {
+        var result = await api('element-status', { method: 'PUT', body: {
+            element_id: id, element_type: type, plan_id: statusPlanId,
+            checklist: checklist
+        }});
+        statusElementStatuses[id] = result;
+    } catch(e) { showNotification('Failed to update checklist', 'error'); }
+}
+
+async function addChecklistItem(id, type) {
+    var input = document.getElementById('newChecklistItem');
+    if (!input || !input.value.trim()) return;
+    var elStatus = statusElementStatuses[id];
+    var checklist = elStatus && elStatus.checklist ? elStatus.checklist.slice() : [];
+    checklist.push({ item: input.value.trim(), done: false, mode: statusMode });
+    try {
+        var result = await api('element-status', { method: 'PUT', body: {
+            element_id: id, element_type: type, plan_id: statusPlanId,
+            checklist: checklist
+        }});
+        statusElementStatuses[id] = result;
+        input.value = '';
+        selectStatusElement(id, type);
+    } catch(e) { showNotification('Failed to add checklist item', 'error'); }
+}
+
+async function saveElementNotes(id, type) {
+    var textarea = document.getElementById('elementNotes');
+    if (!textarea) return;
+    try {
+        var result = await api('element-status', { method: 'PUT', body: {
+            element_id: id, element_type: type, plan_id: statusPlanId,
+            notes: textarea.value
+        }});
+        statusElementStatuses[id] = result;
+    } catch(e) { /* silent save */ }
+}
+
+// Keep legacy for backwards compat
+var elementStatusMap = {};
 
 function calculateProjectReadiness(summary) {
     if (!summary || typeof summary !== 'object') return 0;
@@ -4549,7 +5035,7 @@ async function statusAutofill() {
     }
     showNotification('Auto-filling questions...', 'info');
     try {
-        var result = await api('ai/autofill', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ plan_id: statusPlanId, ai_level: currentAiLevel })});
+        var result = await api('ai/autofill', { method: 'POST', body: { plan_id: statusPlanId, ai_level: currentAiLevel } });
         showNotification('Autofilled ' + (result.autofilled || 0) + ' questions', 'success');
         loadStatusData(statusPlanId);
     } catch(e) { showNotification('Autofill failed', 'error'); }
@@ -4559,9 +5045,9 @@ async function reportMicroFix(elementId) {
     var desc = prompt('Describe the micro-fix needed:');
     if (!desc) return;
     try {
-        await api('coding/micro-fix', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await api('coding/micro-fix', { method: 'POST', body: {
             element_id: elementId, plan_id: statusPlanId, issue_description: desc, element_type: 'component'
-        })});
+        }});
         showNotification('Micro-fix reported and sent to coding agent', 'success');
     } catch(e) { showNotification('Failed to report micro-fix', 'error'); }
 }
@@ -4594,8 +5080,8 @@ async function sendElementChatMessage() {
     container.scrollTop = container.scrollHeight;
     try {
         await api('elements/' + encodeURIComponent(statusSelectedElement) + '/chat', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ message: message, element_type: 'page' })
+            method: 'POST',
+            body: { message: message, element_type: 'page' }
         });
     } catch(e) { showNotification('Failed to send message', 'error'); }
 }
@@ -4611,7 +5097,7 @@ async function refreshAiSuggestions() {
     if (!planId) { showNotification('No plan selected', 'error'); return; }
     showNotification('Generating AI suggestions...', 'info');
     try {
-        var result = await api('ai/suggestions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ plan_id: planId })});
+        var result = await api('ai/suggestions', { method: 'POST', body: { plan_id: planId } });
         renderAiSuggestions(result.suggestions || []);
         showNotification('Generated ' + (result.count || 0) + ' suggestions', 'success');
         document.getElementById('aiPanelsSection').style.display = '';
@@ -4673,7 +5159,7 @@ async function reviewPlanForCode() {
     if (!planId) { showNotification('No plan selected', 'error'); return; }
     showNotification('Reviewing plan for code readiness...', 'info');
     try {
-        var result = await api('ai/review-plan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ plan_id: planId, ai_level: currentAiLevel })});
+        var result = await api('ai/review-plan', { method: 'POST', body: { plan_id: planId, ai_level: currentAiLevel }});
         renderReadinessReview(result);
         document.getElementById('aiPanelsSection').style.display = '';
         var panel = document.getElementById('aiReadinessPanel');
@@ -4713,7 +5199,7 @@ function renderAiQuestions(questions) {
     var count = document.getElementById('aiQuestionsCount');
     var pending = questions.filter(function(q) { return q.status === 'pending'; });
     count.textContent = String(pending.length);
-    if (!questions.length) { body.innerHTML = '<div class="empty">No questions yet.</div>'; return; }
+    if (!questions.length) { body.innerHTML = '<div class="empty">No AI feedback requests yet.</div>'; return; }
     var html = '';
     questions.forEach(function(q) {
         html += '<div class="ai-card">';
@@ -4753,11 +5239,11 @@ function renderAiQuestions(questions) {
 async function answerQuestion(id, answer) {
     if (!answer) return;
     try {
-        await api('ai/questions/' + id + '/answer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ answer: answer })});
-        showNotification('Question answered', 'success');
+        await api('ai/questions/' + id + '/answer', { method: 'POST', body: { answer: answer } });
+        showNotification('AI feedback answered', 'success');
         var planId = currentDesignerPlanId || statusPlanId;
         if (planId) loadAiQuestions(planId);
-    } catch(e) { showNotification('Failed to answer question', 'error'); }
+    } catch(e) { showNotification('Failed to submit answer', 'error'); }
 }
 
 async function dismissQuestion(id) {
@@ -4775,9 +5261,9 @@ async function autofillAiQuestions() {
         showNotification('Autofill is disabled in Manual mode. Switch to Suggestions or higher.', 'info');
         return;
     }
-    showNotification('Auto-filling questions with AI...', 'info');
+    showNotification('Auto-filling AI feedback with AI...', 'info');
     try {
-        var result = await api('ai/autofill', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ plan_id: planId, ai_level: currentAiLevel })});
+        var result = await api('ai/autofill', { method: 'POST', body: { plan_id: planId, ai_level: currentAiLevel }});
         showNotification('Autofilled ' + (result.autofilled || 0) + ' questions', 'success');
         loadAiQuestions(planId);
     } catch(e) { showNotification('Autofill failed', 'error'); }
@@ -4840,8 +5326,8 @@ async function saveVersion() {
     if (!label) return;
     try {
         var version = await api('plans/' + encodeURIComponent(planId) + '/versions', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ label: label, created_by: 'user', branch_type: currentDesignerBranch || 'live' })
+            method: 'POST',
+            body: { label: label, created_by: 'user', branch_type: currentDesignerBranch || 'live' }
         });
         showNotification('Version v' + (version && version.version_number ? version.version_number : '?') + ' saved (' + (currentDesignerBranch || 'live') + ')', 'success');
         loadVersions(planId);
@@ -4878,8 +5364,8 @@ async function switchBranch(targetBranch) {
 
     try {
         var result = await api('plans/' + encodeURIComponent(planId) + '/switch-branch', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ target_branch: targetBranch })
+            method: 'POST',
+            body: { target_branch: targetBranch }
         });
         currentDesignerBranch = targetBranch;
         branchChangeCount = 0;
@@ -4953,14 +5439,14 @@ async function trackDesignChange(changeType, entityType, entityId, description) 
     if (!planId) return;
     try {
         var result = await api('plans/' + encodeURIComponent(planId) + '/micro-version', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
+            method: 'POST',
+            body: {
                 branch_type: currentDesignerBranch,
                 change_type: changeType,
                 entity_type: entityType,
                 entity_id: entityId,
                 description: description
-            })
+            }
         });
         branchChangeCount = result.change_count || 0;
 
@@ -5040,8 +5526,8 @@ async function executeMerge() {
 
     try {
         var result = await api('plans/' + encodeURIComponent(planId) + '/merge', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({})
+            method: 'POST',
+            body: {}
         });
         closeMergeModal();
         showNotification('Merged ' + (result.diff ? result.diff.length : 0) + ' changes from Features Design to Live', 'success');
@@ -5191,12 +5677,12 @@ async function dmSaveModel() {
     var modelId = document.getElementById('dmEditId').value;
     try {
         if (modelId) {
-            await api('data-models/' + modelId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ name: name, description: desc, fields: fields }) });
+            await api('data-models/' + modelId, { method: 'PUT',
+                body: { name: name, description: desc, fields: fields } });
             showNotification('Data model updated', 'success');
         } else {
-            await api('data-models', { method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ plan_id: planId, name: name, description: desc, fields: fields }) });
+            await api('data-models', { method: 'POST',
+                body: { plan_id: planId, name: name, description: desc, fields: fields } });
             showNotification('Data model "' + name + '" created', 'success');
         }
         closeModal('dmEditorModal');
@@ -5259,15 +5745,15 @@ function setupCanvasDataModelDrop() {
 async function bindDataModelToComponent(modelId, componentId) {
     try {
         // Update component props with data_model_id
-        await api('design/components/' + componentId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ props: { data_model_id: modelId } }) });
+        await api('design/components/' + componentId, { method: 'PUT',
+            body: { props: { data_model_id: modelId } } });
         // Update model bound_components
         var model = dmAllModels.find(function(m) { return m.id === modelId; });
         if (model) {
             var bound = (model.bound_components || []).slice();
             if (bound.indexOf(componentId) < 0) bound.push(componentId);
-            await api('data-models/' + modelId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ bound_components: bound }) });
+            await api('data-models/' + modelId, { method: 'PUT',
+                body: { bound_components: bound } });
         }
         showNotification('Data model bound to component', 'success');
         loadDataModels(currentDesignerPlanId);
@@ -5279,14 +5765,14 @@ async function unbindDataModel(componentId) {
     try {
         var comp = dsgComponents.find(function(c) { return c.id === componentId; });
         var modelId = comp && comp.props && comp.props.data_model_id;
-        await api('design/components/' + componentId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ props: { data_model_id: null } }) });
+        await api('design/components/' + componentId, { method: 'PUT',
+            body: { props: { data_model_id: null } } });
         if (modelId) {
             var model = dmAllModels.find(function(m) { return m.id === modelId; });
             if (model) {
                 var bound = (model.bound_components || []).filter(function(id) { return id !== componentId; });
-                await api('data-models/' + modelId, { method: 'PUT', headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({ bound_components: bound }) });
+                await api('data-models/' + modelId, { method: 'PUT',
+                    body: { bound_components: bound } });
             }
         }
         showNotification('Data model unbound', 'info');
@@ -5309,12 +5795,12 @@ async function sendToCodeFromDesign() {
     showNotification('Creating coding session from Live design...', 'info');
     try {
         var result = await api('coding/start-from-live', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
+            method: 'POST',
+            body: {
                 plan_id: planId,
                 branch_type: currentDesignerBranch,
                 ai_level: currentAiLevel
-            })
+            }
         });
         showNotification('Coding session created (v' + (result.version_number || '?') + ') with ' + (result.generated_tasks || 0) + ' tasks', 'success');
         switchToTab('coding');
@@ -5326,8 +5812,8 @@ async function sendToCodeFromPlan(planId) {
     showNotification('Sending plan design to coding agent...', 'info');
     try {
         await api('coding/from-design', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ plan_id: planId })
+            method: 'POST',
+            body: { plan_id: planId }
         });
         showNotification('Design sent to coding session', 'success');
         switchToTab('coding');
@@ -5341,8 +5827,8 @@ async function runAiBugCheck() {
     showNotification('Running AI bug check...', 'info');
     try {
         var result = await api('ai/bug-check', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ plan_id: planId })
+            method: 'POST',
+            body: { plan_id: planId }
         });
         showNotification('Bug check found ' + (result.count || 0) + ' issues', result.count > 0 ? 'warning' : 'success');
     } catch(e) { showNotification('Bug check failed', 'error'); }
@@ -5474,7 +5960,7 @@ async function renderQuestionPopup() {
 
     if (questionQueue.length === 0) {
         var body = document.getElementById('questionPopupBody');
-        if (body) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--subtext)"><div style="font-size:2em;margin-bottom:8px">&#10003;</div><div style="font-size:1.1em;font-weight:600">All caught up!</div><div style="font-size:0.9em;margin-top:4px">No pending questions right now.</div></div>';
+        if (body) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--subtext)"><div style="font-size:2em;margin-bottom:8px">&#10003;</div><div style="font-size:1.1em;font-weight:600">All caught up!</div><div style="font-size:0.9em;margin-top:4px">No pending AI feedback requests right now.</div></div>';
         document.getElementById('questionPopupOverlay').style.display = 'flex';
         document.getElementById('questionPosition').textContent = '';
         return;
@@ -5488,13 +5974,13 @@ async function renderQuestionPopup() {
 function renderCurrentQuestion() {
     if (questionCurrentIndex >= questionQueue.length) {
         closeQuestionPopup();
-        showNotification('All questions answered!', 'success');
+        showNotification('All AI feedback handled!', 'success');
         return;
     }
 
     var q = questionQueue[questionCurrentIndex];
     var posEl = document.getElementById('questionPosition');
-    if (posEl) posEl.textContent = 'Question ' + (questionCurrentIndex + 1) + ' of ' + questionQueue.length;
+    if (posEl) posEl.textContent = 'Item ' + (questionCurrentIndex + 1) + ' of ' + questionQueue.length;
 
     var agentClass = (q.source_agent || '').toLowerCase().replace(/agent$/i, '').replace(/\s+/g, '');
     var body = '';
@@ -5575,13 +6061,13 @@ async function submitCurrentQuestion(questionId, qType) {
 
 async function submitQuestionAnswer(questionId, answer) {
     try {
-        await api('questions/' + questionId + '/answer', { method: 'POST', body: { answer: answer } });
-        showNotification('Answer submitted', 'success');
+        await api('ai/questions/' + questionId + '/answer', { method: 'POST', body: { answer: answer } });
+        showNotification('Feedback submitted', 'success');
         questionQueue.splice(questionCurrentIndex, 1);
         updateQuestionBadge();
         if (questionQueue.length === 0) {
             closeQuestionPopup();
-            showNotification('All questions answered!', 'success');
+            showNotification('All AI feedback handled!', 'success');
         } else {
             if (questionCurrentIndex >= questionQueue.length) questionCurrentIndex = 0;
             renderCurrentQuestion();
@@ -5594,7 +6080,7 @@ async function submitQuestionAnswer(questionId, answer) {
 async function dismissQuestion(questionId) {
     try {
         await api('questions/' + questionId + '/dismiss', { method: 'POST' });
-        showNotification('Question dismissed', 'info');
+        showNotification('Feedback dismissed', 'info');
         questionQueue.splice(questionCurrentIndex, 1);
         updateQuestionBadge();
         if (questionQueue.length === 0) {
@@ -5847,7 +6333,29 @@ function loadSettingsPage() {
 // ==================== SSE EVENT LISTENERS (D1-D3) ====================
 var sseConnection = null;
 var sseReconnectTimer = null;
+var sseBackoffMs = 2000;
+var sseMaxBackoff = 60000;
+var sseDisconnectedSince = null;
 var processingBannerPlanId = null;
+
+// v4.1: Connection status banner management
+function showConnectionBanner(msg) {
+    var banner = document.getElementById('connectionBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'connectionBanner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;padding:8px 16px;text-align:center;font-size:13px;font-weight:500;transition:transform 0.3s;';
+        document.body.prepend(banner);
+    }
+    banner.textContent = msg;
+    banner.style.background = '#fbbf24';
+    banner.style.color = '#1e1e1e';
+    banner.style.transform = 'translateY(0)';
+}
+function hideConnectionBanner() {
+    var banner = document.getElementById('connectionBanner');
+    if (banner) banner.style.transform = 'translateY(-100%)';
+}
 
 function initSSE() {
     if (sseConnection) { try { sseConnection.close(); } catch(e) { /* ignore */ } }
@@ -5862,20 +6370,37 @@ function initSSE() {
     sseConnection.onopen = function() {
         console.log('SSE connected');
         if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+        // v4.1: Reset backoff on successful connect, hide banner, refresh data
+        sseBackoffMs = 2000;
+        sseDisconnectedSince = null;
+        hideConnectionBanner();
+        // Refresh key data after reconnection
+        var activeTab = loadState('activeTab', 'dashboard');
+        if (typeof loadPage === 'function') loadPage(activeTab);
     };
 
     sseConnection.onerror = function() {
-        console.warn('SSE connection error, reconnecting in 10s...');
+        // v4.1 (WS4B): Exponential backoff: 2s, 4s, 8s, 16s, max 60s
+        if (!sseDisconnectedSince) sseDisconnectedSince = Date.now();
+        var disconnectedMs = Date.now() - sseDisconnectedSince;
+        if (disconnectedMs > 120000) {
+            showConnectionBanner('Server unreachable. Click to retry.');
+            var banner = document.getElementById('connectionBanner');
+            if (banner) banner.onclick = function() { sseBackoffMs = 2000; sseDisconnectedSince = null; initSSE(); };
+        } else {
+            showConnectionBanner('Connection lost \\u2014 reconnecting in ' + Math.round(sseBackoffMs / 1000) + 's...');
+        }
+        console.warn('SSE error, reconnecting in ' + sseBackoffMs + 'ms...');
         if (!sseReconnectTimer) {
-            sseReconnectTimer = setTimeout(function() { sseReconnectTimer = null; initSSE(); }, 10000);
+            sseReconnectTimer = setTimeout(function() {
+                sseReconnectTimer = null;
+                initSSE();
+            }, sseBackoffMs);
+            sseBackoffMs = Math.min(sseBackoffMs * 2, sseMaxBackoff);
         }
     };
 
-    // Plan events
-    sseConnection.addEventListener('plan:tasks_generated', function(e) {
-        loadTasks();
-        showNotification('Tasks have been generated', 'success');
-    });
+    // Plan events (tasks_generated handled below with generation state recovery)
 
     sseConnection.addEventListener('plan:config_updated', function(e) {
         var planId = currentDesignerPlanId || activePlanId;
@@ -5902,12 +6427,7 @@ function initSSE() {
         showNotification('Design draft rejected', 'info');
     });
 
-    // Ticket events
-    sseConnection.addEventListener('ticket:resolved', function(e) {
-        loadTickets();
-        updateTabBadges();
-    });
-
+    // Ticket events (ticket:resolved handled below with progress dashboard)
     sseConnection.addEventListener('ticket:replied', function(e) {
         loadTickets();
         updateTabBadges();
@@ -5931,15 +6451,244 @@ function initSSE() {
         }
     });
 
-    // Ticket processing events
+    // Ticket processing events — update progress dashboard
     sseConnection.addEventListener('ticket:processing_started', function(e) {
-        showProcessingBanner(true, e.data);
+        showProgressDashboard(true);
+        pollProcessingStatus();
     });
 
     sseConnection.addEventListener('ticket:processing_completed', function(e) {
-        showProcessingBanner(false);
+        pollProcessingStatus();
         loadTickets();
     });
+
+    sseConnection.addEventListener('ticket:resolved', function(e) {
+        pollProcessingStatus();
+        loadTickets();
+        updateTabBadges();
+    });
+
+    sseConnection.addEventListener('ticket:queued', function(e) {
+        pollProcessingStatus();
+    });
+
+    sseConnection.addEventListener('ticket:verification_passed', function(e) {
+        pollProcessingStatus();
+    });
+
+    sseConnection.addEventListener('ticket:verification_failed', function(e) {
+        pollProcessingStatus();
+    });
+
+    sseConnection.addEventListener('ticket:recovered', function(e) {
+        pollProcessingStatus();
+    });
+
+    // Plan generation state recovery
+    sseConnection.addEventListener('plan:created', function(e) {
+        if (loadState('generationInProgress', false)) {
+            saveState('generationInProgress', false);
+            showNotification('Plan generation complete!', 'success');
+            loadPlans();
+            pollProcessingStatus();
+        }
+    });
+
+    sseConnection.addEventListener('plan:tasks_generated', function(e) {
+        saveState('generationInProgress', false);
+        loadTasks();
+        showNotification('Tasks have been generated', 'success');
+        pollProcessingStatus();
+    });
+}
+
+// ==================== LIVE PROGRESS DASHBOARD ====================
+var pdStartTime = null;
+var pdTimerInterval = null;
+var pdPollInterval = null;
+var pdIsActive = false;
+
+function showProgressDashboard(show) {
+    var dash = document.getElementById('progressDashboard');
+    if (!dash) return;
+    // Dashboard is always visible when a plan exists — show/hide only controls the active-processing state
+    dash.style.display = '';
+    if (show) {
+        pdIsActive = true;
+        if (!pdStartTime) {
+            pdStartTime = loadState('pdStartTime', null) || Date.now();
+            saveState('pdStartTime', pdStartTime);
+            startElapsedTimer();
+        }
+        startPollInterval();
+    } else {
+        pdIsActive = false;
+        stopElapsedTimer();
+        stopPollInterval();
+        pdStartTime = null;
+        saveState('pdStartTime', null);
+        // Keep polling slowly even when idle to detect new processing
+        startIdlePollInterval();
+    }
+}
+
+var pdIdlePollInterval = null;
+function startIdlePollInterval() {
+    if (pdIdlePollInterval || pdPollInterval) return;
+    pdIdlePollInterval = setInterval(function() { pollProcessingStatus(); }, 15000);
+}
+function stopIdlePollInterval() {
+    if (pdIdlePollInterval) { clearInterval(pdIdlePollInterval); pdIdlePollInterval = null; }
+}
+
+function startPollInterval() {
+    if (pdPollInterval) return;
+    stopIdlePollInterval();
+    pdPollInterval = setInterval(function() {
+        pollProcessingStatus();
+    }, 5000);
+}
+
+function stopPollInterval() {
+    if (pdPollInterval) { clearInterval(pdPollInterval); pdPollInterval = null; }
+}
+
+function startElapsedTimer() {
+    if (pdTimerInterval) return;
+    pdTimerInterval = setInterval(function() {
+        if (!pdStartTime) return;
+        var elapsed = Date.now() - pdStartTime;
+        var mins = Math.floor(elapsed / 60000);
+        var secs = Math.floor((elapsed % 60000) / 1000);
+        var el = document.getElementById('pdElapsedTime');
+        if (el) el.textContent = mins + 'm ' + secs + 's elapsed';
+    }, 1000);
+}
+
+function stopElapsedTimer() {
+    if (pdTimerInterval) { clearInterval(pdTimerInterval); pdTimerInterval = null; }
+}
+
+function updateProgressDashboard(data) {
+    var fill = document.getElementById('pdProgressFill');
+    var text = document.getElementById('pdProgressText');
+    var current = document.getElementById('pdCurrentTicket');
+    var queue = document.getElementById('pdQueueDepth');
+    var phase = document.getElementById('pdPhase');
+    var agentBadge = document.getElementById('pdAgentBadge');
+    var agentLabel = document.getElementById('pdAgentLabel');
+    var spinner = document.getElementById('pdSpinner');
+    var statusIcon = document.getElementById('pdStatusIcon');
+    var isActive = data.isProcessing || (data.mainQueueSize || 0) > 0 || (data.bossQueueSize || 0) > 0;
+    var bossMonitoring = data.bossState === 'waiting';
+    // Toggle spinner (active processing) vs pulse (boss monitoring) vs static dot (idle)
+    if (spinner) spinner.style.display = isActive ? '' : 'none';
+    if (statusIcon) {
+        if (isActive) {
+            statusIcon.style.display = 'none';
+        } else if (bossMonitoring) {
+            statusIcon.style.display = '';
+            statusIcon.style.background = 'var(--yellow)';
+        } else {
+            statusIcon.style.display = '';
+            statusIcon.style.background = (data.percentComplete || 0) === 100 ? 'var(--green)' : 'var(--overlay)';
+        }
+    }
+    var pct = data.percentComplete || 0;
+    if (fill) fill.style.width = pct + '%';
+    if (text) {
+        var resolved = data.resolvedTickets || 0;
+        var total = data.totalTickets || 0;
+        if (total > 0) {
+            text.textContent = pct + '% complete (' + resolved + '/' + total + ' tickets)';
+        } else {
+            text.textContent = 'No tickets to process';
+        }
+    }
+    if (current) {
+        if (data.currentTicket) {
+            var tkLabel = data.currentTicket.ticket_number ? 'TK-' + String(data.currentTicket.ticket_number).padStart(3, '0') + ' ' : '';
+            current.textContent = tkLabel + (data.currentTicket.title || data.currentTicket.id);
+            current.title = current.textContent;
+            current.style.color = 'var(--blue)';
+        } else if (data.bossState === 'waiting' && data.bossNextCheckMs > 0) {
+            // Boss AI is in its 5-minute idle cycle — show countdown
+            var bossMs = data.bossNextCheckMs;
+            var bossMins = Math.floor(bossMs / 60000);
+            var bossSecs = Math.floor((bossMs % 60000) / 1000);
+            current.textContent = 'Boss AI \u2022 next check in ' + bossMins + ':' + String(bossSecs).padStart(2, '0');
+            current.title = 'Boss AI is monitoring the system. Checks every 5 minutes when idle.';
+            current.style.color = 'var(--yellow)';
+        } else if (data.isProcessing) {
+            current.textContent = 'Waiting for next ticket...';
+            current.title = '';
+            current.style.color = 'var(--overlay)';
+        } else {
+            current.textContent = data.totalTickets > 0 ? 'Idle' : 'No tickets';
+            current.title = '';
+            current.style.color = 'var(--overlay)';
+        }
+    }
+    var remaining = (data.mainQueueSize || 0) + (data.bossQueueSize || 0);
+    if (queue) queue.textContent = remaining + ' remaining';
+    if (phase) {
+        if (data.phase) {
+            var phaseName = (data.phase.phase || '').replace(/_/g, ' ');
+            phase.textContent = phaseName.charAt(0).toUpperCase() + phaseName.slice(1);
+            if (data.phase.stage) phase.textContent += ' (Stage ' + data.phase.stage + ')';
+        } else if (data.bossState === 'waiting') {
+            phase.textContent = 'Boss AI Monitoring';
+        } else {
+            phase.textContent = data.isProcessing ? 'Active' : (data.totalTickets > 0 ? 'Idle' : '--');
+        }
+    }
+    if (agentBadge && agentLabel && data.currentTicket && data.currentTicket.processing_agent) {
+        agentBadge.style.display = '';
+        var agentName = data.currentTicket.processing_agent.replace(/_/g, ' ');
+        var stageName = data.currentTicket.stage === 1 ? 'Plan' : data.currentTicket.stage === 2 ? 'Code' : data.currentTicket.stage === 3 ? 'Verify' : '';
+        agentLabel.textContent = agentName + (stageName ? ' \u2022 ' + stageName : '');
+        agentLabel.style.background = 'var(--blue-alpha, rgba(74,158,255,0.13))';
+        agentLabel.style.color = 'var(--blue)';
+    } else if (agentBadge && agentLabel && data.bossState === 'waiting') {
+        // Boss AI is in idle monitoring cycle — show as the active agent
+        agentBadge.style.display = '';
+        agentLabel.textContent = 'Boss AI \u2022 Monitoring';
+        agentLabel.style.background = 'rgba(249,226,175,0.15)';
+        agentLabel.style.color = 'var(--yellow)';
+    } else if (agentBadge && agentLabel && data.bossState === 'active') {
+        agentBadge.style.display = '';
+        agentLabel.textContent = 'Boss AI \u2022 Active';
+        agentLabel.style.background = 'var(--blue-alpha, rgba(74,158,255,0.13))';
+        agentLabel.style.color = 'var(--blue)';
+    } else if (agentBadge) { agentBadge.style.display = 'none'; }
+}
+
+var pdHideTimer = null;
+
+async function pollProcessingStatus() {
+    var planId = currentDesignerPlanId || activePlanId || loadState('activePlanId', null);
+    var url = 'processing/status';
+    if (planId) url += '?plan_id=' + encodeURIComponent(planId);
+    try {
+        var data = await api(url);
+        updateProgressDashboard(data);
+        if (data.isProcessing || data.mainQueueSize > 0 || data.bossQueueSize > 0) {
+            if (pdHideTimer) { clearTimeout(pdHideTimer); pdHideTimer = null; }
+            if (!pdIsActive) showProgressDashboard(true);
+        } else if (pdIsActive) {
+            // Processing stopped — switch to idle mode after 10s
+            if (!pdHideTimer) {
+                pdHideTimer = setTimeout(function() {
+                    pdHideTimer = null;
+                    pollProcessingStatus().then(function() {
+                        if (pdIsActive && !data.isProcessing && data.mainQueueSize === 0 && data.bossQueueSize === 0) {
+                            showProgressDashboard(false);
+                        }
+                    });
+                }, 10000);
+            }
+        }
+    } catch(e) { /* endpoint may not exist yet */ }
 }
 
 function showProcessingBanner(show, data) {
@@ -5980,20 +6729,24 @@ function installDraftRendering() {
 
     _origRenderDesignElement = renderDesignElement;
 
-    // Override with draft-aware version
+    // Override with draft-aware version (click-to-select, not hover)
     renderDesignElement = function(comp) {
         var baseHtml = _origRenderDesignElement(comp);
         if (!comp.is_draft) return baseHtml;
 
-        // Add draft classes and badge
-        baseHtml = baseHtml.replace('class="design-el', 'class="design-el draft-component');
+        // Add draft classes and selected class if this is the selected draft
+        var draftClasses = 'design-el draft-component';
+        if (comp.id === selectedDraftComponentId) {
+            draftClasses += ' draft-selected';
+        }
+        baseHtml = baseHtml.replace('class="design-el', 'class="' + draftClasses);
 
-        // Insert draft badge and hover actions before the closing </div>
+        // Insert draft badge and click-to-select actions before the closing </div>
         var lastDivIdx = baseHtml.lastIndexOf('</div>');
         var draftInsert = '<div class="draft-badge">DRAFT</div>' +
-            '<div class="draft-actions">' +
-            '<button class="btn btn-sm btn-success" onclick="event.stopPropagation();approveDraftComponent(\\'' + comp.id + '\\')">Approve</button>' +
-            '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();rejectDraftComponent(\\'' + comp.id + '\\')">Reject</button>' +
+            '<div class="draft-actions" onclick="event.stopPropagation()">' +
+            '<button class="btn btn-sm btn-success" onclick="approveDraftComponent(\\'' + comp.id + '\\')">Approve</button>' +
+            '<button class="btn btn-sm btn-danger" onclick="rejectDraftComponent(\\'' + comp.id + '\\')">Reject</button>' +
             '</div>';
         baseHtml = baseHtml.slice(0, lastDivIdx) + draftInsert + baseHtml.slice(lastDivIdx);
 
@@ -6002,6 +6755,7 @@ function installDraftRendering() {
 }
 
 async function approveDraftComponent(compId) {
+    selectedDraftComponentId = null;
     try {
         await api('design/components/' + compId + '/approve', { method: 'POST' });
         showNotification('Component approved', 'success');
@@ -6014,6 +6768,7 @@ async function approveDraftComponent(compId) {
 }
 
 async function rejectDraftComponent(compId) {
+    selectedDraftComponentId = null;
     try {
         await api('design/components/' + compId + '/reject', { method: 'POST' });
         showNotification('Component rejected', 'info');
@@ -6025,23 +6780,45 @@ async function rejectDraftComponent(compId) {
     }
 }
 
+// v4.1 (WS4E): Browser history — back/forward buttons work
+window.addEventListener('popstate', function(e) {
+    if (e.state && e.state.page) {
+        switchToTab(e.state.page, true);
+    } else if (location.hash) {
+        switchToTab(location.hash.replace('#', ''), true);
+    }
+});
+
 // ==================== INIT ====================
 (function restoreState() {
-    var savedTab = loadState('activeTab', 'dashboard');
+    // v4.1: Check hash for deep linking first, then fallback to saved state
+    var hashTab = location.hash ? location.hash.replace('#', '') : null;
+    var savedTab = hashTab || loadState('activeTab', 'dashboard');
     if (savedTab && savedTab !== 'dashboard') {
-        switchToTab(savedTab);
+        switchToTab(savedTab, true);
     } else {
         loadDashboard();
     }
-    // Restore designer if it was open
+    // Restore designer if it was open AND has design data
     var savedDesignerPlan = loadState('designerPlanId', null);
     if (savedDesignerPlan && savedTab === 'planning') {
-        setTimeout(function() { loadDesignerForPlan(savedDesignerPlan); }, 300);
+        setTimeout(function() {
+            api('design/pages?plan_id=' + encodeURIComponent(savedDesignerPlan)).then(function(pages) {
+                var pageList = Array.isArray(pages) ? pages : (pages.pages || []);
+                if (pageList.length > 0) {
+                    loadDesignerForPlan(savedDesignerPlan);
+                }
+            }).catch(function() { /* no design data, skip */ });
+        }, 300);
     }
     // Initialize SSE for live updates
     setTimeout(initSSE, 1000);
     // Install draft component rendering
     setTimeout(installDraftRendering, 500);
+    // v4.1: Initial processing status check — auto-show dashboard if tickets are being processed
+    setTimeout(function() {
+        pollProcessingStatus().catch(function() { /* endpoint may not be ready */ });
+    }, 1500);
     // Load question badge count
     setTimeout(function() {
         var planId = loadState('activePlanId', null);
@@ -6528,10 +7305,10 @@ switchToTab = function(pageName) {
 <div class="question-popup-overlay" id="questionPopupOverlay" style="display:none">
     <div class="question-popup" id="questionPopupContent">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <h2 id="questionPopupTitle">Question</h2>
+            <h2 id="questionPopupTitle">AI Feedback</h2>
             <button style="background:none;border:none;color:var(--subtext);cursor:pointer;font-size:1.3em;padding:0 4px" onclick="closeQuestionPopup()">&times;</button>
         </div>
-        <div class="q-position" id="questionPosition">Question 1 of 1</div>
+        <div class="q-position" id="questionPosition">Item 1 of 1</div>
         <div id="questionPopupBody"></div>
     </div>
 </div>

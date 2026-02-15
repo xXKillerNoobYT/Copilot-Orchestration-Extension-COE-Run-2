@@ -22,7 +22,11 @@ import {
     DeviceInfo, ComponentSchema,
     // v3.0 types
     ElementIssue, AISuggestion, AIQuestion, PlanVersion, DataModel,
-    AIChatSession, AIChatMessage, DesignChangeLog
+    AIChatSession, AIChatMessage, DesignChangeLog,
+    // v4.1 types
+    TicketRun,
+    // v4.2 types
+    ElementStatus, LifecycleStage, ImplementationStatus, ReadinessLevel, PlanMode,
 } from '../types';
 
 export class Database {
@@ -790,6 +794,7 @@ export class Database {
             ['previous_decision_id', 'TEXT DEFAULT NULL'],
             ['conflict_decision_id', 'TEXT DEFAULT NULL'],
             ['technical_context', 'TEXT DEFAULT NULL'],
+            ['friendly_message', 'TEXT DEFAULT NULL'],
         ];
         for (const [col, type] of questionV4Columns) {
             try { this.db.exec(`ALTER TABLE ai_questions ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
@@ -832,6 +837,77 @@ export class Database {
         `);
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_user_decisions_plan ON user_decisions(plan_id, is_active)'); } catch { /* already exists */ }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_user_decisions_topic ON user_decisions(plan_id, topic)'); } catch { /* already exists */ }
+
+        // Migration v4.1: add error tracking to tickets
+        const ticketErrorColumns = [
+            ['last_error', 'TEXT DEFAULT NULL'],
+            ['last_error_at', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, type] of ticketErrorColumns) {
+            try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration v4.1: enhance ai_suggestions with new fields
+        const suggestionV41Columns = [
+            ['goal', "TEXT NOT NULL DEFAULT ''"],
+            ['source_agent', 'TEXT DEFAULT NULL'],
+            ['target_type', 'TEXT DEFAULT NULL'],
+            ['target_id', 'TEXT DEFAULT NULL'],
+            ['current_value', 'TEXT DEFAULT NULL'],
+            ['suggested_value', 'TEXT DEFAULT NULL'],
+            ['approved_at', 'TEXT DEFAULT NULL'],
+            ['rejected_at', 'TEXT DEFAULT NULL'],
+            ['rejection_reason', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, type] of suggestionV41Columns) {
+            try { this.db.exec(`ALTER TABLE ai_suggestions ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration v4.1: create ticket_runs table for per-ticket run logging
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS ticket_runs (
+                id TEXT PRIMARY KEY,
+                ticket_id TEXT NOT NULL,
+                run_number INTEGER NOT NULL,
+                agent_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'started',
+                prompt_sent TEXT NOT NULL DEFAULT '',
+                response_received TEXT,
+                review_result TEXT,
+                verification_result TEXT,
+                error_message TEXT,
+                error_stack TEXT,
+                tokens_used INTEGER,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id)
+            );
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_runs_ticket ON ticket_runs(ticket_id, started_at)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_runs_status ON ticket_runs(status)'); } catch { /* already exists */ }
+
+        // Migration v4.2: create element_status table for per-element/per-page status tracking
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS element_status (
+                id TEXT PRIMARY KEY,
+                element_id TEXT NOT NULL,
+                element_type TEXT NOT NULL DEFAULT 'component',
+                plan_id TEXT NOT NULL,
+                implementation_status TEXT NOT NULL DEFAULT 'not_started',
+                lifecycle_stage TEXT NOT NULL DEFAULT 'design',
+                readiness_pct INTEGER NOT NULL DEFAULT 0,
+                readiness_level TEXT NOT NULL DEFAULT 'not_ready',
+                mode_status TEXT NOT NULL DEFAULT '{}',
+                checklist TEXT NOT NULL DEFAULT '[]',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            )
+        `);
+        try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_element_status_unique ON element_status(element_id, element_type, plan_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_status_plan ON element_status(plan_id)'); } catch { /* already exists */ }
     }
 
     private genId(): string {
@@ -863,7 +939,7 @@ export class Database {
             data.acceptance_criteria || '',
             data.plan_id || null,
             data.parent_task_id || null,
-            data.estimated_minutes || 30,
+            data.estimated_minutes ?? 30,
             JSON.stringify(data.files_modified || []),
             data.context_bundle || null,
             data.task_requirements || null,
@@ -996,8 +1072,9 @@ export class Database {
                 acceptance_criteria, blocking_ticket_id, is_ghost, processing_agent,
                 processing_status, deliverable_type, verification_result,
                 source_page_ids, source_component_ids, retry_count, max_retries, stage,
+                last_error, last_error_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id,
             ticketNumber,
@@ -1023,6 +1100,8 @@ export class Database {
             data.retry_count ?? 0,
             data.max_retries ?? 3,
             data.stage ?? null,
+            data.last_error ?? null,
+            data.last_error_at ?? null,
             now,
             now
         );
@@ -1056,6 +1135,29 @@ export class Database {
         return row.count;
     }
 
+    /**
+     * Get all tickets linked to a plan (via task_id → tasks.plan_id, or auto_created tickets with matching operation context).
+     */
+    getTicketsByPlanId(planId: string): Ticket[] {
+        const rows = this.db.prepare(`
+            SELECT t.* FROM tickets t
+            LEFT JOIN tasks tk ON t.task_id = tk.id
+            WHERE tk.plan_id = ?
+               OR t.body LIKE '%' || ? || '%'
+            ORDER BY t.priority ASC, t.created_at ASC
+        `).all(planId, planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
+    }
+
+    /**
+     * Get all tickets linked to a specific task.
+     */
+    getTicketsByTaskId(taskId: string): Ticket[] {
+        const rows = this.db.prepare('SELECT * FROM tickets WHERE task_id = ? ORDER BY created_at ASC')
+            .all(taskId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
+    }
+
     updateTicket(id: string, updates: Partial<Ticket>): Ticket | null {
         const existing = this.getTicket(id);
         if (!existing) return null;
@@ -1081,6 +1183,8 @@ export class Database {
         if (updates.retry_count !== undefined) { fields.push('retry_count = ?'); values.push(updates.retry_count); }
         if (updates.max_retries !== undefined) { fields.push('max_retries = ?'); values.push(updates.max_retries); }
         if (updates.stage !== undefined) { fields.push('stage = ?'); values.push(updates.stage); }
+        if (updates.last_error !== undefined) { fields.push('last_error = ?'); values.push(updates.last_error); }
+        if (updates.last_error_at !== undefined) { fields.push('last_error_at = ?'); values.push(updates.last_error_at); }
 
         if (fields.length === 0) return existing;
 
@@ -1128,9 +1232,195 @@ export class Database {
             retry_count: (row.retry_count as number) ?? 0,
             max_retries: (row.max_retries as number) ?? 3,
             stage: (row.stage as number) ?? 1,
+            last_error: (row.last_error as string | null) ?? null,
+            last_error_at: (row.last_error_at as string | null) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
+    }
+
+    // ==================== TICKET RUN LOGGING ====================
+
+    createTicketRun(data: { ticket_id: string; agent_name: string; prompt_sent: string }): TicketRun {
+        const id = this.genId();
+        const now = new Date().toISOString();
+
+        // Determine run number (next sequential for this ticket)
+        const countRow = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM ticket_runs WHERE ticket_id = ?'
+        ).get(data.ticket_id) as { cnt: number };
+        const runNumber = (countRow?.cnt ?? 0) + 1;
+
+        this.db.prepare(`
+            INSERT INTO ticket_runs (id, ticket_id, run_number, agent_name, status, prompt_sent, started_at)
+            VALUES (?, ?, ?, ?, 'started', ?, ?)
+        `).run(id, data.ticket_id, runNumber, data.agent_name, data.prompt_sent, now);
+
+        return this.getTicketRun(id)!;
+    }
+
+    completeTicketRun(id: string, updates: {
+        status: TicketRun['status'];
+        response_received?: string;
+        review_result?: string;
+        verification_result?: string;
+        error_message?: string;
+        error_stack?: string;
+        tokens_used?: number;
+        duration_ms: number;
+    }): TicketRun | null {
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            UPDATE ticket_runs SET
+                status = ?, response_received = ?, review_result = ?,
+                verification_result = ?, error_message = ?, error_stack = ?,
+                tokens_used = ?, duration_ms = ?, completed_at = ?
+            WHERE id = ?
+        `).run(
+            updates.status,
+            updates.response_received ?? null,
+            updates.review_result ?? null,
+            updates.verification_result ?? null,
+            updates.error_message ?? null,
+            updates.error_stack ? updates.error_stack.substring(0, 2000) : null,
+            updates.tokens_used ?? null,
+            updates.duration_ms,
+            now,
+            id
+        );
+        return this.getTicketRun(id);
+    }
+
+    getTicketRun(id: string): TicketRun | null {
+        const row = this.db.prepare('SELECT * FROM ticket_runs WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToTicketRun(row) : null;
+    }
+
+    getTicketRuns(ticketId: string): TicketRun[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ticket_runs WHERE ticket_id = ? ORDER BY run_number ASC'
+        ).all(ticketId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicketRun(r));
+    }
+
+    getLatestTicketRun(ticketId: string): TicketRun | null {
+        const row = this.db.prepare(
+            'SELECT * FROM ticket_runs WHERE ticket_id = ? ORDER BY run_number DESC LIMIT 1'
+        ).get(ticketId) as Record<string, unknown> | undefined;
+        return row ? this.rowToTicketRun(row) : null;
+    }
+
+    private rowToTicketRun(row: Record<string, unknown>): TicketRun {
+        return {
+            id: row.id as string,
+            ticket_id: row.ticket_id as string,
+            run_number: row.run_number as number,
+            agent_name: row.agent_name as string,
+            status: row.status as TicketRun['status'],
+            prompt_sent: row.prompt_sent as string,
+            response_received: (row.response_received as string) ?? null,
+            review_result: (row.review_result as string) ?? null,
+            verification_result: (row.verification_result as string) ?? null,
+            error_message: (row.error_message as string) ?? null,
+            error_stack: (row.error_stack as string) ?? null,
+            tokens_used: (row.tokens_used as number) ?? null,
+            duration_ms: (row.duration_ms as number) ?? 0,
+            started_at: row.started_at as string,
+            completed_at: (row.completed_at as string) ?? null,
+        };
+    }
+
+    // ==================== TRANSACTION HELPER ====================
+
+    /**
+     * Run a function inside a database transaction.
+     * If fn throws, the transaction is rolled back.
+     */
+    runTransaction<T>(fn: () => T): T {
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            const result = fn();
+            this.db.exec('COMMIT');
+            return result;
+        } catch (error) {
+            this.db.exec('ROLLBACK');
+            throw error;
+        }
+    }
+
+    // ==================== TASK LOCKING ====================
+
+    /**
+     * Atomically claim the next ready task.
+     * Uses BEGIN IMMEDIATE to prevent two callers from claiming the same task.
+     * Returns the claimed task (now InProgress) or null if no ready tasks.
+     */
+    claimNextReadyTask(planId?: string): Task | null {
+        return this.runTransaction(() => {
+            let row: Record<string, unknown> | undefined;
+            if (planId) {
+                row = this.db.prepare(`
+                    SELECT * FROM tasks
+                    WHERE status = 'not_started' AND plan_id = ?
+                    ORDER BY
+                        CASE priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+                        sort_order ASC
+                    LIMIT 1
+                `).get(planId) as Record<string, unknown> | undefined;
+            } else {
+                row = this.db.prepare(`
+                    SELECT * FROM tasks
+                    WHERE status = 'not_started'
+                    ORDER BY
+                        CASE priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+                        sort_order ASC
+                    LIMIT 1
+                `).get() as Record<string, unknown> | undefined;
+            }
+            if (!row) return null;
+
+            const taskId = row.id as string;
+            this.db.prepare(
+                "UPDATE tasks SET status = 'in_progress', updated_at = datetime('now') WHERE id = ?"
+            ).run(taskId);
+
+            return this.getTask(taskId);
+        });
+    }
+
+    // ==================== SUGGESTION APPROVAL HELPERS ====================
+
+    /**
+     * Approve a suggestion — marks it accepted with timestamp.
+     */
+    approveSuggestion(id: string): AISuggestion | null {
+        const now = new Date().toISOString();
+        return this.updateAISuggestion(id, {
+            status: 'accepted',
+            approved_at: now,
+        });
+    }
+
+    /**
+     * Reject a suggestion — marks it rejected with timestamp and optional reason.
+     */
+    rejectSuggestion(id: string, reason?: string): AISuggestion | null {
+        const now = new Date().toISOString();
+        return this.updateAISuggestion(id, {
+            status: 'rejected',
+            rejected_at: now,
+            rejection_reason: reason ?? null,
+        });
+    }
+
+    /**
+     * Get suggestions by target entity.
+     */
+    getSuggestionsByTarget(targetType: string, targetId: string): AISuggestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_suggestions WHERE target_type = ? AND target_id = ? ORDER BY created_at DESC'
+        ).all(targetType, targetId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAISuggestion(r));
     }
 
     // ==================== HIERARCHICAL TICKETS ====================
@@ -1338,7 +1628,7 @@ export class Database {
         this.db.prepare(`
             INSERT INTO conversations (id, agent, role, content, task_id, ticket_id, tokens_used, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        `).run(id, agent, role, content, taskId || null, ticketId || null, tokensUsed || null);
+        `).run(id, agent, role, content, taskId || null, ticketId || null, tokensUsed ?? null);
         return this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Conversation;
     }
 
@@ -2794,19 +3084,153 @@ export class Database {
         };
     }
 
+    // ==================== ELEMENT STATUS ====================
+
+    getOrCreateElementStatus(elementId: string, elementType: 'component' | 'page', planId: string): ElementStatus {
+        const existing = this.db.prepare(
+            'SELECT * FROM element_status WHERE element_id = ? AND element_type = ? AND plan_id = ?'
+        ).get(elementId, elementType, planId) as Record<string, unknown> | undefined;
+        if (existing) return this.rowToElementStatus(existing);
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO element_status (id, element_id, element_type, plan_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(id, elementId, elementType, planId, now, now);
+        return this.rowToElementStatus(
+            this.db.prepare('SELECT * FROM element_status WHERE id = ?').get(id) as Record<string, unknown>
+        );
+    }
+
+    getElementStatusByPlan(planId: string): ElementStatus[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM element_status WHERE plan_id = ? ORDER BY element_type, created_at'
+        ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToElementStatus(r));
+    }
+
+    getElementStatus(elementId: string, elementType: string, planId: string): ElementStatus | null {
+        const row = this.db.prepare(
+            'SELECT * FROM element_status WHERE element_id = ? AND element_type = ? AND plan_id = ?'
+        ).get(elementId, elementType, planId) as Record<string, unknown> | undefined;
+        return row ? this.rowToElementStatus(row) : null;
+    }
+
+    updateElementStatus(elementId: string, elementType: string, planId: string, updates: Partial<ElementStatus>): ElementStatus {
+        const status = this.getOrCreateElementStatus(elementId, elementType as 'component' | 'page', planId);
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.implementation_status !== undefined) { fields.push('implementation_status = ?'); values.push(updates.implementation_status); }
+        if (updates.lifecycle_stage !== undefined) { fields.push('lifecycle_stage = ?'); values.push(updates.lifecycle_stage); }
+        if (updates.readiness_pct !== undefined) { fields.push('readiness_pct = ?'); values.push(updates.readiness_pct); }
+        if (updates.readiness_level !== undefined) { fields.push('readiness_level = ?'); values.push(updates.readiness_level); }
+        if (updates.mode_status !== undefined) { fields.push('mode_status = ?'); values.push(JSON.stringify(updates.mode_status)); }
+        if (updates.checklist !== undefined) { fields.push('checklist = ?'); values.push(JSON.stringify(updates.checklist)); }
+        if (updates.notes !== undefined) { fields.push('notes = ?'); values.push(updates.notes); }
+        if (fields.length === 0) return status;
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(status.id);
+        this.db.prepare(`UPDATE element_status SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.rowToElementStatus(
+            this.db.prepare('SELECT * FROM element_status WHERE id = ?').get(status.id) as Record<string, unknown>
+        );
+    }
+
+    deleteElementStatus(elementId: string, elementType: string, planId: string): void {
+        this.db.prepare(
+            'DELETE FROM element_status WHERE element_id = ? AND element_type = ? AND plan_id = ?'
+        ).run(elementId, elementType, planId);
+    }
+
+    /** Calculate readiness for a page based on its elements' statuses */
+    calculatePageReadiness(pageId: string, planId: string): { readiness_pct: number; readiness_level: ReadinessLevel } {
+        // Get page's own status
+        const pageStatus = this.getElementStatus(pageId, 'page', planId);
+        // Get all components on this page
+        const components = this.db.prepare(
+            'SELECT id FROM design_components WHERE page_id = ? AND plan_id = ?'
+        ).all(pageId, planId) as Array<{ id: string }>;
+
+        if (components.length === 0) {
+            // Page with no components — use page-level status only
+            const pct = pageStatus ? this.statusToPct(pageStatus.implementation_status) : 0;
+            return { readiness_pct: pct, readiness_level: this.pctToLevel(pct) };
+        }
+
+        // Average the readiness of page + all its components
+        let totalPct = pageStatus ? this.statusToPct(pageStatus.implementation_status) : 0;
+        let count = 1; // count page itself
+        for (const comp of components) {
+            const compStatus = this.getElementStatus(comp.id, 'component', planId);
+            totalPct += compStatus ? this.statusToPct(compStatus.implementation_status) : 0;
+            count++;
+        }
+        const pct = Math.round(totalPct / count);
+        return { readiness_pct: pct, readiness_level: this.pctToLevel(pct) };
+    }
+
+    private statusToPct(status: ImplementationStatus): number {
+        const map: Record<ImplementationStatus, number> = {
+            'not_started': 0, 'planned': 20, 'in_progress': 50, 'implemented': 75, 'verified': 100, 'has_issues': 30
+        };
+        return map[status] ?? 0;
+    }
+
+    private pctToLevel(pct: number): ReadinessLevel {
+        if (pct >= 90) return 'ready';
+        if (pct >= 60) return 'almost_ready';
+        if (pct >= 30) return 'needs_work';
+        return 'not_ready';
+    }
+
+    private rowToElementStatus(row: Record<string, unknown>): ElementStatus {
+        let modeStatus: Record<PlanMode, ImplementationStatus>;
+        try { modeStatus = JSON.parse(row.mode_status as string || '{}'); }
+        catch { modeStatus = {} as Record<PlanMode, ImplementationStatus>; }
+        let checklist: Array<{ item: string; done: boolean; mode: PlanMode }>;
+        try { checklist = JSON.parse(row.checklist as string || '[]'); }
+        catch { checklist = []; }
+        return {
+            id: row.id as string,
+            element_id: row.element_id as string,
+            element_type: row.element_type as ElementStatus['element_type'],
+            plan_id: row.plan_id as string,
+            implementation_status: (row.implementation_status as ImplementationStatus) || 'not_started',
+            lifecycle_stage: (row.lifecycle_stage as LifecycleStage) || 'design',
+            readiness_pct: (row.readiness_pct as number) ?? 0,
+            readiness_level: (row.readiness_level as ReadinessLevel) || 'not_ready',
+            mode_status: modeStatus,
+            checklist,
+            notes: (row.notes as string) || '',
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
     // ==================== AI SUGGESTIONS ====================
 
     createAISuggestion(data: Omit<AISuggestion, 'id' | 'created_at' | 'updated_at'>): AISuggestion {
         const id = this.genId();
         const now = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO ai_suggestions (id, plan_id, component_id, page_id, type, title, description, reasoning, action_type, action_payload, priority, status, ticket_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
-            data.type || 'general', data.title, data.description, data.reasoning || '',
+            INSERT INTO ai_suggestions (
+                id, plan_id, component_id, page_id, type, title, description, reasoning, goal,
+                source_agent, target_type, target_id, current_value, suggested_value,
+                action_type, action_payload, priority, status, ticket_id,
+                approved_at, rejected_at, rejection_reason,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
+            data.type || 'general', data.title, data.description, data.reasoning || '', data.goal || '',
+            data.source_agent ?? null, data.target_type ?? null, data.target_id ?? null,
+            data.current_value ?? null, data.suggested_value ?? null,
             data.action_type ?? null, JSON.stringify(data.action_payload || {}),
             data.priority || 'P2', data.status || 'pending', data.ticket_id ?? null,
-            now, now);
+            data.approved_at ?? null, data.rejected_at ?? null, data.rejection_reason ?? null,
+            now, now
+        );
         return this.getAISuggestion(id)!;
     }
 
@@ -2849,10 +3273,19 @@ export class Database {
         if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
         if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
         if (updates.reasoning !== undefined) { fields.push('reasoning = ?'); values.push(updates.reasoning); }
+        if (updates.goal !== undefined) { fields.push('goal = ?'); values.push(updates.goal); }
+        if (updates.source_agent !== undefined) { fields.push('source_agent = ?'); values.push(updates.source_agent); }
+        if (updates.target_type !== undefined) { fields.push('target_type = ?'); values.push(updates.target_type); }
+        if (updates.target_id !== undefined) { fields.push('target_id = ?'); values.push(updates.target_id); }
+        if (updates.current_value !== undefined) { fields.push('current_value = ?'); values.push(updates.current_value); }
+        if (updates.suggested_value !== undefined) { fields.push('suggested_value = ?'); values.push(updates.suggested_value); }
         if (updates.action_type !== undefined) { fields.push('action_type = ?'); values.push(updates.action_type); }
         if (updates.action_payload !== undefined) { fields.push('action_payload = ?'); values.push(JSON.stringify(updates.action_payload)); }
         if (updates.priority !== undefined) { fields.push('priority = ?'); values.push(updates.priority); }
         if (updates.ticket_id !== undefined) { fields.push('ticket_id = ?'); values.push(updates.ticket_id); }
+        if (updates.approved_at !== undefined) { fields.push('approved_at = ?'); values.push(updates.approved_at); }
+        if (updates.rejected_at !== undefined) { fields.push('rejected_at = ?'); values.push(updates.rejected_at); }
+        if (updates.rejection_reason !== undefined) { fields.push('rejection_reason = ?'); values.push(updates.rejection_reason); }
         if (fields.length === 0) return this.getAISuggestion(id);
         fields.push('updated_at = ?');
         values.push(new Date().toISOString());
@@ -2888,12 +3321,21 @@ export class Database {
             type: row.type as AISuggestion['type'],
             title: row.title as string,
             description: row.description as string,
-            reasoning: row.reasoning as string,
+            reasoning: (row.reasoning as string) ?? '',
+            goal: (row.goal as string) ?? '',
+            source_agent: (row.source_agent as string) ?? null,
+            target_type: (row.target_type as AISuggestion['target_type']) ?? null,
+            target_id: (row.target_id as string) ?? null,
+            current_value: (row.current_value as string) ?? null,
+            suggested_value: (row.suggested_value as string) ?? null,
             action_type: (row.action_type as AISuggestion['action_type']) ?? null,
             action_payload: JSON.parse((row.action_payload as string) || '{}'),
             priority: row.priority as AISuggestion['priority'],
             status: row.status as AISuggestion['status'],
             ticket_id: (row.ticket_id as string) ?? null,
+            approved_at: (row.approved_at as string) ?? null,
+            rejected_at: (row.rejected_at as string) ?? null,
+            rejection_reason: (row.rejection_reason as string) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -2910,9 +3352,9 @@ export class Database {
                 ai_reasoning, ai_suggested_answer, user_answer, status, ticket_id,
                 source_agent, source_ticket_id, navigate_to, is_ghost, queue_priority,
                 answered_at, ai_continued, dismiss_count, previous_decision_id,
-                conflict_decision_id, technical_context,
+                conflict_decision_id, technical_context, friendly_message,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id, data.plan_id, data.component_id ?? null, data.page_id ?? null,
             data.category || 'general', data.question, data.question_type || 'text',
@@ -2923,7 +3365,7 @@ export class Database {
             data.navigate_to ?? null, data.is_ghost ? 1 : 0, data.queue_priority ?? 2,
             data.answered_at ?? null, data.ai_continued ? 1 : 0, data.dismiss_count ?? 0,
             data.previous_decision_id ?? null, data.conflict_decision_id ?? null,
-            data.technical_context ?? null,
+            data.technical_context ?? null, data.friendly_message ?? null,
             now, now
         );
         return this.getAIQuestion(id)!;
@@ -2994,6 +3436,7 @@ export class Database {
         if (updates.user_answer !== undefined) { fields.push('user_answer = ?'); values.push(updates.user_answer); }
         if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
         if (updates.ticket_id !== undefined) { fields.push('ticket_id = ?'); values.push(updates.ticket_id); }
+        if (updates.friendly_message !== undefined) { fields.push('friendly_message = ?'); values.push(updates.friendly_message); }
         if (fields.length === 0) return this.getAIQuestion(id);
         fields.push('updated_at = ?');
         values.push(new Date().toISOString());
@@ -3049,6 +3492,7 @@ export class Database {
             previous_decision_id: (row.previous_decision_id as string) ?? null,
             conflict_decision_id: (row.conflict_decision_id as string) ?? null,
             technical_context: (row.technical_context as string) ?? null,
+            friendly_message: (row.friendly_message as string) ?? null,
         };
     }
 

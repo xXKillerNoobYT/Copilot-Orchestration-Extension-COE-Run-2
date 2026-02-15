@@ -1,5 +1,5 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse } from '../types';
+import { AgentType, AgentContext, AgentResponse, TicketPriority } from '../types';
 
 export class AnswerAgent extends BaseAgent {
     readonly name = 'Answer Agent';
@@ -74,7 +74,7 @@ ESCALATE: true`;
                 this.database.createTicket({
                     title: `Low confidence answer for task: ${context.task.title}`,
                     body: `Question required human input.\n\nAnswer provided (${confidence}% confidence):\n${answer}\n\nSources: ${sources.join(', ')}`,
-                    priority: 'P1' as any,
+                    priority: TicketPriority.P1,
                     creator: this.name,
                     task_id: context.task.id,
                 });

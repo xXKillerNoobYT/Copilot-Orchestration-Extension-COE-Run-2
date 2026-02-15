@@ -60,6 +60,8 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
         retry_count: 0,
         max_retries: 3,
         stage: 1,
+        last_error: null,
+        last_error_at: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         ...overrides,

@@ -79,12 +79,13 @@ export class FileWatcherService {
             const parsed = JSON.parse(content);
 
             if (parsed.tasks && Array.isArray(parsed.tasks)) {
-                // Find all verified tasks in the active plan and flag for recheck
+                // Scope recheck to the specific plan that changed (not all plans)
+                const changedPlanId: string | undefined = parsed.id || parsed.plan_id;
                 const allTasks = this.database.getTasksByStatus(TaskStatus.Verified);
                 let rechecked = 0;
                 for (const task of allTasks) {
-                    // If the task belongs to a plan and has been verified, mark for recheck
-                    if (task.plan_id) {
+                    // Only recheck tasks belonging to the changed plan
+                    if (task.plan_id && (!changedPlanId || task.plan_id === changedPlanId)) {
                         this.database.updateTask(task.id, { status: TaskStatus.NeedsReCheck });
                         rechecked++;
                     }

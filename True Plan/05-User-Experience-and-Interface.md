@@ -514,6 +514,38 @@ Below the Visual Designer canvas:
 - Score badge: green (>=80), yellow (60-79), red (<60)
 - Gap indicator badges on page tabs for critical/major gaps
 - Draft components render on canvas with dashed outline, "DRAFT" badge, and approve/reject controls
+- **Click-to-select pattern**: Draft components use persistent click-based selection (not hover). Click a draft to show Approve/Reject buttons below it; click again or click elsewhere to deselect. Buttons persist until explicitly dismissed.
+
+### Progress Dashboard — IMPLEMENTED (v4.0)
+
+Live ticket processing dashboard on the Planning page:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [Processing Progress]  [spinner]             2m 34s elapsed │
+│ [====================--------] 62% (23/37 tickets)          │
+│ Current: TK-014 Develop admin panel   Queue: 8   Phase: 3  │
+│ [Planning Team badge]                                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- Shows progress bar, current ticket, queue depth, phase, elapsed timer, agent badge
+- Auto-appears when ticket processing starts (via SSE `ticket:processing_started` event)
+- Auto-hides when processing completes with 5s delay
+- Polls `/api/processing/status` for updates
+- Persists across page navigation via localStorage (`generationInProgress`, `generationStartTime`)
+
+### Project Status Click-to-Select — IMPLEMENTED (v4.0)
+
+Page cards in the Project Status view use a persistent click-to-select pattern (same as draft components). Clicking a card highlights it with a blue border and loads its detail panel. Clicking again deselects.
+
+### Plan Generation State Recovery — IMPLEMENTED (v4.0)
+
+Plan generation progress is persisted to localStorage. If the user navigates away during generation and returns to the Planning page, the progress dashboard resumes showing elapsed time and SSE events will clear the generation flag when complete.
+
+### Designer Auto-Open — IMPLEMENTED (v4.0)
+
+On page load, the designer only auto-opens if the active plan has design data (checked via `GET /api/design/pages?plan_id=X`). This prevents opening a blank designer on fresh projects with no design components yet.
 
 ### User Communication Popup
 

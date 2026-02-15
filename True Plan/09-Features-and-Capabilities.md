@@ -338,7 +338,7 @@ flowchart TB
 | Context Management (v1.1) | 4 | 4 | 0 | 0 | 100% |
 | Ethics & Transparency (v2.0) | 3 | 3 | 0 | 0 | 100% |
 | Multi-Device Sync (v2.0) | 5 | 5 | 0 | 0 | 100% |
-| **TOTAL** | **47** | **36** | **6** | **5** | **77%** |
+| **TOTAL** | **53** | **42** | **6** | **5** | **79%** |
 
 ### Agent Compliance (Plan Intent vs Actual)
 
@@ -353,6 +353,7 @@ flowchart TB
 | Boss Agent | 100% | Fixed: All 7 thresholds now active |
 | Custom Agent | 100% | Fully matches plan spec including hardlocks |
 | CodingAgentService | 100% | All 6 intents, ethics gate, code gen, diffs |
+| Review Agent | 100% | Deterministic complexity + LLM scoring, auto-approval matrix |
 
 ### v2.0 Service Compliance
 
@@ -389,6 +390,12 @@ flowchart TB
 - **Agent Display** — Assigned agent badge, stage badge, acceptance criteria, verification result in ticket detail
 - **Active Ticket SSE Feedback** — Real-time status banners (Processing, Verifying, Retrying)
 - **Ticket Limits** — Max 10 active. P1 bumps P3 when at limit.
+- **Review Agent** — Smart auto-review for completed tickets. Deterministic complexity classification + LLM scoring. Auto-approves simple/moderate, flags complex for user.
+- **Peek-then-Remove Queue** — Prevents ticket orphaning on agent errors. Queue entries only removed after success.
+- **Error Recovery** — 3 error retries per ticket, then Ghost Ticket escalation. Startup recovery for orphaned tickets.
+- **Idle Watchdog Recovery** — Stuck tickets with `processing_status: 'processing'` are auto-recovered.
+- **Progress Dashboard** — Live processing status on Planning page with progress bar, current ticket, queue depth, elapsed timer.
+- **SSE Named Events** — Proper `/events` endpoint with named `event:` lines for `addEventListener` compatibility.
 
 #### User Communication Queue ✅
 - **Question Popup** — Focused 1-question-at-a-time popup (replaces free-form chat)

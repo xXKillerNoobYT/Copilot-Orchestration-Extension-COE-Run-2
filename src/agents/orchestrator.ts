@@ -16,19 +16,21 @@ import { DesignArchitectAgent } from './design-architect-agent';
 import { GapHunterAgent } from './gap-hunter-agent';
 import { DesignHardenerAgent } from './design-hardener-agent';
 import { DecisionMemoryAgent } from './decision-memory-agent';
+import { ReviewAgent } from './review-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
 import { TaskDecompositionEngine } from '../core/task-decomposition-engine';
+import { EventBus } from '../core/event-bus';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
-    ConversationRole, Task, TaskStatus
+    ConversationRole, Task, TaskStatus, TicketPriority
 } from '../types';
 
 const INTENT_CATEGORIES = [
     'planning', 'verification', 'ui_testing', 'observation',
     'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
-    'question', 'research', 'custom', 'general',
+    'review', 'question', 'research', 'custom', 'general',
 ] as const;
 
 /**
@@ -39,15 +41,16 @@ const INTENT_PRIORITY: Record<string, number> = {
     verification: 0,
     ui_testing: 1,
     observation: 2,
-    design_architect: 3,
-    gap_hunter: 4,
-    design_hardener: 5,
-    decision_memory: 6,
-    planning: 7,
-    question: 8,
-    research: 9,
-    custom: 10,
-    general: 11,
+    review: 3,
+    design_architect: 4,
+    gap_hunter: 5,
+    design_hardener: 6,
+    decision_memory: 7,
+    planning: 8,
+    question: 9,
+    research: 10,
+    custom: 11,
+    general: 12,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -105,6 +108,11 @@ const KEYWORD_MAP: Record<string, string[]> = {
         'previous decision', 'past answer', 'user preference', 'decision history',
         'conflict check', 'what did user say', 'decision lookup', 'past choices',
     ],
+    review: [
+        'review ticket', 'auto-approve', 'approve ticket', 'review deliverable',
+        'ticket review', 'quality check', 'review output', 'check deliverable',
+        'approval status', 'review queue', 'pending review', 'review result',
+    ],
     custom: [
         'custom agent', 'run agent', 'specialist', 'domain expert',
         'custom tool', 'agent gallery', 'my agent', 'specialized',
@@ -121,28 +129,50 @@ export class Orchestrator extends BaseAgent {
 Classify every incoming message into EXACTLY ONE intent category, then route it to the correct specialist agent. You NEVER write code, NEVER answer questions directly, and NEVER make plans yourself.
 
 ## Intent Categories (in tie-breaking priority order)
-1. **verification** — The message is about checking, testing, validating, or confirming completed work.
+1. **verification** — Checking, testing, validating, or confirming completed work.
    Examples: "verify my auth endpoint works", "check if task 42 passes acceptance criteria", "run tests on the login module"
-2. **planning** — The message is about creating plans, breaking down requirements, defining tasks, or scoping work.
+2. **ui_testing** — UI-specific testing: visual tests, layout checks, component tests, e2e tests.
+   Examples: "test the login page layout", "run e2e tests on navigation", "check if the button renders correctly"
+3. **observation** — System health reviews, improvement suggestions, technical debt, pattern detection.
+   Examples: "review system health", "find improvements in the codebase", "detect recurring issues"
+4. **review** — Reviewing ticket deliverables, auto-approval, quality checks on completed work.
+   Examples: "review this ticket output", "check deliverable quality", "what's in the review queue?"
+5. **design_architect** — Design structure review, page hierarchy assessment, design scoring.
+   Examples: "review the design architecture", "score the page hierarchy", "assess design quality"
+6. **gap_hunter** — Finding missing components, coverage gaps, completeness checks in designs.
+   Examples: "find gaps in the design", "what components are missing?", "run completeness check"
+7. **design_hardener** — Filling gaps, proposing draft components, hardening incomplete designs.
+   Examples: "harden the design", "propose missing components", "fill the gaps found by gap hunter"
+8. **decision_memory** — Looking up past decisions, user preferences, conflict checks.
+   Examples: "what did the user decide about auth?", "check for conflicting decisions", "recall past preferences"
+9. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
    Examples: "plan a REST API with auth", "break this feature into tasks", "create a roadmap for v2"
-3. **question** — The message is asking for information, clarification, or explanation.
-   Examples: "how does the database schema work?", "what's the difference between P1 and P2?", "explain the verification flow"
-4. **research** — The message requires investigation, comparison, benchmarking, or deep analysis.
-   Examples: "compare SQLite vs PostgreSQL for our use case", "investigate why tests are slow", "what are best practices for MCP servers?"
-5. **custom** — The message explicitly requests a custom or specialized agent.
-   Examples: "run my custom lint agent", "invoke the security specialist", "call agent gallery"
-6. **general** — The message does not fit any of the above categories. Route to the Answer Agent as a fallback.
+10. **question** — Asking for information, clarification, or explanation.
+    Examples: "how does the database schema work?", "what's the difference between P1 and P2?", "explain the verification flow"
+11. **research** — Investigation, comparison, benchmarking, or deep analysis.
+    Examples: "compare SQLite vs PostgreSQL for our use case", "investigate why tests are slow", "best practices for MCP servers?"
+12. **custom** — Explicitly requesting a custom or specialized agent.
+    Examples: "run my custom lint agent", "invoke the security specialist", "call agent gallery"
+13. **general** — Does not fit any of the above. Fallback to Answer Agent.
 
 ## Tie-Breaking Rules
-If a message matches multiple categories, use this priority: verification > planning > question > research > custom > general.
+If a message matches multiple categories, use this priority (highest first):
+verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general.
 Example: "verify my plan is correct" matches both verification and planning — choose verification.
-Example: "plan how to test the API" matches both planning and verification — choose verification.
+Example: "review the design quality" matches both review and design_architect — choose review.
 
 ## Output Format
-When classifying, respond with ONLY the category name as a single lowercase word. No explanation, no punctuation, no extra text.
+When classifying, respond with ONLY the category name as a single lowercase word (use underscores for multi-word categories). No explanation, no punctuation, no extra text.
 
 ## Routing Rules
 - verification → Verification Team
+- ui_testing → UI Testing Agent
+- observation → Observation Agent
+- review → Review Agent
+- design_architect → Design Architect Agent
+- gap_hunter → Gap Hunter Agent
+- design_hardener → Design Hardener Agent
+- decision_memory → Decision Memory Agent
 - planning → Planning Team
 - question → Answer Agent
 - research → Research Agent
@@ -170,8 +200,12 @@ When classifying, respond with ONLY the category name as a single lowercase word
     private gapHunterAgent!: GapHunterAgent;
     private designHardenerAgent!: DesignHardenerAgent;
     private decisionMemoryAgent!: DecisionMemoryAgent;
+    private reviewAgent!: ReviewAgent;
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
+    private eventBus: EventBus | null = null;
+    // v4.1: Track scheduled timers for cleanup on dispose
+    private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
     setEvolutionService(service: EvolutionService): void {
         this.evolutionService = service;
@@ -179,6 +213,14 @@ When classifying, respond with ONLY the category name as a single lowercase word
 
     getEvolutionService(): EvolutionService | null {
         return this.evolutionService;
+    }
+
+    setEventBus(eventBus: EventBus): void {
+        this.eventBus = eventBus;
+    }
+
+    getEventBus(): EventBus | null {
+        return this.eventBus;
     }
 
     constructor(
@@ -206,6 +248,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.gapHunterAgent = new GapHunterAgent(this.database, this.llm, this.config, this.outputChannel);
         this.designHardenerAgent = new DesignHardenerAgent(this.database, this.llm, this.config, this.outputChannel);
         this.decisionMemoryAgent = new DecisionMemoryAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.reviewAgent = new ReviewAgent(this.database, this.llm, this.config, this.outputChannel);
 
         await Promise.all([
             this.planningAgent.initialize(),
@@ -221,6 +264,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.gapHunterAgent.initialize(),
             this.designHardenerAgent.initialize(),
             this.decisionMemoryAgent.initialize(),
+            this.reviewAgent.initialize(),
         ]);
 
         this.outputChannel.appendLine('All agents initialized.');
@@ -244,18 +288,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.evolutionService?.incrementCallCounter();
             return response;
         } catch (error) {
-            // Error boundary: never crash, create investigation ticket
-            const msg = error instanceof Error ? error.message : String(error);
-            this.outputChannel.appendLine(`Agent ${agent.name} error: ${msg}`);
-            this.database.addAuditLog('orchestrator', 'agent_error', `${agent.name}: ${msg}`);
-            this.database.createTicket({
-                title: `Agent error: ${agent.name}`,
-                body: `Agent "${agent.name}" threw an error while processing message.\n\nError: ${msg}\n\nOriginal message: ${message.substring(0, 200)}`,
-                priority: 'P1' as any,
-                creator: 'Orchestrator',
-                task_id: context.task?.id,
-            });
-            return { content: `Error from ${agent.name}: ${msg}. Investigation ticket created.` };
+            return this.handleAgentError(agent.name, error, message, context, true);
         }
     }
 
@@ -271,11 +304,51 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.evolutionService?.incrementCallCounter();
             return response;
         } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            this.outputChannel.appendLine(`Direct call to ${agentName} error: ${msg}`);
-            this.database.addAuditLog('orchestrator', 'agent_error', `${agentName}: ${msg}`);
-            return { content: `Error from ${agentName}: ${msg}` };
+            return this.handleAgentError(agentName, error, message, context, false);
         }
+    }
+
+    /**
+     * v4.1 — Shared error boundary for all agent call paths.
+     * Captures stack trace, logs to audit, emits structured event, creates investigation ticket.
+     * @param createTicket Whether to create an investigation ticket (route path) or just log (direct call path)
+     */
+    private handleAgentError(
+        agentName: string,
+        error: unknown,
+        message: string,
+        context: AgentContext,
+        createInvestigationTicket: boolean,
+    ): AgentResponse {
+        const msg = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? (error.stack ?? '').substring(0, 2000) : '';
+
+        this.outputChannel.appendLine(`Agent ${agentName} error: ${msg}`);
+        this.database.addAuditLog('orchestrator', 'agent_error',
+            `${agentName}: ${msg}${stack ? `\nStack: ${stack.substring(0, 500)}` : ''}`);
+
+        // v4.1: Emit structured agent:error event for observability
+        this.eventBus?.emit('agent:error', 'orchestrator', {
+            agentName,
+            error: msg,
+            stack,
+            ticketId: context.ticket?.id,
+            taskId: context.task?.id,
+            messagePreview: message.substring(0, 200),
+        });
+
+        if (createInvestigationTicket) {
+            this.database.createTicket({
+                title: `Agent error: ${agentName}`,
+                body: `Agent "${agentName}" threw an error while processing message.\n\nError: ${msg}\n${stack ? `\nStack trace:\n${stack}\n` : ''}\nOriginal message: ${message.substring(0, 200)}`,
+                priority: TicketPriority.P1,
+                creator: 'Orchestrator',
+                task_id: context.task?.id,
+            });
+            return { content: `Error from ${agentName}: ${msg}. Investigation ticket created.` };
+        }
+
+        return { content: `Error from ${agentName}: ${msg}` };
     }
 
     private async classifyIntent(message: string): Promise<string> {
@@ -333,6 +406,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             case 'gap_hunter': return this.gapHunterAgent;
             case 'design_hardener': return this.designHardenerAgent;
             case 'decision_memory': return this.decisionMemoryAgent;
+            case 'review': return this.reviewAgent;
             case 'question': return this.answerAgent;
             case 'research': return this.researchAgent;
             case 'custom': return this.customAgentRunner;
@@ -357,6 +431,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             gap_hunter: this.gapHunterAgent,
             design_hardener: this.designHardenerAgent,
             decision_memory: this.decisionMemoryAgent,
+            review: this.reviewAgent,
         };
         return agents[name.toLowerCase()] || null;
     }
@@ -379,7 +454,12 @@ When classifying, respond with ONLY the category name as a single lowercase word
 
         // Schedule verification after delay with retry logic
         const delay = this.config.getConfig().verification.delaySeconds * 1000;
-        setTimeout(() => this.runVerificationWithRetry(taskId, task.title, filesModified, summary, 0), delay);
+        const timer = setTimeout(() => {
+            this.pendingTimers.delete(timer);
+            this.runVerificationWithRetry(taskId, task.title, filesModified, summary, 0)
+                .catch(e => this.outputChannel.appendLine(`Unhandled verification error: ${e}`));
+        }, delay);
+        this.pendingTimers.add(timer);
     }
 
     private async runVerificationWithRetry(
@@ -406,13 +486,18 @@ When classifying, respond with ONLY the category name as a single lowercase word
 
             if (attempt === 0) {
                 // Retry once after 30 seconds
-                setTimeout(() => this.runVerificationWithRetry(taskId, title, filesModified, summary, 1), 30_000);
+                const retryTimer = setTimeout(() => {
+                    this.pendingTimers.delete(retryTimer);
+                    this.runVerificationWithRetry(taskId, title, filesModified, summary, 1)
+                        .catch(e => this.outputChannel.appendLine(`Unhandled verification retry error: ${e}`));
+                }, 30_000);
+                this.pendingTimers.add(retryTimer);
             } else {
                 // After 2 failures, create investigation ticket
                 this.database.createTicket({
                     title: `Verification failed: ${title}`,
                     body: `Automated verification failed twice for task ${taskId}.\n\nError: ${error}\n\nFiles: ${filesModified.join(', ')}\nSummary: ${summary}`,
-                    priority: 'P1' as any,
+                    priority: TicketPriority.P1,
                     creator: 'Orchestrator',
                     task_id: taskId,
                 });
@@ -457,6 +542,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
     getGapHunterAgent(): GapHunterAgent { return this.gapHunterAgent; }
     getDesignHardenerAgent(): DesignHardenerAgent { return this.designHardenerAgent; }
     getDecisionMemoryAgent(): DecisionMemoryAgent { return this.decisionMemoryAgent; }
+    getReviewAgent(): ReviewAgent { return this.reviewAgent; }
 
     /**
      * Get all agents (including the orchestrator itself) as an array.
@@ -478,6 +564,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.gapHunterAgent,
             this.designHardenerAgent,
             this.decisionMemoryAgent,
+            this.reviewAgent,
         ];
     }
 
@@ -501,6 +588,9 @@ When classifying, respond with ONLY the category name as a single lowercase word
     }
 
     dispose(): void {
+        // v4.1: Clear all pending verification timers
+        for (const timer of this.pendingTimers) clearTimeout(timer);
+        this.pendingTimers.clear();
         super.dispose();
         this.planningAgent?.dispose();
         this.answerAgent?.dispose();
@@ -515,5 +605,6 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.gapHunterAgent?.dispose();
         this.designHardenerAgent?.dispose();
         this.decisionMemoryAgent?.dispose();
+        this.reviewAgent?.dispose();
     }
 }

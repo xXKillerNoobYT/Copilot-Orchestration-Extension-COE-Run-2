@@ -401,7 +401,7 @@ When a task is blocked by an unanswered question:
 4. User answers → Clarity Agent scores → score >= 85 → Ghost resolved → Original unblocks
 5. **3-Strike Dismiss Rule**: Dismiss 1-2 → re-queued after 30 minutes. Dismiss 3 → AI proceeds with best assumption, decision logged.
 
-### Ticket Auto-Processing Safety — IMPLEMENTED (v2.0)
+### Ticket Auto-Processing Safety — IMPLEMENTED (v2.0, updated v4.0)
 
 The `TicketProcessorService` enforces multiple safety layers:
 
@@ -412,8 +412,26 @@ The `TicketProcessorService` enforces multiple safety layers:
 | **Max 10 active tickets** | P1 can bump P3 to pending when at limit |
 | **Tiered retry** | Auto-retry 3x → Boss classifies severity → minor: keep retrying → major: escalate |
 | **Phase gates** | No manual override — system checks explicit criteria before advancing |
-| **Idle watchdog** | 5-min idle timeout triggers Boss AI health check |
+| **Idle watchdog** | 5-min idle timeout triggers Boss AI health check + stuck ticket recovery |
 | **Acceptance criteria** | Auto-generated per deliverable type, verified on resolution |
+| **Peek-then-remove** | Queue entries peeked before processing — only removed on success. Prevents orphaned tickets |
+| **Review gate** | Non-communication tickets pass through Review Agent after processing. Auto-approved or flagged for user |
+| **Error recovery** | 3 error retries with `errorRetryCount`, then escalation via Ghost Ticket |
+| **Startup recovery** | On extension activation, orphaned `in_review` tickets are reset and re-queued |
+
+### Review Agent Auto-Approval Thresholds — IMPLEMENTED (v4.0)
+
+The Review Agent provides a smart quality gate:
+
+| Complexity | Classification | Auto-Approve Threshold |
+|-----------|---------------|----------------------|
+| **Simple** | communication, page_creation, scaffold, fix typo, rename | Score >= 70 |
+| **Moderate** | default for unmatched tickets | Score >= 85 |
+| **Complex** | code_generation, implement, build, architect, security, migration | **NEVER** — always flagged for user |
+
+- Classification is deterministic (no LLM) based on `deliverable_type`, `operation_type`, and title patterns
+- Scoring uses LLM: clarity, completeness, correctness (0-100 each), averaged
+- Flagged tickets get `processing_status: 'holding'` and emit `ticket:review_flagged` event
 
 ### Decision Memory Deduplication — IMPLEMENTED (v2.0)
 

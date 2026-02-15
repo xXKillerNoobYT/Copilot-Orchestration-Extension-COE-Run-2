@@ -56,9 +56,14 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                      │Gap Hunter     │ │AGENT     │ │ AGENTS       │
                      │Hardener       │ │          │ │              │
                      └───────────────┘ └──────────┘ └──────────────┘
+                                                          │
+                                                   ┌──────▼──────┐
+                                                   │  REVIEW     │
+                                                   │  AGENT      │
+                                                   └─────────────┘
 ```
 
-**14 total agents** (10 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
+**15 total agents** (11 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
 
 ---
 
@@ -650,6 +655,27 @@ Three specialized agents that work together to ensure design quality before codi
 **Classification**: 13 fixed categories (authentication, database, styling, ui_ux, api_design, testing, deployment, architecture, data_model, behavior, accessibility, performance, security) + custom categories for edge cases.
 
 **Fast Path**: Keyword matching first (no LLM cost), LLM only for semantic comparison when keyword candidates are found with 3+ word overlap.
+
+---
+
+## Team 9b: Review Agent (v4.0) — IMPLEMENTED
+
+> **👤 User View**: The Review Agent acts as a quality gate for completed tickets. When an agent finishes processing a ticket, the Review Agent automatically evaluates the deliverable quality and decides whether to auto-approve it or flag it for your review. Simple tasks (page creation, scaffolding) are auto-approved if quality is high enough; complex tasks (code generation, architecture) always go to you.
+
+> **🔧 Developer View**: `ReviewAgent` extends `BaseAgent`. Deterministic complexity classification based on `deliverable_type`, `operation_type`, and title pattern matching (no LLM). LLM-based scoring on three dimensions (clarity, completeness, correctness, 0-100 each). Auto-approval matrix: simple >= 70, moderate >= 85, complex = never. Non-approved tickets get an `escalate` action and `processing_status: 'holding'` for user review.
+
+**File**: `src/agents/review-agent.ts`
+
+**Responsibilities**:
+1. **Complexity classification** (deterministic, no LLM):
+   - `simple`: communication, page_creation, scaffold, fix typo, rename
+   - `moderate`: default for unmatched tickets
+   - `complex`: code_generation, implement, build, architect, security, migration
+2. **Deliverable scoring** (LLM-based): clarity, completeness, correctness (0-100 each)
+3. **Auto-approval decision**: simple >= 70 auto-approve, moderate >= 85 auto-approve, complex = always flag for user
+4. **Escalation**: Non-approved tickets produce `escalate` action with scores, issues, and suggestions
+
+**Integration**: Called by `TicketProcessorService` after agent processing, before verification. Non-communication tickets only.
 
 ---
 

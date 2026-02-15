@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Database } from './database';
 import { ConfigManager } from './config';
 import { LLMService } from './llm-service';
+import { TicketPriority } from '../types';
 
 interface DetectedPattern {
     signature: string;
@@ -135,7 +136,7 @@ export class EvolutionService {
                 this.database.createTicket({
                     title: `[Evolution] Proposed fix: ${proposal.proposal.substring(0, 60)}`,
                     body: `The Evolution System detected a recurring pattern and proposes a fix.\n\nPattern: ${pattern.signature}\nFrequency: ${pattern.frequency} occurrences\nProposal: ${proposal.proposal}\n\nApprove this change? Reply "approved" to apply or "rejected" to dismiss.`,
-                    priority: 'P1' as any,
+                    priority: TicketPriority.P1,
                     creator: 'Evolution System',
                 });
                 this.outputChannel.appendLine(`Evolution: P1 proposal created for "${pattern.signature}" — awaiting human approval`);
