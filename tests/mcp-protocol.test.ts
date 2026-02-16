@@ -103,6 +103,9 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             streamStallTimeoutSeconds: 10,
             maxTokens: 500,
             maxInputTokens: 4000,
+            maxRequestRetries: 0,
+            maxConcurrentRequests: 4,
+            bossReservedSlots: 1,
         };
         const llm = new LLMService(llmConfig, outputChannel);
 

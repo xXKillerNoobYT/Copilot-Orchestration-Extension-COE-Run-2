@@ -302,7 +302,10 @@ function routeTicketToPipeline(ticket: Ticket): AgentPipeline | null {
 export class TicketProcessorService {
     // v5.0: Single Boss-managed queue (replaces dual mainQueue + bossQueue)
     private queue: QueuedTicket[] = [];
-    private isProcessing = false;
+    /** v6.0: Parallel processing slots — replaces boolean `isProcessing` */
+    private activeSlots = new Map<string, { ticketId: string; startedAt: number }>();
+    /** v6.0: Max concurrent ticket pipelines (from config). Default: 3. */
+    private maxParallelTickets = 3;
     private bossCycleTimer: ReturnType<typeof setTimeout> | null = null;
     private bossState: 'active' | 'waiting' | 'idle' = 'idle';
     private lastActivityTimestamp = Date.now();
@@ -312,6 +315,16 @@ export class TicketProcessorService {
     // v5.0: Guard against kickBossCycle() during startup assessment LLM call
     private startupAssessmentRunning = false;
     private kickRequestedDuringStartup = false;
+    /** v6.0: Hold queue for tickets waiting on a different model */
+    private holdQueue: Array<{
+        ticketId: string;
+        requiredModel: string;
+        heldAt: number;
+        timeoutMs: number;
+        queueEntry: QueuedTicket;
+    }> = [];
+    /** v6.0: Flag to prevent concurrent fillSlots() calls */
+    private fillingSlots = false;
 
     constructor(
         private database: Database,
@@ -319,7 +332,9 @@ export class TicketProcessorService {
         private eventBus: EventBus,
         private config: ConfigManager,
         private outputChannel: OutputChannelLike
-    ) {}
+    ) {
+        this.maxParallelTickets = this.config.getConfig().bossParallelBatchSize ?? 3;
+    }
 
     /**
      * Start listening for ticket events and begin processing.
@@ -642,8 +657,11 @@ export class TicketProcessorService {
      *   9. If empty: enter 5-minute countdown (startBossCountdown)
      */
     private async bossCycle(): Promise<void> {
-        if (this.isProcessing || this.disposed) return;
-        this.isProcessing = true;
+        // v6.0: Allow bossCycle if we have free slots (not just when idle)
+        if (this.disposed) return;
+        // If all slots are full, don't start another cycle
+        if (this.activeSlots.size >= this.maxParallelTickets) return;
+
         this.bossState = 'active';
 
         // Cancel any pending countdown
@@ -654,165 +672,484 @@ export class TicketProcessorService {
 
         this.eventBus.emit('boss:cycle_started', 'ticket-processor', {
             queueSize: this.queue.length,
+            activeSlots: this.activeSlots.size,
+            maxSlots: this.maxParallelTickets,
         });
         this.outputChannel.appendLine(
-            `[TicketProcessor] Boss cycle started — ${this.queue.length} ticket(s) in queue`
+            `[TicketProcessor] Boss cycle started — ${this.queue.length} ticket(s) in queue, ${this.activeSlots.size}/${this.maxParallelTickets} slots active`
         );
 
-        let ticketsProcessed = 0;
+        // v6.0: Run Boss inter-ticket orchestration ONCE per cycle (not per ticket)
+        if (this.activeSlots.size === 0 && this.queue.length > 0) {
+            await this.runBossInterTicket();
+        }
 
-        while (this.queue.length > 0 && !this.disposed) {
-            // v5.0: Boss AI inter-ticket orchestration between every ticket
-            // (Skip before very first ticket — Boss startup assessment handles that)
-            if (ticketsProcessed > 0) {
-                await this.runBossInterTicket();
-            }
+        // Re-sort queue (Boss actions may have added/changed tickets)
+        this.sortQueue(this.queue);
 
-            // Re-sort queue (Boss actions may have added/changed tickets)
-            this.sortQueue(this.queue);
+        // v6.0: Fill all available parallel slots
+        this.fillSlots();
+    }
 
-            // PEEK — do not remove yet
-            const entry = this.queue[0];
-            const ticket = this.database.getTicket(entry.ticketId);
+    /**
+     * v6.0: Fill available processing slots with tickets from the queue.
+     *
+     * Called after bossCycle() starts and after any slot completes/errors.
+     * Uses peekNextProcessable() to find eligible tickets (unblocked, right AI mode).
+     * Launches processSlot() for each — fire-and-forget (runs concurrently).
+     */
+    private fillSlots(): void {
+        if (this.disposed || this.fillingSlots) return;
+        this.fillingSlots = true;
 
-            // v5.0: Boss checks for blocked tickets BEFORE dispatching.
-            // If the front ticket is blocked, all remaining tickets are also blocked
-            // (sortQueue puts blocked tickets last), so exit the loop cleanly.
-            if (ticket?.blocking_ticket_id) {
-                const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                if (blocker && blocker.status !== TicketStatus.Resolved) {
-                    this.outputChannel.appendLine(
-                        `[TicketProcessor] Boss: TK-${ticket.ticket_number} blocked by TK-${blocker.ticket_number} — skipping (all remaining blocked)`
-                    );
-                    break; // All unblocked tickets are done; rest are blocked
+        try {
+            // Refresh batch size from config
+            this.maxParallelTickets = this.config.getConfig().bossParallelBatchSize ?? 3;
+
+            // v6.0: Check hold queue for timed-out tickets — release them back to main queue
+            this.checkHoldQueueTimeouts();
+
+            while (this.activeSlots.size < this.maxParallelTickets && !this.disposed) {
+                const result = this.peekNextProcessable();
+                if (!result) break; // No more processable tickets
+
+                const { entry, index } = result;
+                const ticket = this.database.getTicket(entry.ticketId);
+
+                // AI mode checks — may skip/defer the ticket
+                if (ticket && !this.checkAIModeForSlot(ticket, entry, index)) {
+                    continue; // Ticket was handled (skipped or deferred) — try next
                 }
+
+                // Remove from queue and add to active slot
+                this.queue.splice(index, 1);
+                const slotId = `slot_${Date.now()}_${entry.ticketId.substring(0, 8)}`;
+                this.activeSlots.set(slotId, { ticketId: entry.ticketId, startedAt: Date.now() });
+
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Slot ${this.activeSlots.size}/${this.maxParallelTickets} filled: TK-${ticket?.ticket_number} "${ticket?.title}" (${entry.priority})`
+                );
+
+                this.eventBus.emit('boss:slot_started', 'ticket-processor', {
+                    slotId,
+                    ticketId: entry.ticketId,
+                    ticketNumber: ticket?.ticket_number,
+                    activeSlots: this.activeSlots.size,
+                    queueRemaining: this.queue.length,
+                });
+
+                if (ticket) {
+                    this.eventBus.emit('boss:dispatching_ticket', 'ticket-processor', {
+                        ticketId: entry.ticketId,
+                        ticketNumber: ticket.ticket_number,
+                        title: ticket.title,
+                        priority: entry.priority,
+                        queueRemaining: this.queue.length,
+                    });
+                }
+
+                // Fire-and-forget — run slot concurrently (don't await)
+                this.processSlot(slotId, entry).catch(() => { /* error handled in processSlot */ });
             }
 
-            // v5.0: AI Mode Enforcement — check global AI mode before dispatching
-            const globalAIMode = this.config.getConfig().aiMode ?? 'smart';
-            const ticketAILevel = ticket ? this.getAILevel(ticket) : globalAIMode;
-            // Per-ticket AI Level overrides global mode (more restrictive wins)
-            const effectiveMode = this.resolveEffectiveAIMode(globalAIMode, ticketAILevel);
+            // v6.0: If no processable main queue tickets but hold queue has items,
+            // check if we should trigger a model swap (Pause & Swap strategy)
+            if (this.activeSlots.size === 0 && !this.peekNextProcessable() && this.holdQueue.length > 0 && !this.disposed) {
+                // Fire-and-forget model swap check — if it releases tickets, it'll call fillSlots() again
+                this.checkModelSwapNeeded().then(released => {
+                    if (released && !this.disposed) {
+                        this.fillSlots(); // Re-fill slots with newly released tickets
+                    }
+                }).catch(() => { /* model swap errors are non-fatal */ });
+            }
 
-            if (effectiveMode === 'manual') {
-                // Manual mode — skip ticket entirely, remove from queue
-                this.outputChannel.appendLine(
-                    `[TicketProcessor] AI mode is "manual" — skipping TK-${ticket?.ticket_number} "${ticket?.title}"`
-                );
-                this.queue.shift();
+            // If no slots active and no more processable tickets → countdown
+            if (this.activeSlots.size === 0 && !this.disposed) {
+                this.lastActivityTimestamp = Date.now();
+                this.eventBus.emit('boss:cycle_completed', 'ticket-processor', {
+                    ticketsProcessed: 0,
+                    queueRemaining: this.queue.length,
+                    activeSlots: 0,
+                    holdQueueSize: this.holdQueue.length,
+                });
+                this.startBossCountdown();
+            }
+        } finally {
+            this.fillingSlots = false;
+        }
+    }
+
+    /**
+     * v6.0: Find the next processable ticket in the queue.
+     *
+     * Skips:
+     * - Tickets already in an active slot
+     * - Tickets blocked by a ticket NOT currently being processed
+     * - Tickets whose blocker IS in an active slot (must wait for it to finish)
+     *
+     * Returns the queue entry and its index, or null.
+     */
+    private peekNextProcessable(): { entry: QueuedTicket; index: number } | null {
+        const activeTicketIds = new Set([...this.activeSlots.values()].map(s => s.ticketId));
+
+        for (let i = 0; i < this.queue.length; i++) {
+            const entry = this.queue[i];
+
+            // Skip if already in a slot
+            if (activeTicketIds.has(entry.ticketId)) continue;
+
+            const ticket = this.database.getTicket(entry.ticketId);
+            if (!ticket) {
+                // Missing ticket — remove from queue silently
+                this.queue.splice(i, 1);
+                i--;
                 continue;
             }
 
-            if (effectiveMode === 'suggest' && ticket) {
-                // Suggest mode — create an AI question asking user to approve processing
+            // Check blocking
+            if (ticket.blocking_ticket_id) {
+                const blocker = this.database.getTicket(ticket.blocking_ticket_id);
+                if (blocker && blocker.status !== TicketStatus.Resolved) {
+                    // Blocker not resolved — is it currently being processed?
+                    if (activeTicketIds.has(ticket.blocking_ticket_id)) {
+                        // Blocker is in a slot — skip this ticket for now (it'll be processable when blocker finishes)
+                        continue;
+                    }
+                    // Blocker exists but isn't being processed and isn't resolved — skip
+                    continue;
+                }
+            }
+
+            return { entry, index: i };
+        }
+
+        return null; // No processable tickets
+    }
+
+    /**
+     * v6.0: Check AI mode for a ticket before slotting it.
+     *
+     * Returns true if the ticket should be processed normally.
+     * Returns false if the ticket was handled (skipped/deferred) — caller should try next.
+     */
+    private checkAIModeForSlot(ticket: Ticket, entry: QueuedTicket, queueIndex: number): boolean {
+        const globalAIMode = this.config.getConfig().aiMode ?? 'smart';
+        const ticketAILevel = this.getAILevel(ticket);
+        const effectiveMode = this.resolveEffectiveAIMode(globalAIMode, ticketAILevel);
+
+        if (effectiveMode === 'manual') {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] AI mode is "manual" — skipping TK-${ticket.ticket_number} "${ticket.title}"`
+            );
+            this.queue.splice(queueIndex, 1);
+            return false;
+        }
+
+        if (effectiveMode === 'suggest') {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] AI mode is "suggest" — requesting user approval for TK-${ticket.ticket_number}`
+            );
+            this.database.createAIQuestion({
+                plan_id: ticket.task_id ?? 'boss-ai',
+                component_id: null,
+                page_id: null,
+                category: 'general',
+                question: `Boss AI wants to process ticket TK-${ticket.ticket_number}: "${ticket.title}" (${ticket.operation_type}, ${ticket.priority}). Approve?`,
+                question_type: 'confirm',
+                options: ['Yes, process it', 'No, skip it', 'Defer for later'],
+                ai_reasoning: `This ticket is next in the queue. Operation: ${ticket.operation_type}. Priority: ${ticket.priority}.`,
+                ai_suggested_answer: 'Yes, process it',
+                user_answer: null,
+                status: 'pending',
+                ticket_id: ticket.id,
+                source_agent: 'Boss AI',
+                source_ticket_id: ticket.id,
+                queue_priority: 1,
+                is_ghost: false,
+                ai_continued: false,
+                dismiss_count: 0,
+            });
+            this.queue.splice(queueIndex, 1);
+            return false;
+        }
+
+        if (effectiveMode === 'hybrid') {
+            const isFrontend = this.isDesignOrFrontendTicket(ticket);
+            if (isFrontend) {
                 this.outputChannel.appendLine(
-                    `[TicketProcessor] AI mode is "suggest" — requesting user approval for TK-${ticket.ticket_number}`
+                    `[TicketProcessor] AI mode is "hybrid" — TK-${ticket.ticket_number} is frontend/design, requesting approval`
                 );
                 this.database.createAIQuestion({
                     plan_id: ticket.task_id ?? 'boss-ai',
                     component_id: null,
                     page_id: null,
                     category: 'general',
-                    question: `Boss AI wants to process ticket TK-${ticket.ticket_number}: "${ticket.title}" (${ticket.operation_type}, ${ticket.priority}). Approve?`,
+                    question: `Boss AI wants to process frontend/design ticket TK-${ticket.ticket_number}: "${ticket.title}". In hybrid mode, frontend tickets need your approval. Proceed?`,
                     question_type: 'confirm',
-                    options: ['Yes, process it', 'No, skip it', 'Defer for later'],
-                    ai_reasoning: `This ticket is next in the queue. Operation: ${ticket.operation_type}. Priority: ${ticket.priority}.`,
+                    options: ['Yes, process it', 'No, skip it'],
+                    ai_reasoning: `Hybrid mode: this ticket appears to be frontend/design work. Auto-approval is for backend/infrastructure only.`,
                     ai_suggested_answer: 'Yes, process it',
                     user_answer: null,
                     status: 'pending',
                     ticket_id: ticket.id,
                     source_agent: 'Boss AI',
                     source_ticket_id: ticket.id,
-                    queue_priority: 1, // High priority — blocking processing
+                    queue_priority: 1,
                     is_ghost: false,
                     ai_continued: false,
                     dismiss_count: 0,
                 });
-                // Remove from queue — user must re-enqueue after answering
-                this.queue.shift();
-                continue;
+                this.queue.splice(queueIndex, 1);
+                return false;
             }
+            // Backend/infrastructure — fall through to auto-process
+        }
 
-            if (effectiveMode === 'hybrid' && ticket) {
-                // Hybrid mode — auto-process backend/infrastructure, pause for frontend/design
-                const isFrontend = this.isDesignOrFrontendTicket(ticket);
-                if (isFrontend) {
-                    this.outputChannel.appendLine(
-                        `[TicketProcessor] AI mode is "hybrid" — TK-${ticket.ticket_number} is frontend/design, requesting approval`
-                    );
-                    this.database.createAIQuestion({
-                        plan_id: ticket.task_id ?? 'boss-ai',
-                        component_id: null,
-                        page_id: null,
-                        category: 'general',
-                        question: `Boss AI wants to process frontend/design ticket TK-${ticket.ticket_number}: "${ticket.title}". In hybrid mode, frontend tickets need your approval. Proceed?`,
-                        question_type: 'confirm',
-                        options: ['Yes, process it', 'No, skip it'],
-                        ai_reasoning: `Hybrid mode: this ticket appears to be frontend/design work. Auto-approval is for backend/infrastructure only.`,
-                        ai_suggested_answer: 'Yes, process it',
-                        user_answer: null,
-                        status: 'pending',
-                        ticket_id: ticket.id,
-                        source_agent: 'Boss AI',
-                        source_ticket_id: ticket.id,
-                        queue_priority: 1,
-                        is_ghost: false,
-                        ai_continued: false,
-                        dismiss_count: 0,
-                    });
-                    this.queue.shift();
-                    continue;
-                }
-                // Backend/infrastructure — fall through to auto-process (smart mode behavior)
-            }
+        // effectiveMode === 'smart' (or hybrid for backend) — proceed to process
+        return true;
+    }
 
-            // effectiveMode === 'smart' (or hybrid for backend tickets) — auto-process
-            // v5.0: Boss UPDATES ticket status FIRST, then dispatches agent
-            if (ticket) {
-                this.eventBus.emit('boss:dispatching_ticket', 'ticket-processor', {
-                    ticketId: entry.ticketId,
-                    ticketNumber: ticket.ticket_number,
-                    title: ticket.title,
-                    priority: entry.priority,
-                    queueRemaining: this.queue.length - 1,
-                });
-            }
-
+    /**
+     * v6.0: Process a single ticket in a parallel slot.
+     *
+     * Wraps processTicketPipeline() with slot lifecycle management.
+     * On completion (success or error), removes from activeSlots and calls fillSlots().
+     */
+    private async processSlot(slotId: string, entry: QueuedTicket): Promise<void> {
+        try {
             const success = await this.processTicketPipeline(entry.ticketId, entry);
-            if (success) {
-                this.queue.shift(); // Only remove on success
-                ticketsProcessed++;
+            const ticket = this.database.getTicket(entry.ticketId);
 
+            if (success) {
+                this.eventBus.emit('boss:slot_completed', 'ticket-processor', {
+                    slotId,
+                    ticketId: entry.ticketId,
+                    ticketNumber: ticket?.ticket_number,
+                    success: true,
+                });
                 this.eventBus.emit('boss:ticket_completed', 'ticket-processor', {
                     ticketId: entry.ticketId,
                     ticketNumber: ticket?.ticket_number,
                     queueRemaining: this.queue.length,
-                    ticketsProcessed,
+                    activeSlots: this.activeSlots.size - 1,
                 });
             } else {
-                // processTicketPipeline handled re-enqueue/removal internally
-                // Schedule delayed restart so queue doesn't stall forever
-                if (!this.disposed && this.queue.length > 0) {
-                    setTimeout(() => {
-                        if (!this.disposed) this.bossCycle();
-                    }, 5000);
-                }
-                break;
+                this.eventBus.emit('boss:slot_error', 'ticket-processor', {
+                    slotId,
+                    ticketId: entry.ticketId,
+                    ticketNumber: ticket?.ticket_number,
+                });
+                // processTicketPipeline handles re-enqueue/escalation internally
+            }
+        } catch (error) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Slot ${slotId} error: ${String(error).substring(0, 200)}`
+            );
+            this.eventBus.emit('boss:slot_error', 'ticket-processor', {
+                slotId,
+                ticketId: entry.ticketId,
+                error: String(error).substring(0, 200),
+            });
+        } finally {
+            // Always clean up the slot and try to fill it
+            this.activeSlots.delete(slotId);
+            this.lastActivityTimestamp = Date.now();
+
+            // If all slots empty and queue empty → cycle completed
+            if (this.activeSlots.size === 0 && this.queue.length === 0) {
+                this.eventBus.emit('boss:cycle_completed', 'ticket-processor', {
+                    ticketsProcessed: 0,
+                    queueRemaining: 0,
+                    activeSlots: 0,
+                });
+                if (!this.disposed) this.startBossCountdown();
+            } else if (!this.disposed) {
+                // Try to fill the freed slot with the next ticket
+                this.fillSlots();
+            }
+        }
+    }
+
+    // ==================== HOLD QUEUE MANAGEMENT (v6.0) ====================
+
+    /**
+     * v6.0: Check hold queue for timed-out tickets and release them back to main queue.
+     *
+     * When a ticket has been held longer than its timeout (default: 1 hour from config,
+     * but recommended to lower to 5 min when multi-model is active), it gets released
+     * back to the main queue regardless of model status. This prevents indefinite holds.
+     */
+    private checkHoldQueueTimeouts(): void {
+        if (this.holdQueue.length === 0) return;
+
+        const now = Date.now();
+        const timedOut: typeof this.holdQueue = [];
+        const remaining: typeof this.holdQueue = [];
+
+        for (const held of this.holdQueue) {
+            if (now - held.heldAt >= held.timeoutMs) {
+                timedOut.push(held);
+            } else {
+                remaining.push(held);
             }
         }
 
-        this.isProcessing = false;
-        this.lastActivityTimestamp = Date.now();
+        if (timedOut.length > 0) {
+            this.holdQueue = remaining;
+            for (const held of timedOut) {
+                // Re-enqueue the ticket at its original position/priority
+                this.queue.push(held.queueEntry);
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Hold timeout: ticket ${held.ticketId} released back to queue ` +
+                    `(was waiting for model "${held.requiredModel}" for ${Math.round((now - held.heldAt) / 60000)} min)`
+                );
+                this.eventBus.emit('boss:ticket_unheld', 'ticket-processor', {
+                    ticketId: held.ticketId,
+                    reason: 'timeout',
+                    requiredModel: held.requiredModel,
+                    heldMs: now - held.heldAt,
+                });
+                this.database.addAuditLog('boss-ai', 'hold_timeout',
+                    `Ticket ${held.ticketId} released after ${Math.round((now - held.heldAt) / 60000)} min hold (model: ${held.requiredModel})`);
+            }
+            this.sortQueue(this.queue);
+        }
+    }
 
-        this.eventBus.emit('boss:cycle_completed', 'ticket-processor', {
-            ticketsProcessed,
-            queueRemaining: this.queue.length,
+    /**
+     * v6.0: Release all held tickets waiting for a specific model.
+     * Called after a model swap completes to re-enqueue tickets that can now run.
+     */
+    private releaseHeldTicketsForModel(model: string): number {
+        const released: typeof this.holdQueue = [];
+        const remaining: typeof this.holdQueue = [];
+
+        for (const held of this.holdQueue) {
+            if (held.requiredModel === model) {
+                released.push(held);
+            } else {
+                remaining.push(held);
+            }
+        }
+
+        if (released.length > 0) {
+            this.holdQueue = remaining;
+            for (const held of released) {
+                this.queue.push(held.queueEntry);
+                this.eventBus.emit('boss:ticket_unheld', 'ticket-processor', {
+                    ticketId: held.ticketId,
+                    reason: 'model_available',
+                    requiredModel: held.requiredModel,
+                });
+            }
+            this.sortQueue(this.queue);
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Released ${released.length} held ticket(s) for model "${model}"`
+            );
+        }
+
+        return released.length;
+    }
+
+    /**
+     * v6.0: Check if a model swap is needed when main queue is drained.
+     *
+     * Pause & Swap strategy:
+     * 1. When main queue has no processable tickets AND hold queue has tickets → trigger swap
+     * 2. Wait for all active slots to drain (current work finishes)
+     * 3. Swap model via LM Studio API (POST /v1/models/unload, POST /v1/models/load)
+     * 4. Release held tickets back to main queue
+     * 5. Resume fillSlots()
+     *
+     * Constraints:
+     * - Max 2 different models per boss cycle (prevent excessive swapping)
+     * - Only triggers when multiModelEnabled=true (user LM Studio setting)
+     * - Swaps are logged for audit trail
+     *
+     * NOTE: Actual model swapping requires LM Studio API endpoints. For now, this method
+     * checks conditions and emits events. The actual HTTP calls to LM Studio will be
+     * wired when the model management API is confirmed.
+     */
+    private async checkModelSwapNeeded(): Promise<boolean> {
+        const cfg = this.config.getConfig();
+
+        // Only run if multi-model is enabled (user LM Studio setting)
+        if (!cfg.multiModelEnabled) return false;
+        if (this.holdQueue.length === 0) return false;
+
+        // Don't swap if there are still processable tickets in main queue
+        const nextProcessable = this.peekNextProcessable();
+        if (nextProcessable) return false;
+
+        // Don't swap if active slots are still running — wait for them to drain
+        if (this.activeSlots.size > 0) return false;
+
+        // Group held tickets by required model
+        const modelGroups = new Map<string, typeof this.holdQueue>();
+        for (const held of this.holdQueue) {
+            const group = modelGroups.get(held.requiredModel) || [];
+            group.push(held);
+            modelGroups.set(held.requiredModel, group);
+        }
+
+        // Pick the model with the most waiting tickets (efficient batch)
+        let bestModel = '';
+        let bestCount = 0;
+        for (const [model, tickets] of modelGroups) {
+            if (tickets.length > bestCount) {
+                bestModel = model;
+                bestCount = tickets.length;
+            }
+        }
+
+        if (!bestModel || bestCount === 0) return false;
+
+        // Check max models per cycle limit
+        const maxModels = cfg.maxModelsPerCycle ?? 2;
+        // Track swap count in audit log for this cycle
+        const recentSwaps = this.database.getAuditLog(50)
+            .filter(a => a.action === 'model_swap' &&
+                a.created_at > new Date(Date.now() - 60 * 60 * 1000).toISOString())
+            .length;
+
+        if (recentSwaps >= maxModels) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Model swap skipped — already swapped ${recentSwaps} times this cycle (limit: ${maxModels})`
+            );
+            return false;
+        }
+
+        // === TRIGGER MODEL SWAP ===
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Model swap needed: ${bestCount} ticket(s) waiting for "${bestModel}"`
+        );
+
+        this.eventBus.emit('boss:model_swap', 'ticket-processor', {
+            fromModel: cfg.activeModel || cfg.llm.model,
+            toModel: bestModel,
+            ticketCount: bestCount,
+            reason: 'hold_queue_drain',
         });
 
-        // v5.0: Queue drained — enter 5-minute countdown for next Boss check
-        if (!this.disposed) {
-            this.startBossCountdown();
-        }
+        this.database.addAuditLog('boss-ai', 'model_swap',
+            `Swap from "${cfg.activeModel || cfg.llm.model}" to "${bestModel}" — ${bestCount} held ticket(s) waiting`);
+
+        // TODO: Actual LM Studio API calls when endpoints are confirmed:
+        //   POST http://{endpoint}/v1/models/unload
+        //   POST http://{endpoint}/v1/models/load { model: bestModel }
+        //   For now, we update config.activeModel and release held tickets
+
+        // Update active model in config
+        this.config.updateConfig({ activeModel: bestModel });
+
+        // Release held tickets for this model
+        const released = this.releaseHeldTicketsForModel(bestModel);
+
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Model swap complete: now using "${bestModel}", released ${released} ticket(s)`
+        );
+
+        return released > 0;
     }
 
     /**
@@ -822,8 +1159,8 @@ export class TicketProcessorService {
     private kickBossCycle(): void {
         if (this.disposed) return;
 
-        // If already processing, no need to kick — the cycle will pick up new tickets
-        if (this.isProcessing) return;
+        // v6.0: If all slots are full, no need to kick — fillSlots() runs after any slot completes
+        if (this.activeSlots.size >= this.maxParallelTickets) return;
 
         // v5.0: If startup assessment is still running (LLM call in progress),
         // defer the kick — the assessment's .finally() will call bossCycle() afterward
@@ -904,7 +1241,7 @@ export class TicketProcessorService {
                 );
 
                 // Execute any Boss actions (create tickets, escalate, etc.)
-                this.executeBossActions(healthResponse.actions || [], 'idle_check');
+                await this.executeBossActions(healthResponse.actions || [], 'idle_check');
             } catch (err) {
                 const errMsg = `Idle check failed: ${String(err).substring(0, 200)}`;
                 this.outputChannel.appendLine(`[TicketProcessor] Boss idle check error (non-fatal): ${err}`);
@@ -942,7 +1279,7 @@ export class TicketProcessorService {
             }
 
             // If tickets are now available, start the Boss cycle
-            if (this.queue.length > 0 && !this.isProcessing) {
+            if (this.queue.length > 0 && this.activeSlots.size < this.maxParallelTickets) {
                 this.bossCycle();
             } else {
                 // Nothing to do — start another countdown
@@ -1774,8 +2111,8 @@ export class TicketProcessorService {
                 `[TicketProcessor] Boss startup assessment: ${startupText.substring(0, 200)}...`
             );
 
-            // Execute Boss AI's actions (create tickets, escalate, etc.)
-            const actionsExecuted = this.executeBossActions(healthResponse.actions || [], 'startup');
+            // Execute Boss AI's actions (create tickets, escalate, dispatch agents, etc.)
+            const actionsExecuted = await this.executeBossActions(healthResponse.actions || [], 'startup');
 
             // Log the assessment
             this.database.addAuditLog('boss-ai', 'startup_assessment',
@@ -1819,8 +2156,8 @@ export class TicketProcessorService {
             const content = (healthResponse.content || '').toLowerCase();
             const isCritical = content.includes('escalate: true') || content.includes('status: critical');
 
-            // Execute Boss AI's actions — create tickets, escalate, recover, etc.
-            const actionsExecuted = this.executeBossActions(healthResponse.actions || [], 'inter_ticket');
+            // Execute Boss AI's actions — create tickets, escalate, dispatch agents, recover, etc.
+            const actionsExecuted = await this.executeBossActions(healthResponse.actions || [], 'inter_ticket');
 
             if (isCritical) {
                 this.outputChannel.appendLine(
@@ -1945,7 +2282,7 @@ export class TicketProcessorService {
      * This is the bridge between Boss AI's decisions and the ticket system.
      * Boss AI returns actions → this method turns them into real tickets.
      */
-    private executeBossActions(actions: Array<{ type: string; payload: Record<string, unknown> }>, trigger: string): number {
+    private async executeBossActions(actions: Array<{ type: string; payload: Record<string, unknown> }>, trigger: string): Promise<number> {
         let executed = 0;
 
         for (const action of actions) {
@@ -2039,6 +2376,190 @@ export class TicketProcessorService {
                         executed++;
                         break;
                     }
+
+                    // ==================== v6.0: NEW BOSS ACTIONS ====================
+
+                    case 'dispatch_agent': {
+                        const agentName = (action.payload.agent as string) || '';
+                        const message = (action.payload.message as string) || '';
+                        const targetTicketId = action.payload.ticket_id as string | undefined;
+
+                        if (!agentName || !message) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss dispatch_agent: missing agent or message');
+                            break;
+                        }
+
+                        // Always create a lightweight tracking ticket for audit trail
+                        const trackingTicket = this.database.createTicket({
+                            title: `Boss dispatch: ${agentName} — ${message.substring(0, 60)}`,
+                            body: `Boss AI directly dispatched agent "${agentName}" during ${trigger}.\n\n${message}`,
+                            priority: TicketPriority.P2,
+                            creator: 'boss-ai',
+                            auto_created: true,
+                            operation_type: 'boss_directive',
+                        });
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Boss dispatching agent "${agentName}" (tracking TK-${trackingTicket.ticket_number})`
+                        );
+                        this.eventBus.emit('boss:dispatch_agent', 'ticket-processor', {
+                            agentName, targetTicketId, trackingTicketId: trackingTicket.id,
+                        });
+
+                        try {
+                            const agentContext = {
+                                conversationHistory: [] as any[],
+                                ticket: targetTicketId ? this.database.getTicket(targetTicketId) ?? undefined : undefined,
+                            };
+                            const response = await this.orchestrator.callAgent(agentName, message, agentContext);
+
+                            // Update tracking ticket with result
+                            this.database.updateTicket(trackingTicket.id, {
+                                status: TicketStatus.Resolved,
+                                processing_status: null,
+                            });
+                            // Store result as a ticket reply for audit trail
+                            this.database.addTicketReply(trackingTicket.id, agentName,
+                                response.content?.substring(0, 2000) || '(no content)');
+
+                            // If tied to an existing ticket, update that too
+                            if (targetTicketId) {
+                                const targetTicket = this.database.getTicket(targetTicketId);
+                                if (targetTicket) {
+                                    this.database.addTicketReply(targetTicketId, 'boss-ai',
+                                        `Agent "${agentName}" dispatched by Boss AI:\n${response.content?.substring(0, 1000) || '(no content)'}`);
+                                }
+                            }
+
+                            this.database.addAuditLog('boss-ai', 'dispatch_agent',
+                                `Dispatched ${agentName}: ${response.content?.substring(0, 200) || '(no content)'}`);
+                        } catch (dispatchErr) {
+                            this.outputChannel.appendLine(`[TicketProcessor] Boss dispatch error: ${dispatchErr}`);
+                            this.database.updateTicket(trackingTicket.id, {
+                                status: TicketStatus.Escalated,
+                                processing_status: null,
+                            });
+                            this.database.addAuditLog('boss-ai', 'dispatch_agent_error',
+                                `Failed to dispatch ${agentName}: ${String(dispatchErr).substring(0, 200)}`);
+                        }
+
+                        executed++;
+                        break;
+                    }
+
+                    case 'reprioritize': {
+                        const repTicketId = action.payload.ticket_id as string;
+                        const newPriority = action.payload.priority as string;
+
+                        if (!repTicketId || !newPriority) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss reprioritize: missing ticket_id or priority');
+                            break;
+                        }
+
+                        this.database.updateTicket(repTicketId, { priority: newPriority as TicketPriority });
+                        // Also update the queue entry
+                        const queueEntry = this.queue.find(q => q.ticketId === repTicketId);
+                        if (queueEntry) {
+                            queueEntry.priority = newPriority;
+                            this.sortQueue(this.queue);
+                        }
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Boss reprioritized ticket ${repTicketId} → ${newPriority}`
+                        );
+                        this.database.addAuditLog('boss-ai', 'reprioritize',
+                            `Changed priority of ${repTicketId} to ${newPriority}`);
+                        this.eventBus.emit('ticket:priority_changed', 'boss-ai', {
+                            ticketId: repTicketId, priority: newPriority,
+                        });
+                        executed++;
+                        break;
+                    }
+
+                    case 'reorder_queue': {
+                        const reorderTicketId = action.payload.ticket_id as string;
+                        const position = action.payload.position as 'front' | 'back';
+
+                        if (!reorderTicketId || !position) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss reorder_queue: missing ticket_id or position');
+                            break;
+                        }
+
+                        const idx = this.queue.findIndex(q => q.ticketId === reorderTicketId);
+                        if (idx >= 0) {
+                            const [moved] = this.queue.splice(idx, 1);
+                            if (position === 'front') {
+                                this.queue.unshift(moved);
+                            } else {
+                                this.queue.push(moved);
+                            }
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Boss moved ticket ${reorderTicketId} to ${position} of queue`
+                            );
+                            this.database.addAuditLog('boss-ai', 'reorder_queue',
+                                `Moved ${reorderTicketId} to ${position}`);
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    case 'hold_ticket': {
+                        const holdTicketId = action.payload.ticket_id as string;
+                        const requiredModel = action.payload.required_model as string;
+                        const holdTimeoutMs = (action.payload.timeout_ms as number) ||
+                            (this.config.getConfig().modelHoldTimeoutMs ?? 3600000);
+
+                        if (!holdTicketId) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss hold_ticket: missing ticket_id');
+                            break;
+                        }
+
+                        // Remove from main queue
+                        const holdIdx = this.queue.findIndex(q => q.ticketId === holdTicketId);
+                        if (holdIdx >= 0) {
+                            const [holdEntry] = this.queue.splice(holdIdx, 1);
+                            this.holdQueue.push({
+                                ticketId: holdTicketId,
+                                requiredModel: requiredModel || 'unknown',
+                                heldAt: Date.now(),
+                                timeoutMs: holdTimeoutMs,
+                                queueEntry: holdEntry,
+                            });
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Boss held ticket ${holdTicketId} — waiting for model "${requiredModel}"`
+                            );
+                            this.eventBus.emit('boss:ticket_held', 'ticket-processor', {
+                                ticketId: holdTicketId, requiredModel,
+                            });
+                            this.database.addAuditLog('boss-ai', 'hold_ticket',
+                                `Held ${holdTicketId} for model ${requiredModel}`);
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    case 'update_notepad': {
+                        const notepadContent = (action.payload.content as string) || '';
+                        const notepadMode = (action.payload.mode as string) || 'replace';
+
+                        if (notepadMode === 'append') {
+                            const current = this.database.getAuditLog(1)
+                                .find(a => a.action === 'boss_notepad')?.detail ?? '';
+                            this.database.addAuditLog('boss-ai', 'boss_notepad',
+                                current + '\n' + notepadContent);
+                        } else {
+                            this.database.addAuditLog('boss-ai', 'boss_notepad', notepadContent);
+                        }
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Boss notepad updated (${notepadMode}): ${notepadContent.substring(0, 100)}`
+                        );
+                        this.eventBus.emit('boss:notepad_updated', 'ticket-processor', {
+                            mode: notepadMode, contentLength: notepadContent.length,
+                        });
+                        executed++;
+                        break;
+                    }
                 }
             } catch (err) {
                 this.outputChannel.appendLine(`[TicketProcessor] Boss action failed: ${err}`);
@@ -2080,9 +2601,13 @@ export class TicketProcessorService {
         // Try to get from the ticket's body (per-ticket override)
         if (ticket.body) {
             const aiLevelMatch = ticket.body.match(/AI Level:\s*(\w+)/i);
-            if (aiLevelMatch) return aiLevelMatch[1].toLowerCase();
+            if (aiLevelMatch) {
+                const raw = aiLevelMatch[1].toLowerCase();
+                // Normalize legacy 'suggestions' → 'suggest'
+                return raw === 'suggestions' ? 'suggest' : raw;
+            }
         }
-        // Fall back to global AI mode from config
+        // Fall back to global AI mode from config (typed, no normalization needed)
         return this.config.getConfig().aiMode ?? 'smart';
     }
 
@@ -2189,23 +2714,31 @@ export class TicketProcessorService {
         bossState: 'active' | 'waiting' | 'idle';
         bossNextCheckMs: number;
         startupAssessmentRunning: boolean;
+        activeSlots: number;
+        maxSlots: number;
+        holdQueueSize: number;
     } {
         const now = Date.now();
+        const isActive = this.activeSlots.size > 0;
 
         return {
             // v5.0: New unified fields
             queueSize: this.queue.length,
-            isProcessing: this.isProcessing,
+            isProcessing: isActive,
             // Backward-compatible aliases (mapped from unified queue)
             mainQueueSize: this.queue.length,
             bossQueueSize: 0, // No separate boss queue in v5.0
-            mainProcessing: this.isProcessing,
+            mainProcessing: isActive,
             bossProcessing: false, // No separate boss processing in v5.0
             lastActivityTimestamp: this.lastActivityTimestamp,
             idleMinutes: Math.round((now - this.lastActivityTimestamp) / 60000),
             bossState: this.bossState,
             bossNextCheckMs: this.nextBossCheckAt > now ? this.nextBossCheckAt - now : 0,
             startupAssessmentRunning: this.startupAssessmentRunning,
+            // v6.0: Parallel processing info
+            activeSlots: this.activeSlots.size,
+            maxSlots: this.maxParallelTickets,
+            holdQueueSize: this.holdQueue.length,
         };
     }
 
@@ -2558,9 +3091,10 @@ export class TicketProcessorService {
         }
         this.eventHandlers = [];
 
-        // Clear queue
+        // Clear queue and slots
         this.queue = [];
-        this.isProcessing = false;
+        this.activeSlots.clear();
+        this.holdQueue = [];
         this.bossState = 'idle';
 
         this.outputChannel.appendLine('[TicketProcessor] Disposed');

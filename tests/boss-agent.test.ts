@@ -59,7 +59,7 @@ describe('BossAgent', () => {
             expect(agent.name).toBe('Boss AI');
             expect(agent.type).toBe(AgentType.Boss);
             expect(agent.systemPrompt).toContain('Boss AI');
-            expect(agent.systemPrompt).toContain('top-level supervisor');
+            expect(agent.systemPrompt).toContain('PROJECT MANAGER');
         });
 
         test('initialize registers agent in the database', () => {

@@ -11,8 +11,11 @@ const DEFAULT_CONFIG: COEConfig = {
         timeoutSeconds: 1800,
         startupTimeoutSeconds: 300,
         streamStallTimeoutSeconds: 60,
-        maxTokens: 30000,
+        maxTokens: 25000,
         maxInputTokens: 4000,
+        maxConcurrentRequests: 4,   // v6.0: LM Studio can handle 4 simultaneous threads
+        bossReservedSlots: 1,       // v6.0: 1 slot always reserved for Boss AI
+        maxRequestRetries: 5,       // v6.0: retry failed LLM requests up to 5 times
     },
     taskQueue: {
         maxPending: 20,
@@ -25,17 +28,21 @@ const DEFAULT_CONFIG: COEConfig = {
         debounceMs: 500,
     },
     agents: {
-        orchestrator: { contextLimit: 5000, enabled: true },
-        planning: { contextLimit: 5000, enabled: true },
-        answer: { contextLimit: 5000, enabled: true },
-        verification: { contextLimit: 4000, enabled: true },
-        research: { contextLimit: 5000, enabled: true },
-        clarity: { contextLimit: 4000, enabled: true },
-        boss: { contextLimit: 5000, enabled: true },
-        custom: { contextLimit: 4000, enabled: true },
-        review: { contextLimit: 4000, enabled: true },
+        orchestrator: { contextLimit: 25000, enabled: true },
+        planning: { contextLimit: 25000, enabled: true },
+        answer: { contextLimit: 25000, enabled: true },
+        verification: { contextLimit: 25000, enabled: true },
+        research: { contextLimit: 25000, enabled: true },
+        clarity: { contextLimit: 25000, enabled: true },
+        boss: { contextLimit: 25000, enabled: true },
+        custom: { contextLimit: 25000, enabled: true },
+        review: { contextLimit: 25000, enabled: true },
     },
     // Model profiles: context windows and output limits for token budget management
+    // This tells the token budget system the limits of each LLM you might use.
+    // - contextWindowTokens: total context the model can handle (input + output)
+    // - maxOutputTokens: max tokens the model can generate per response
+    // If you add a second model (vision, larger reasoning, etc.), add another entry here.
     models: {
         'mistralai/ministral-3-14b-reasoning': {
             contextWindowTokens: 32768,
@@ -63,8 +70,13 @@ const DEFAULT_CONFIG: COEConfig = {
     clarityAutoResolveScore: 85,
     clarityClarificationScore: 70,
     // v5.0: AI mode and auto-run
-    aiMode: 'smart' as const,
+    aiMode: 'hybrid' as const,
     bossAutoRunEnabled: true,
+    // v6.0: Parallel processing and multi-model
+    bossParallelBatchSize: 3,        // max 3 tickets processed concurrently (1 Boss slot reserved)
+    modelHoldTimeoutMs: 3600000,     // 1 hour hold timeout for model swap
+    maxModelsPerCycle: 2,            // max 2 different models per boss cycle (prevent excessive swapping)
+    multiModelEnabled: false,        // default: single model mode (one LLM loaded at a time)
 };
 
 export class ConfigManager {
@@ -150,6 +162,13 @@ export class ConfigManager {
             // v5.0: AI mode and auto-run
             aiMode: loaded.aiMode ?? DEFAULT_CONFIG.aiMode,
             bossAutoRunEnabled: loaded.bossAutoRunEnabled ?? DEFAULT_CONFIG.bossAutoRunEnabled,
+            // v6.0: Parallel processing and multi-model
+            bossParallelBatchSize: loaded.bossParallelBatchSize ?? DEFAULT_CONFIG.bossParallelBatchSize,
+            agentModels: loaded.agentModels,
+            modelHoldTimeoutMs: loaded.modelHoldTimeoutMs ?? DEFAULT_CONFIG.modelHoldTimeoutMs,
+            activeModel: loaded.activeModel,
+            maxModelsPerCycle: loaded.maxModelsPerCycle ?? DEFAULT_CONFIG.maxModelsPerCycle,
+            multiModelEnabled: loaded.multiModelEnabled ?? DEFAULT_CONFIG.multiModelEnabled,
         };
     }
 

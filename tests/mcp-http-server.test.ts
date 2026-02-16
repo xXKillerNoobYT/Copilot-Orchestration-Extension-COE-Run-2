@@ -78,7 +78,7 @@ const configManager = {
         watcher: { debounceMs: 500 },
         agents: {},
     }),
-    getLLMConfig: () => ({ endpoint: 'http://localhost:9999/v1', model: 'test', timeoutSeconds: 30, startupTimeoutSeconds: 10, streamStallTimeoutSeconds: 60, maxTokens: 4000 }),
+    getLLMConfig: () => ({ endpoint: 'http://localhost:9999/v1', model: 'test', timeoutSeconds: 30, startupTimeoutSeconds: 10, streamStallTimeoutSeconds: 60, maxTokens: 4000, maxRequestRetries: 0, maxConcurrentRequests: 4, bossReservedSlots: 1 }),
     getAgentContextLimit: () => 4000,
     getCOEDir: () => tmpDir,
 } as unknown as ConfigManager;

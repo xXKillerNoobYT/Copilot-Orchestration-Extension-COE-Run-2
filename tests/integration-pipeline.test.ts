@@ -52,6 +52,9 @@ describe('Integration Pipeline', () => {
             startupTimeoutSeconds: 5,
             streamStallTimeoutSeconds: 3,
             maxTokens: 100,
+            maxRequestRetries: 0,
+            maxConcurrentRequests: 4,
+            bossReservedSlots: 1,
         }),
         getCOEDir: () => tmpDir,
     } as any;

@@ -315,6 +315,12 @@ export interface LLMConfig {
     maxTokens: number;
     /** Max tokens for input prompt (hard limit from LM Studio). Default: 4000. Prompts exceeding this are truncated with a warning. */
     maxInputTokens: number;
+    /** v6.0: Max concurrent LLM requests (LM Studio thread limit). Default: 4. */
+    maxConcurrentRequests?: number;
+    /** v6.0: LLM slots reserved for Boss AI (never used by ticket processing). Default: 1. */
+    bossReservedSlots?: number;
+    /** v6.0: Max retries for a failed LLM request before giving up. Default: 5. */
+    maxRequestRetries?: number;
 }
 
 export interface LLMMessage {
@@ -466,6 +472,18 @@ export interface COEConfig {
     aiMode?: 'manual' | 'suggest' | 'smart' | 'hybrid';  // default 'smart'
     /** v5.0: Auto-run Boss AI countdown (enables/disables idle timer) */
     bossAutoRunEnabled?: boolean;          // default true
+    /** v6.0: Max concurrent ticket pipelines (batch size). Default: 3. */
+    bossParallelBatchSize?: number;        // default 3
+    /** v6.0: Model each agent prefers (key=agent name, value=model ID). Agents not listed use main model. */
+    agentModels?: { [agentName: string]: string };
+    /** v6.0: Hold timeout when waiting for model swap (ms). Default: 1 hour. */
+    modelHoldTimeoutMs?: number;           // default 3600000
+    /** v6.0: Currently loaded model in LM Studio (auto-detected or set by Boss). */
+    activeModel?: string;
+    /** v6.0: Max different models to use in one queue cycle (prevents excessive swapping). Default: 2. */
+    maxModelsPerCycle?: number;            // default 2
+    /** v6.0: Whether multi-model mode is enabled (default: false, one model at a time). */
+    multiModelEnabled?: boolean;           // default false
 }
 
 // --- Agent Framework Types ---
@@ -487,7 +505,12 @@ export interface AgentResponse {
 }
 
 export interface AgentAction {
-    type: 'create_task' | 'create_ticket' | 'update_task' | 'escalate' | 'log';
+    type: 'create_task' | 'create_ticket' | 'update_task' | 'escalate' | 'log'
+        | 'dispatch_agent'      // v6.0: call agent directly (always creates tracking ticket)
+        | 'reprioritize'        // v6.0: change ticket priority
+        | 'reorder_queue'       // v6.0: move ticket to front/back of queue
+        | 'hold_ticket'         // v6.0: put ticket on hold (model mismatch)
+        | 'update_notepad';     // v6.0: Boss AI writes to its persistent notepad
     payload: Record<string, unknown>;
 }
 

@@ -1086,10 +1086,10 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     <label>AI Assistance Level</label>
                     <p class="step-desc">How much should AI help with your workflow?</p>
                     <div class="design-grid" data-field="aiLevel">
-                        <div class="design-card" data-val="manual"><div class="preview">M</div><strong>Manual</strong><span>Full human control</span></div>
-                        <div class="design-card selected" data-val="suggestions"><div class="preview">?!</div><strong>Suggestions</strong><span>AI recommends, you decide</span></div>
-                        <div class="design-card" data-val="smart"><div class="preview">AI</div><strong>Smart Defaults</strong><span>AI fills, you review</span></div>
-                        <div class="design-card" data-val="hybrid"><div class="preview">H+</div><strong>Hybrid</strong><span>AI auto-handles P3</span></div>
+                        <div class="design-card" data-val="manual"><div class="preview">M</div><strong>Manual</strong><span>Full human control — no auto-processing. You review everything.</span></div>
+                        <div class="design-card" data-val="suggest"><div class="preview">?!</div><strong>Suggestions</strong><span>AI recommends actions. You approve before processing.</span></div>
+                        <div class="design-card selected" data-val="smart"><div class="preview">AI</div><strong>Smart Defaults</strong><span>AI processes tickets. Flags complex work for your review.</span></div>
+                        <div class="design-card" data-val="hybrid"><div class="preview">H+</div><strong>Hybrid</strong><span>AI auto-handles backend. Pauses for frontend/design review.</span></div>
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary btn-success" onclick="wizGenerate()">Generate Plan</button></div>
                 </div>
@@ -2253,7 +2253,7 @@ let wizConfig = {
     userRoles: ['Regular User'],
     features: ['CRUD Operations'],
     techStack: 'React + Node',
-    aiLevel: 'suggestions',
+    aiLevel: 'smart',
     customColors: null
 };
 var wizEditPlanId = null; // Set when editing an existing plan (null = creating new)
@@ -2914,6 +2914,11 @@ document.querySelectorAll('.design-card').forEach(card => {
                 wizConfig.customColors = null;
             }
         }
+        // v5.0: Sync AI Level wizard card with header toggle (bidirectional link)
+        var isAiGrid = card.parentElement.dataset.field === 'aiLevel';
+        if (isAiGrid && card.dataset.val) {
+            setGlobalAiLevel(card.dataset.val);
+        }
     });
 });
 
@@ -3145,9 +3150,11 @@ async function wizGenerate() {
             // Dashboard transitions to showing ticket processing status
             pollProcessingStatus();
             // AI-level-aware design generation and chat activation
-            var planAiLevel = design.aiLevel || currentAiLevel || 'suggestions';
-            if (planAiLevel === 'hybrid' || planAiLevel === 'smart') {
-                // Auto-generate design immediately
+            // Normalize legacy 'suggestions' to 'suggest'
+            var planAiLevel = design.aiLevel || currentAiLevel || 'smart';
+            if (planAiLevel === 'suggestions') planAiLevel = 'suggest';
+            if (planAiLevel === 'hybrid' || planAiLevel === 'smart' || planAiLevel === 'suggest') {
+                // Auto-generate design for all non-manual modes
                 showNotification('AI is auto-generating your visual design layout...', 'info');
                 generateDesignForPlan(data.plan.id, design, data.plan.name, desc, wizConfig.scale, wizConfig.focus, data.tasks || []);
                 // In Hybrid mode, also auto-open AI chat and start guiding the user
@@ -3156,9 +3163,6 @@ async function wizGenerate() {
                         if (!aiChatVisible) toggleAiChat();
                     }, 1500);
                 }
-            } else if (planAiLevel === 'suggestions') {
-                // Generate design in background but don't auto-open chat
-                generateDesignForPlan(data.plan.id, design, data.plan.name, desc, wizConfig.scale, wizConfig.focus, data.tasks || []);
             }
             // Manual mode: don't auto-generate design — user adds components manually
         } else if (data.error) {
@@ -3269,7 +3273,7 @@ async function wizQuick() {
             saveState('wizConfig', null);
             saveState('wizStep', 0);
             // AI-level-aware design generation for quick generate too
-            var qAiLevel = design.aiLevel || currentAiLevel || 'suggestions';
+            var qAiLevel = design.aiLevel || currentAiLevel || 'smart';
             if (qAiLevel !== 'manual') {
                 generateDesignForPlan(data.plan.id, design, data.plan.name, desc, wizConfig.scale, wizConfig.focus, data.tasks || []);
             }
@@ -3539,7 +3543,7 @@ function pdBackToWizard() {
         userRoles: ['Regular User'],
         features: ['CRUD Operations'],
         techStack: 'React + Node',
-        aiLevel: 'suggestions',
+        aiLevel: 'smart',
         customColors: null
     };
     // Reset form fields
@@ -3723,7 +3727,7 @@ async function editPlanWizard(planId) {
         wizConfig.userRoles = design.userRoles || ['Regular User'];
         wizConfig.features = design.features || ['CRUD Operations'];
         wizConfig.techStack = design.techStack || 'React + Node';
-        wizConfig.aiLevel = design.aiLevel || config.aiLevel || 'suggestions';
+        wizConfig.aiLevel = design.aiLevel || config.aiLevel || 'smart';
         wizConfig.customColors = design.customColors || null;
 
         // Set form values
@@ -4082,9 +4086,11 @@ async function loadDesignerForPlan(planId) {
 
     // If no existing design and plan has AI config, auto-trigger design generation
     if (!hasExistingDesign && planData) {
-        var autoAiLevel = planDesign.aiLevel || currentAiLevel || 'suggestions';
-        // In Hybrid/Smart mode, auto-generate design immediately
-        if (autoAiLevel === 'hybrid' || autoAiLevel === 'smart') {
+        var autoAiLevel = planDesign.aiLevel || currentAiLevel || 'smart';
+        // Normalize legacy value
+        if (autoAiLevel === 'suggestions') autoAiLevel = 'suggest';
+        // In any non-manual mode, auto-generate design
+        if (autoAiLevel === 'hybrid' || autoAiLevel === 'smart' || autoAiLevel === 'suggest') {
             showNotification('AI is auto-generating design layout based on your plan settings...', 'info');
             generateDesignForPlan(planId, planDesign, planData.name || '', planConfig.description || '',
                 planConfig.scale || 'MVP', planConfig.focus || 'Full Stack', planData.tasks || []);
@@ -4094,7 +4100,6 @@ async function loadDesignerForPlan(planId) {
                     if (!aiChatVisible) {
                         toggleAiChat();
                         setTimeout(function() {
-                            // Send a proactive AI message about the design
                             var chatInput = document.getElementById('aiChatInput');
                             if (chatInput) {
                                 chatInput.value = 'I just created a new plan "' + (planData.name || '') + '". Help me review and refine the generated design layout.';
@@ -4104,9 +4109,6 @@ async function loadDesignerForPlan(planId) {
                     }
                 }, 500);
             }
-        } else if (autoAiLevel === 'suggestions') {
-            // Suggestions mode: show a prompt to generate design, don't auto-start
-            showNotification('Open the AI chat or click "Generate Design" to create a visual layout.', 'info');
         }
     }
     // Show QA panel when designer is open
@@ -4852,7 +4854,7 @@ async function triggerAiDesignGeneration() {
         try { config = JSON.parse(planData.config_json || '{}'); } catch(e) {}
         var design = config.design || {};
         // Ensure aiLevel is set from plan config or current global setting
-        if (!design.aiLevel) design.aiLevel = currentAiLevel || 'suggestions';
+        if (!design.aiLevel) design.aiLevel = currentAiLevel || 'smart';
         await generateDesignForPlan(dsgPlanId, design, planData.name || '', config.description || '', config.scale || 'MVP', config.focus || 'Full Stack', planData.tasks || []);
     } catch (err) {
         showNotification('Could not load plan data: ' + String(err), 'error');
@@ -7937,6 +7939,8 @@ setInterval(() => {
 var currentAiLevel = loadState('aiLevel', 'smart') || 'smart';
 
 function setGlobalAiLevel(level) {
+    // Normalize legacy 'suggestions' to canonical 'suggest'
+    if (level === 'suggestions') level = 'suggest';
     currentAiLevel = level;
     saveState('aiLevel', level);
     // Update toggle buttons in top nav
@@ -8341,7 +8345,7 @@ function updateAiChatContext() {
     if (context.element_type && context.element_id) {
         text += ' | ' + context.element_type + ' selected';
     }
-    text += ' | AI: ' + (currentAiLevel || 'suggestions');
+    text += ' | AI: ' + (currentAiLevel || 'smart');
     el.textContent = text;
 }
 

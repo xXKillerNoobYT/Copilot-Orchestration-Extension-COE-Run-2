@@ -1557,47 +1557,42 @@ describe('TicketProcessorService', () => {
 
     describe('removeFromQueue()', () => {
         test('removes ticket from main queue', async () => {
-            // Use a stalling orchestrator so tickets stay in queue
-            let resolveAgent: () => void;
-            const agentPromise = new Promise<void>(resolve => { resolveAgent = resolve; });
+            // v6.0: With parallel processing, all stalling calls block to keep tickets in slots.
+            // To test removeFromQueue, we need MORE tickets than maxParallelTickets (3).
+            const resolvers: Array<() => void> = [];
             const stallingOrchestrator = makeOrchestrator();
-            let firstCall = true;
             stallingOrchestrator.callAgent.mockImplementation(async () => {
-                if (firstCall) {
-                    firstCall = false;
-                    await agentPromise;
-                }
+                await new Promise<void>(resolve => { resolvers.push(resolve); });
                 return { content: 'task implementation', confidence: 90 };
             });
 
             const proc = new TicketProcessorService(db, stallingOrchestrator, eventBus, mockConfig, mockOutput);
             proc.start();
 
-            // Create first ticket to block the queue
-            const ticket1 = createTestTicket(db, {
-                title: 'Phase: Task Generation blocker',
-                operation_type: 'plan_generation',
-            });
-            eventBus.emit('ticket:created', 'test', { ticketId: ticket1.id });
-            await new Promise(resolve => setTimeout(resolve, 20));
+            // Create 4 tickets — first 3 will fill parallel slots, 4th stays in queue
+            const tickets = [];
+            for (let i = 0; i < 4; i++) {
+                tickets.push(createTestTicket(db, {
+                    title: `Phase: Task Generation ticket-${i}`,
+                    operation_type: 'plan_generation',
+                }));
+                eventBus.emit('ticket:created', 'test', { ticketId: tickets[i].id });
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
 
-            // Create second ticket that will be in queue
-            const ticket2 = createTestTicket(db, {
-                title: 'Phase: Task Generation removable',
-                operation_type: 'plan_generation',
-            });
-            eventBus.emit('ticket:created', 'test', { ticketId: ticket2.id });
-            await new Promise(resolve => setTimeout(resolve, 20));
+            // 3 tickets in activeSlots, 1 in queue
+            const statusBefore = proc.getStatus();
+            expect(statusBefore.mainQueueSize).toBeGreaterThanOrEqual(1);
 
-            // Remove ticket2 from queue
-            proc.removeFromQueue(ticket2.id);
+            // Remove the 4th ticket (still in queue) from the queue
+            proc.removeFromQueue(tickets[3].id);
 
-            const status = proc.getStatus();
-            // ticket1 is being processed (still peeked in queue), ticket2 was removed
-            // With peek-then-remove, the processing ticket stays at position [0]
-            expect(status.mainQueueSize).toBe(1);
+            const statusAfter = proc.getStatus();
+            // The 4th ticket was removed from queue
+            expect(statusAfter.mainQueueSize).toBe(statusBefore.mainQueueSize - 1);
 
-            resolveAgent!();
+            // Resolve all stalling calls
+            resolvers.forEach(r => r());
             await new Promise(resolve => setTimeout(resolve, 50));
             proc.dispose();
         });
@@ -1638,7 +1633,7 @@ describe('TicketProcessorService', () => {
         });
 
         test('returns correct queue sizes after enqueue', async () => {
-            // Use stalling orchestrator to keep tickets in queue
+            // Use stalling orchestrator to keep tickets in active slots
             let resolveAgent: () => void;
             const agentPromise = new Promise<void>(resolve => { resolveAgent = resolve; });
             const stallingOrchestrator = makeOrchestrator();
@@ -1659,8 +1654,10 @@ describe('TicketProcessorService', () => {
             await new Promise(resolve => setTimeout(resolve, 20));
 
             const status = proc.getStatus();
-            // The ticket is being processed (popped from queue) so mainProcessing=true
+            // v6.0: The ticket is picked up into an active slot (removed from queue)
+            // mainProcessing reflects activeSlots.size > 0
             expect(status.mainProcessing).toBe(true);
+            expect(status.activeSlots).toBeGreaterThanOrEqual(1);
 
             resolveAgent!();
             await new Promise(resolve => setTimeout(resolve, 50));

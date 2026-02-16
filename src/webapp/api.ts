@@ -17,8 +17,8 @@ function shouldCreateTicket(operationType: string, aiLevel: string): boolean {
     const mediumOps = ['design_change', 'suggestion'];
     // Manual: only major ops
     if (aiLevel === 'manual') return majorOps.includes(operationType);
-    // Suggestions: major + medium
-    if (aiLevel === 'suggestions') return majorOps.includes(operationType) || mediumOps.includes(operationType);
+    // Suggest: major + medium
+    if (aiLevel === 'suggest' || aiLevel === 'suggestions') return majorOps.includes(operationType) || mediumOps.includes(operationType);
     // Smart/Hybrid: everything
     return true;
 }
@@ -276,12 +276,12 @@ function parseAIJson<T>(raw: string, context: string): { data: T | null; error: 
 /**
  * Determines whether an action should auto-apply based on AI level and priority.
  * - Manual: never auto-apply
- * - Suggestions: never auto-apply (show suggestions only)
+ * - Suggest: never auto-apply (show suggestions only)
  * - Smart: auto-apply safe changes (P3/P4), ask for P1/P2
  * - Hybrid: auto-apply P3/P4, suggest P1/P2
  */
 function shouldAutoApply(aiLevel: string, priority: string): boolean {
-    if (aiLevel === 'manual' || aiLevel === 'suggestions') return false;
+    if (aiLevel === 'manual' || aiLevel === 'suggest' || aiLevel === 'suggestions') return false;
     // Smart and Hybrid: auto-apply low-priority (safe) changes
     const safePriorities = ['P3', 'P4', 'p3', 'p4'];
     return safePriorities.includes(priority);
@@ -290,7 +290,7 @@ function shouldAutoApply(aiLevel: string, priority: string): boolean {
 /**
  * Determines if AI should respond to user messages at a given level.
  * - Manual: no AI response (store message only)
- * - Suggestions/Smart/Hybrid: respond
+ * - Suggest/Smart/Hybrid: respond
  */
 function shouldAiRespond(aiLevel: string): boolean {
     return aiLevel !== 'manual';
@@ -303,7 +303,7 @@ function shouldAiRespond(aiLevel: string): boolean {
 function getAiResponseStyle(aiLevel: string): string {
     switch (aiLevel) {
         case 'manual': return '';
-        case 'suggestions': return 'Provide suggestions and recommendations. Do NOT auto-apply changes. Ask for user confirmation before any actions.';
+        case 'suggest': case 'suggestions': return 'Provide suggestions and recommendations. Do NOT auto-apply changes. Ask for user confirmation before any actions.';
         case 'smart': return 'For low-priority (P3/P4) changes, apply automatically. For high-priority (P1/P2) changes, explain and ask for confirmation. Proactively suggest improvements.';
         case 'hybrid': return 'Automatically handle routine P3/P4 tasks. For P1/P2 decisions, present options and ask. Be proactive about suggesting improvements and optimizations.';
         default: return 'Provide suggestions and recommendations.';
@@ -316,10 +316,11 @@ function getPlanAiLevel(database: Database, planId: string): string {
         const plan = database.getPlan(planId);
         if (plan) {
             const config = JSON.parse(plan.config_json || '{}');
-            return (config.design?.aiLevel as string) || (config.aiLevel as string) || 'suggestions';
+            const raw = (config.design?.aiLevel as string) || (config.aiLevel as string) || 'smart';
+            return raw === 'suggestions' ? 'suggest' : raw;
         }
     } catch { /* ignore */ }
-    return 'suggestions';
+    return 'smart';
 }
 
 // ==================== DESIGN DIFF HELPERS ====================
@@ -1097,12 +1098,13 @@ export async function handleApiRequest(
             const priorities = (body.priorities as string[]) || ['Core business logic'];
             const design = (body.design as Record<string, string>) || {};
 
-            const aiLevel = (design.aiLevel as string) || (body.ai_level as string) || 'suggestions';
+            const rawAiLevel = (design.aiLevel as string) || (body.ai_level as string) || 'smart';
+            const aiLevel = rawAiLevel === 'suggestions' ? 'suggest' : rawAiLevel;
 
             // Adjust prompt detail based on AI level
             const levelGuidance = aiLevel === 'manual'
                 ? 'Generate minimal scaffolding tasks only — the user will define details manually.'
-                : aiLevel === 'suggestions'
+                : aiLevel === 'suggest'
                 ? 'Generate well-structured tasks with clear descriptions. Include improvement suggestions as P3 tasks.'
                 : 'Generate comprehensive tasks including optimizations, testing, and CI/CD. Auto-fill all details. Include improvement suggestions.';
 
@@ -1308,7 +1310,8 @@ export async function handleApiRequest(
             const rPrios = (planConfig.priorities as string[]) || ['Core business logic'];
             const rBody = await parseBody(req);
             const rDesc = (rBody.description as string) || (planConfig.description as string) || '';
-            const regenAiLevel = (planConfig.design as Record<string, unknown>)?.aiLevel as string || (rBody.ai_level as string) || 'suggestions';
+            const rawRegenAiLevel = (planConfig.design as Record<string, unknown>)?.aiLevel as string || (rBody.ai_level as string) || 'smart';
+            const regenAiLevel = rawRegenAiLevel === 'suggestions' ? 'suggest' : rawRegenAiLevel;
 
             // TICKET-FIRST: Create tracking ticket before LLM call
             const earlyRegenTicket = createAutoTicket(database, 'plan_generation',
@@ -2739,7 +2742,8 @@ Only return the JSON array, nothing else.`;
         if (route === 'ai/autofill' && method === 'POST') {
             const body = await parseBody(req);
             const planId = body.plan_id as string;
-            const reqAiLevel = (body.ai_level as string) || 'suggestions';
+            const rawReqAiLevel = (body.ai_level as string) || 'smart';
+            const reqAiLevel = rawReqAiLevel === 'suggestions' ? 'suggest' : rawReqAiLevel;
             if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
             // Manual mode: no autofill
             if (reqAiLevel === 'manual') {
@@ -2800,7 +2804,8 @@ Only return the JSON array, nothing else.`;
             const config = JSON.parse(plan.config_json || '{}');
 
             // TICKET-FIRST: Create tracking ticket before LLM call
-            const reviewAiLevel = (config.design as Record<string, unknown>)?.aiLevel as string || 'suggestions';
+            const rawReviewAiLevel = (config.design as Record<string, unknown>)?.aiLevel as string || 'smart';
+            const reviewAiLevel = rawReviewAiLevel === 'suggestions' ? 'suggest' : rawReviewAiLevel;
             const earlyReviewTicket = createAutoTicket(database, 'suggestion',
                 'Plan Review: ' + plan.name + ' \u2014 Reviewing...',
                 'AI reviewing plan readiness.',
@@ -3677,7 +3682,7 @@ Only return the JSON object, nothing else.`;
                 return true;
             }
 
-            const aiLevel = (body.ai_level as string) || 'suggestions';
+            const aiLevel = ((body.ai_level as string) || 'smart') === 'suggestions' ? 'suggest' : ((body.ai_level as string) || 'smart');
             const ticket = createAutoTicket(database, 'design_change',
                 `Design change request: ${description.substring(0, 60)}`,
                 `Severity: ${severity}\n\n${description}\n\nRequested during coding session ${sessionId || 'unknown'}.`,
@@ -3962,7 +3967,8 @@ Only return the JSON array.`;
                 const body = await parseBody(req);
                 const content = body.content as string;
                 const context = (body.context || {}) as Record<string, unknown>;
-                const aiLevel = (body.ai_level as string) || 'suggestions';
+                const rawChatAiLevel = (body.ai_level as string) || 'smart';
+                const aiLevel = rawChatAiLevel === 'suggestions' ? 'suggest' : rawChatAiLevel;
 
                 if (!content) { json(res, { error: 'content is required' }, 400); return true; }
 

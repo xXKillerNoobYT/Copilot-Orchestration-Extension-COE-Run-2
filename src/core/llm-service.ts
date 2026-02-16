@@ -1,10 +1,15 @@
 import * as vscode from 'vscode';
 import { LLMConfig, LLMMessage, LLMRequest, LLMResponse, LLMStreamChunk } from '../types';
 
+/** v6.0: Request priority — boss requests get a reserved LLM slot */
+type LLMPriority = 'boss' | 'normal';
+
 interface QueuedRequest {
     request: LLMRequest;
+    priority: LLMPriority;
     resolve: (value: LLMResponse) => void;
     reject: (reason: Error) => void;
+    retryCount: number;
 }
 
 interface CacheEntry {
@@ -14,8 +19,15 @@ interface CacheEntry {
 
 export class LLMService {
     private queue: QueuedRequest[] = [];
-    private processing = false;
-    private maxQueueSize = 5;
+    /** v6.0: Number of currently active concurrent requests (replaces boolean `processing`) */
+    private activeRequests = 0;
+    /** v6.0: Max concurrent requests (LM Studio thread limit). Default: 4. */
+    private maxConcurrent: number;
+    /** v6.0: Slots reserved for Boss AI priority requests. Default: 1. */
+    private bossReservedSlots: number;
+    /** v6.0: Max retries per failed request. Default: 5. */
+    private maxRetries: number;
+    private maxQueueSize = 20; // v6.0: increased from 5 (4 concurrent × 5 pending each)
 
     // Response cache: keyed by hash of messages+options, 5-min TTL, max 100 entries
     private cache = new Map<string, CacheEntry>();
@@ -29,13 +41,20 @@ export class LLMService {
     constructor(
         private config: LLMConfig,
         private outputChannel: vscode.OutputChannel
-    ) {}
+    ) {
+        this.maxConcurrent = config.maxConcurrentRequests ?? 4;
+        this.bossReservedSlots = config.bossReservedSlots ?? 1;
+        this.maxRetries = config.maxRequestRetries ?? 5;
+    }
 
     updateConfig(config: LLMConfig): void {
         this.config = config;
+        this.maxConcurrent = config.maxConcurrentRequests ?? 4;
+        this.bossReservedSlots = config.bossReservedSlots ?? 1;
+        this.maxRetries = config.maxRequestRetries ?? 5;
     }
 
-    async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean }): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean; priority?: LLMPriority }): Promise<LLMResponse> {
         // Check cache first (only for non-streaming, deterministic requests)
         const cacheKey = this.computeCacheKey(messages, options);
         const cached = this.getCachedResponse(cacheKey);
@@ -55,6 +74,8 @@ export class LLMService {
             stream: options?.stream ?? true,
         };
 
+        const priority: LLMPriority = options?.priority ?? 'normal';
+
         return new Promise<LLMResponse>((resolve, reject) => {
             if (this.queue.length >= this.maxQueueSize) {
                 reject(new Error(`LLM queue full (${this.maxQueueSize} requests pending). Try again later.`));
@@ -62,6 +83,8 @@ export class LLMService {
             }
             this.queue.push({
                 request,
+                priority,
+                retryCount: 0,
                 resolve: (response) => {
                     // Cache the response for non-streaming requests with low temperature
                     if (!request.stream && (request.temperature ?? 0.7) <= 0.3) {
@@ -103,26 +126,111 @@ export class LLMService {
     }
 
     isProcessing(): boolean {
-        return this.processing;
+        return this.activeRequests > 0;
     }
 
-    private async processQueue(): Promise<void> {
-        if (this.processing || this.queue.length === 0) return;
-        this.processing = true;
+    /** v6.0: Number of currently active LLM requests */
+    getActiveRequests(): number {
+        return this.activeRequests;
+    }
 
-        while (this.queue.length > 0) {
-            const item = this.queue.shift()!;
+    /** v6.0: Number of available slots (total minus active) */
+    getAvailableSlots(): number {
+        return Math.max(0, this.maxConcurrent - this.activeRequests);
+    }
+
+    /** v6.0: Number of available slots for normal (non-boss) requests */
+    getAvailableNormalSlots(): number {
+        return Math.max(0, this.maxConcurrent - this.bossReservedSlots - this.activeRequests);
+    }
+
+    /**
+     * v6.0: Concurrent queue processor — replaces the old serial loop.
+     *
+     * Fills available LLM slots with queued requests. Boss-priority requests
+     * can use the reserved slot; normal requests cannot.
+     *
+     * Called after every enqueue and after every request completion.
+     */
+    private processQueue(): void {
+        if (this.queue.length === 0) return;
+
+        // Fill as many slots as possible
+        while (this.queue.length > 0 && this.activeRequests < this.maxConcurrent) {
+            // Calculate available slots for normal requests
+            const normalSlotsUsed = this.activeRequests; // simplification: we don't track boss vs normal active
+            const normalSlotsAvailable = this.maxConcurrent - this.bossReservedSlots - normalSlotsUsed;
+            const totalSlotsAvailable = this.maxConcurrent - this.activeRequests;
+
+            // Find the next request to dequeue
+            let itemIdx = -1;
+
+            if (totalSlotsAvailable > 0 && normalSlotsAvailable <= 0) {
+                // Only reserved slots available — only boss-priority requests can go
+                itemIdx = this.queue.findIndex(q => q.priority === 'boss');
+            } else if (totalSlotsAvailable > 0) {
+                // Normal slots available — any request can go (boss first, then FIFO)
+                const bossIdx = this.queue.findIndex(q => q.priority === 'boss');
+                itemIdx = bossIdx >= 0 ? bossIdx : 0;
+            }
+
+            if (itemIdx < 0) break; // No eligible request found
+
+            // Dequeue the selected item
+            const [item] = this.queue.splice(itemIdx, 1);
+            this.activeRequests++;
+
+            // Fire-and-forget: execute concurrently (don't await)
+            this.executeWithRetry(item).then(
+                (response) => {
+                    this.activeRequests--;
+                    item.resolve(response);
+                    // Try to fill the freed slot
+                    this.processQueue();
+                },
+                (error) => {
+                    this.activeRequests--;
+                    item.reject(error instanceof Error ? error : new Error(String(error)));
+                    // Try to fill the freed slot
+                    this.processQueue();
+                }
+            );
+        }
+    }
+
+    /**
+     * v6.0: Execute a request with retry logic (up to maxRetries attempts).
+     */
+    private async executeWithRetry(item: QueuedRequest): Promise<LLMResponse> {
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
             try {
                 const response = item.request.stream
                     ? await this.executeStreaming(item.request)
                     : await this.executeNonStreaming(item.request);
-                item.resolve(response);
+                return response;
             } catch (error) {
-                item.reject(error instanceof Error ? error : new Error(String(error)));
+                lastError = error instanceof Error ? error : new Error(String(error));
+
+                // Don't retry on certain errors
+                const errMsg = lastError.message.toLowerCase();
+                if (errMsg.includes('queue full') || errMsg.includes('abort')) {
+                    throw lastError;
+                }
+
+                if (attempt < this.maxRetries) {
+                    // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+                    this.outputChannel.appendLine(
+                        `[LLMService] Request failed (attempt ${attempt + 1}/${this.maxRetries + 1}), retrying in ${delay}ms: ${lastError.message.substring(0, 100)}`
+                    );
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
             }
         }
 
-        this.processing = false;
+        throw lastError ?? new Error('LLM request failed after all retries');
     }
 
     private async executeStreaming(request: LLMRequest): Promise<LLMResponse> {
@@ -369,6 +477,99 @@ export class LLMService {
                 success: false,
                 message: `Connection failed: ${error instanceof Error ? error.message : String(error)}`,
             };
+        }
+    }
+
+    /**
+     * v6.0: Fetch model capabilities from LM Studio's /v1/models endpoint.
+     *
+     * LM Studio returns model info including:
+     *   - id: model identifier (e.g. "mistralai/ministral-3-14b-reasoning")
+     *   - max_context_length: context window size in tokens (e.g. 32768)
+     *   - state: "loaded" | "not-loaded"
+     *   - type: "llm" | "vlm" | "embeddings"
+     *   - arch, publisher, quantization, etc.
+     *
+     * This eliminates the need to manually configure contextWindowTokens and
+     * maxOutputTokens in the config file — the model itself tells us its limits.
+     *
+     * Returns info for the currently configured model, or null if unavailable.
+     */
+    async fetchModelInfo(): Promise<{
+        id: string;
+        maxContextLength: number;
+        state: string;
+        type: string;
+        arch: string;
+        publisher: string;
+        quantization: string;
+    } | null> {
+        try {
+            const response = await fetch(`${this.config.endpoint}/models`, {
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!response.ok) {
+                this.outputChannel.appendLine(
+                    `[LLMService] fetchModelInfo: HTTP ${response.status} from /models`
+                );
+                return null;
+            }
+
+            const data = await response.json() as {
+                data?: Array<{
+                    id: string;
+                    max_context_length?: number;
+                    state?: string;
+                    type?: string;
+                    arch?: string;
+                    publisher?: string;
+                    quantization?: string;
+                }>;
+            };
+
+            if (!data.data || data.data.length === 0) {
+                this.outputChannel.appendLine('[LLMService] fetchModelInfo: no models returned');
+                return null;
+            }
+
+            // Find the model matching our configured model ID
+            const configModel = this.config.model;
+            let match = data.data.find(m => m.id === configModel);
+
+            // If exact match fails, try partial match (LM Studio sometimes uses different ID formats)
+            if (!match) {
+                match = data.data.find(m =>
+                    m.id.includes(configModel) || configModel.includes(m.id)
+                );
+            }
+
+            // If still no match, use the first loaded model (or first model if none loaded)
+            if (!match) {
+                match = data.data.find(m => m.state === 'loaded') || data.data[0];
+            }
+
+            if (!match) return null;
+
+            const result = {
+                id: match.id,
+                maxContextLength: match.max_context_length ?? 0,
+                state: match.state ?? 'unknown',
+                type: match.type ?? 'llm',
+                arch: match.arch ?? 'unknown',
+                publisher: match.publisher ?? 'unknown',
+                quantization: match.quantization ?? 'unknown',
+            };
+
+            this.outputChannel.appendLine(
+                `[LLMService] Model detected: ${result.id} (context: ${result.maxContextLength} tokens, state: ${result.state}, type: ${result.type})`
+            );
+
+            return result;
+        } catch (error) {
+            this.outputChannel.appendLine(
+                `[LLMService] fetchModelInfo failed (non-fatal): ${error instanceof Error ? error.message : String(error)}`
+            );
+            return null;
         }
     }
 

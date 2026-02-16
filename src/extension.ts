@@ -76,11 +76,56 @@ export async function activate(context: vscode.ExtensionContext) {
             outputChannel
         );
 
-        // Register any additional model profiles from config
+        // v6.0: Auto-detect model capabilities from LM Studio API
+        // This replaces the need to manually configure contextWindowTokens/maxOutputTokens.
+        // Config `models` section is now an optional override (fallback if API is unavailable).
+        try {
+            const modelInfo = await llmService.fetchModelInfo();
+            if (modelInfo && modelInfo.maxContextLength > 0) {
+                // Auto-detected from LM Studio — use real values
+                const detectedContext = modelInfo.maxContextLength;
+                // maxOutputTokens is not returned by LM Studio API, so use a sensible default:
+                // 1/8 of context window, capped between 2048 and 8192
+                const configOverride = coeConfig.models?.[modelInfo.id];
+                const detectedMaxOutput = configOverride?.maxOutputTokens
+                    ?? Math.min(8192, Math.max(2048, Math.floor(detectedContext / 8)));
+
+                budgetTracker.registerModel({
+                    id: modelInfo.id,
+                    name: modelInfo.id,
+                    contextWindowTokens: configOverride?.contextWindowTokens ?? detectedContext,
+                    maxOutputTokens: detectedMaxOutput,
+                    tokensPerChar: {
+                        [ContentType.Code]: 3.2,
+                        [ContentType.NaturalText]: 4.0,
+                        [ContentType.JSON]: 3.5,
+                        [ContentType.Markdown]: 3.8,
+                        [ContentType.Mixed]: 3.6,
+                    },
+                    overheadTokensPerMessage: 4,
+                });
+
+                outputChannel.appendLine(
+                    `[LLMService] Auto-detected model profile: ${modelInfo.id} ` +
+                    `(context: ${detectedContext}, maxOutput: ${detectedMaxOutput}, ` +
+                    `type: ${modelInfo.type}, arch: ${modelInfo.arch}, quant: ${modelInfo.quantization})`
+                );
+            } else {
+                outputChannel.appendLine(
+                    '[LLMService] Model auto-detection unavailable — using config defaults'
+                );
+            }
+        } catch (err) {
+            outputChannel.appendLine(
+                `[LLMService] Model auto-detection failed (non-fatal): ${err}`
+            );
+        }
+
+        // Register any additional model profiles from config (for models not yet loaded/detected)
         if (coeConfig.models) {
             for (const [modelId, modelConfig] of Object.entries(coeConfig.models)) {
-                if (modelId !== coeConfig.llm.model) {
-                    // The default model was already registered by the constructor
+                // Skip models already registered (including the auto-detected one)
+                try {
                     budgetTracker.registerModel({
                         id: modelId,
                         name: modelId,
@@ -95,6 +140,8 @@ export async function activate(context: vscode.ExtensionContext) {
                         },
                         overheadTokensPerMessage: 4,
                     });
+                } catch {
+                    // Model already registered (e.g. by auto-detection) — skip
                 }
             }
         }

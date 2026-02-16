@@ -24,6 +24,9 @@ describe('LLMService', () => {
             streamStallTimeoutSeconds: 3,
             maxTokens: 100,
             maxInputTokens: 4000,
+            maxRequestRetries: 0,          // v6.0: no retries in tests (avoids exponential backoff timeouts)
+            maxConcurrentRequests: 4,      // v6.0: concurrent slots
+            bossReservedSlots: 1,          // v6.0: boss reserved slot
             ...overrides,
         };
     }
@@ -127,9 +130,11 @@ describe('LLMService', () => {
     });
 
     test('queue rejects when full', async () => {
-        // The queue checks happen synchronously before processing starts.
-        // First call starts processing (queue empty, goes straight to execute).
-        // We need the first call to be slow so it blocks the queue.
+        // v6.0: With concurrent processing, requests go into active slots immediately.
+        // To test queue-full rejection, we need:
+        // 1. maxConcurrent = 1 (so only 1 request can be active at a time)
+        // 2. maxQueueSize = 1 (so only 1 request can wait in queue)
+        // Then: request 1 → active slot, request 2 → queue, request 3 → rejected
         await startMockLLM((_req, res) => {
             // Delay response to keep the first request in-flight
             setTimeout(() => {
@@ -141,20 +146,23 @@ describe('LLMService', () => {
             }, 2000);
         });
 
-        llmService = new LLMService(createConfig(), outputChannel);
+        llmService = new LLMService(createConfig({
+            maxConcurrentRequests: 1,  // Only 1 active request at a time
+            bossReservedSlots: 0,      // No reserved slots for this test
+        }), outputChannel);
         // @ts-ignore — access private member for test
         llmService['maxQueueSize'] = 1;
 
-        // First call will start processing immediately (not queued)
+        // First call goes into the active slot immediately
         const p1 = llmService.chat([{ role: 'user', content: '1' }], { stream: false });
 
         // Give a tick for processing to start
         await new Promise(r => setTimeout(r, 50));
 
-        // Second call should queue successfully
+        // Second call should queue successfully (1 active, 0 in queue → queue has room)
         const p2 = llmService.chat([{ role: 'user', content: '2' }], { stream: false });
 
-        // Third call should fail — queue is full (1 max)
+        // Third call should fail — queue is full (1 max, already has 1 pending)
         await expect(
             llmService.chat([{ role: 'user', content: '3' }], { stream: false })
         ).rejects.toThrow(/queue full/i);

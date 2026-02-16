@@ -157,19 +157,18 @@ describe('Agent Prompt Content Tests', () => {
     describe('BossAgent', () => {
         const prompt = getPrompt(BossAgent);
 
-        test('identifies Boss AI as top-level supervisor', () => {
-            expect(prompt).toContain('top-level supervisor');
-            expect(prompt).toContain('active decision-maker');
+        test('identifies Boss AI as top-level project manager', () => {
+            expect(prompt).toContain('PROJECT MANAGER');
+            expect(prompt).toContain('ACTIVE decision-maker');
         });
 
-        test('specifies Boss AI runs on startup, between tickets, and when idle', () => {
-            expect(prompt).toContain('system startup');
-            expect(prompt).toContain('ticket completion');
-            expect(prompt).toContain('5 minutes when idle');
+        test('specifies Boss AI runs on startup, between batches, and when idle', () => {
+            expect(prompt).toContain('Startup');
+            expect(prompt).toContain('Between batches');
+            expect(prompt).toContain('Idle timer');
         });
 
-        test('specifies task overload threshold > 20', () => {
-            expect(prompt).toContain('task count > 20');
+        test('specifies PAUSE_INTAKE action verb', () => {
             expect(prompt).toContain('PAUSE_INTAKE');
         });
 

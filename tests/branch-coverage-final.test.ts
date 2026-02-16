@@ -51,6 +51,9 @@ const mockConfig: any = {
         timeoutSeconds: 30,
         startupTimeoutSeconds: 10,
         streamStallTimeoutSeconds: 60,
+        maxRequestRetries: 0,
+        maxConcurrentRequests: 4,
+        bossReservedSlots: 1,
         maxTokens: 4000,
     }),
 };

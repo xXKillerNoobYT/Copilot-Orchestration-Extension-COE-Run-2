@@ -103,6 +103,10 @@ export type COEEventType =
     | 'plan:file_uploaded' | 'plan:file_updated' | 'plan:file_deleted'
     | 'plan:file_synced' | 'plan:folder_linked' | 'plan:folder_scanned'
     | 'plan:file_change_detected'
+    // Boss AI parallel processing (v6.0)
+    | 'boss:slot_started' | 'boss:slot_completed' | 'boss:slot_error'
+    | 'boss:model_swap' | 'boss:ticket_held' | 'boss:ticket_unheld'
+    | 'boss:notepad_updated' | 'boss:dispatch_agent'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'
