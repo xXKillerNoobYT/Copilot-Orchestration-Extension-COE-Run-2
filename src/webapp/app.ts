@@ -834,7 +834,9 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <button class="btn btn-primary" onclick="openModal('ticketModal')">+ New Ticket</button>
     </div>
     <p class="subtitle">Tickets and decisions that need human input</p>
-    <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center">
+    <!-- v7.0: Team queue status bar -->
+    <div id="teamQueueBar" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
+    <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
         <label style="font-size:0.85em;color:var(--subtext)">Type:
             <select id="ticketOperationFilter" onchange="loadTickets()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em">
                 <option value="">All</option>
@@ -847,9 +849,18 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <option value="suggestion">Suggestions</option>
             </select>
         </label>
+        <label style="font-size:0.85em;color:var(--subtext)">Team:
+            <select id="ticketTeamFilter" onchange="loadTickets()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em">
+                <option value="">All Teams</option>
+                <option value="orchestrator">Orchestrator</option>
+                <option value="planning">Planning</option>
+                <option value="verification">Verification</option>
+                <option value="coding_director">Coding Director</option>
+            </select>
+        </label>
     </div>
     <table>
-        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Type</th><th>Actions</th></tr></thead>
+        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Team</th><th>Type</th><th>Actions</th></tr></thead>
         <tbody id="ticketTableBody"></tbody>
     </table>
     <div id="ticketDetail"></div>
@@ -1470,6 +1481,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
             <!-- Header with 3 key action buttons -->
             <div class="coding-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
                 <span id="codingSessionName" style="font-weight:600;font-size:0.95em">Coding Workstation</span>
+                <span id="codingDirectorStatus" style="font-size:0.8em;padding:3px 8px;border-radius:4px;background:var(--surface0);color:var(--overlay);margin-left:8px">Loading...</span>
                 <div style="display:flex;gap:8px;align-items:center">
                     <button class="btn btn-sm btn-primary" id="codingAutoPickBtn" onclick="codingAutoPick()" title="Auto-select next ticket and generate coding prompt">Generate Prompt</button>
                     <button class="btn btn-sm btn-secondary" id="codingNewChatBtn" onclick="codingNewChat()" title="Start a fresh coding chat (use when changing areas or after errors)">New Coding Chat</button>
@@ -1808,6 +1820,46 @@ function processingBadge(t) {
     if (ps === 'awaiting_user') return '<span class="badge badge-red">Awaiting User</span>';
     return '<span class="badge badge-gray">' + esc(ps.replace(/_/g, ' ')) + '</span>';
 }
+// v7.0: Team queue badge — colored label per team
+function teamQueueBadge(queue) {
+    if (!queue) return '<span style="color:var(--overlay);font-size:0.8em">—</span>';
+    var colorMap = { orchestrator: 'blue', planning: 'mauve', verification: 'yellow', coding_director: 'green' };
+    var labelMap = { orchestrator: 'Orch', planning: 'Plan', verification: 'Verify', coding_director: 'Coding' };
+    return '<span class="badge badge-' + (colorMap[queue] || 'gray') + '" title="' + esc(queue) + ' queue">' + (labelMap[queue] || esc(queue)) + '</span>';
+}
+// v7.0: Load team queue status bar
+async function loadTeamQueueBar() {
+    try {
+        var result = await api('queues');
+        var queues = result.queues || [];
+        var bar = document.getElementById('teamQueueBar');
+        if (!bar) return;
+        var colorMap = { orchestrator: '#89b4fa', planning: '#cba6f7', verification: '#f9e2af', coding_director: '#a6e3a1' };
+        var labelMap = { orchestrator: 'Orchestrator', planning: 'Planning', verification: 'Verification', coding_director: 'Coding Director' };
+        var html = '';
+        queues.forEach(function(q) {
+            var color = colorMap[q.queue] || '#6c7086';
+            var label = labelMap[q.queue] || q.queue;
+            var total = q.pending + q.active;
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;border-left:3px solid ' + color + '">';
+            html += '<span style="font-weight:600;font-size:0.85em;color:' + color + '">' + label + '</span>';
+            html += '<span style="font-size:0.8em;color:var(--subtext)" title="Pending / Active / Slots">';
+            html += q.pending + ' pending';
+            if (q.active > 0) html += ' \\u2022 ' + q.active + ' active';
+            html += ' \\u2022 ' + q.allocatedSlots + ' slots';
+            html += '</span>';
+            if (q.blocked > 0) html += '<span class="badge badge-red" style="font-size:0.7em">' + q.blocked + ' blocked</span>';
+            if (q.cancelled > 0) html += '<span class="badge badge-gray" style="font-size:0.7em">' + q.cancelled + ' cancelled</span>';
+            html += '</div>';
+        });
+        if (queues.length === 0) {
+            html = '<div style="font-size:0.85em;color:var(--overlay)">No team queues active</div>';
+        }
+        bar.innerHTML = html;
+    } catch (e) {
+        // Silently ignore — bar is informational only
+    }
+}
 
 // ==================== LOAD PAGES ====================
 function loadPage(page) {
@@ -1952,8 +2004,14 @@ async function loadTickets() {
         var opFilter = '';
         var filterEl = document.getElementById('ticketOperationFilter');
         if (filterEl && filterEl.value) opFilter = '&operation_type=' + encodeURIComponent(filterEl.value);
+        var teamFilterEl = document.getElementById('ticketTeamFilter');
+        var teamFilter = teamFilterEl ? teamFilterEl.value : '';
         const result = await api('tickets?limit=200' + opFilter);
-        const tickets = Array.isArray(result) ? result : (result.data || []);
+        var tickets = Array.isArray(result) ? result : (result.data || []);
+        // v7.0: Apply team queue filter client-side
+        if (teamFilter) {
+            tickets = tickets.filter(function(t) { return t.assigned_queue === teamFilter; });
+        }
         // Separate root tickets (no parent) from children
         var roots = tickets.filter(function(t) { return !t.parent_ticket_id; });
         var childMap = {};
@@ -1979,9 +2037,11 @@ async function loadTickets() {
                 });
             }
         });
-        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="6" class="empty">No tickets</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="8" class="empty">No tickets</td></tr>';
+        // v7.0: Load team queue status bar
+        loadTeamQueueBar();
     } catch (err) {
-        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="6" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="8" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
     }
 }
 
@@ -1996,6 +2056,7 @@ function ticketRow(t, depth, hasChildren, isExpanded, childCount) {
         '<td>' + statusBadge(t.status) + '</td>' +
         '<td>' + processingBadge(t) + '</td>' +
         '<td>' + prioBadge(t.priority) + '</td>' +
+        '<td>' + teamQueueBadge(t.assigned_queue) + '</td>' +
         '<td style="font-size:0.8em;text-transform:capitalize">' + esc((t.operation_type || 'user created').replace(/_/g, ' ')) + (t.auto_created ? '<span style="font-size:0.7em;color:var(--overlay);margin-left:4px">(auto)</span>' : '') + '</td>' +
         '<td>' + ticketActions(t) + '</td>' +
         '</tr>';
@@ -4992,6 +5053,34 @@ async function loadCodingStatus() {
             updateCodingTicketInfo(status.next_ticket);
         }
     } catch (e) { /* ignore status errors */ }
+    // v7.0: Update Coding Director status
+    loadCodingDirectorStatus();
+}
+
+// v7.0: Poll the Coding Director agent status
+async function loadCodingDirectorStatus() {
+    var el = document.getElementById('codingDirectorStatus');
+    if (!el) return;
+    try {
+        var st = await api('coding/status');
+        if (st.hasPendingTask && st.currentTask) {
+            el.textContent = 'Active: ' + st.currentTask.substring(0, 40);
+            el.style.background = 'rgba(166,227,161,0.15)';
+            el.style.color = 'var(--green)';
+        } else if (st.queueDepth > 0) {
+            el.textContent = 'Pending (' + st.queueDepth + ' in queue)';
+            el.style.background = 'rgba(249,226,175,0.15)';
+            el.style.color = 'var(--yellow)';
+        } else {
+            el.textContent = 'NOT READY';
+            el.style.background = 'rgba(186,194,222,0.1)';
+            el.style.color = 'var(--overlay)';
+        }
+    } catch (e) {
+        el.textContent = 'NOT READY';
+        el.style.background = 'rgba(186,194,222,0.1)';
+        el.style.color = 'var(--overlay)';
+    }
 }
 
 // v5.0: Update the ticket info panel in sidebar

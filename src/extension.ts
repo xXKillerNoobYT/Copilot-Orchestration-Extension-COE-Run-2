@@ -23,6 +23,8 @@ import { ConflictResolver } from './core/conflict-resolver';
 import { SyncService } from './core/sync-service';
 import { getEventBus } from './core/event-bus';
 import { TicketProcessorService } from './core/ticket-processor';
+import { DocumentManagerService } from './core/document-manager';
+import { AgentFileCleanupService } from './core/agent-file-cleanup';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -228,6 +230,12 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push({ dispose: () => ticketProcessor.dispose() });
         outputChannel.appendLine('TicketProcessorService initialized with dual queues.');
 
+        // Phase 3c: Initialize DocumentManagerService (v7.0)
+        const documentManager = new DocumentManagerService(database, eventBus, outputChannel);
+        ticketProcessor.setDocumentManager(documentManager);
+        orchestrator.getAnswerAgent().setDocumentManager(documentManager);
+        outputChannel.appendLine('DocumentManagerService initialized and wired into TicketProcessor + AnswerAgent.');
+
         // Phase 4: Initialize UI — single status view (full app opens in browser)
         const statusView = new StatusViewProvider(database, mcpServer);
 
@@ -266,6 +274,14 @@ export async function activate(context: vscode.ExtensionContext) {
             );
             fileWatcher.start();
             context.subscriptions.push({ dispose: () => fileWatcher.stop() });
+
+            // Phase 6b: Agent file cleanup watcher (v7.0)
+            const fileCleanup = new AgentFileCleanupService(
+                workspaceRoot, database, documentManager, eventBus, outputChannel
+            );
+            const cleanupDisposable = fileCleanup.startWatching();
+            context.subscriptions.push(cleanupDisposable);
+            outputChannel.appendLine('AgentFileCleanupService initialized and watching workspace root.');
         }
 
         // Phase 7: Show activation message

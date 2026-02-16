@@ -38,7 +38,7 @@ describe('Agent Prompt Content Tests', () => {
         });
 
         test('contains tie-breaking rules', () => {
-            expect(prompt).toContain('verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general');
+            expect(prompt).toContain('verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general');
         });
 
         test('specifies output format as single word', () => {

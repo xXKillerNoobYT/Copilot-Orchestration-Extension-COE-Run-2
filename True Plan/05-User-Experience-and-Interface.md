@@ -1,10 +1,10 @@
 # 05 — User Experience & Interface Design
 
-**Version**: 4.0  
-**Last Updated**: February 2026  
-**Status**: ✅ Current  
-**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [09-Features-and-Capabilities](09-Features-and-Capabilities.md)  
-**Changelog**: v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
+**Version**: 7.0
+**Last Updated**: February 2026
+**Status**: ✅ Current
+**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [09-Features-and-Capabilities](09-Features-and-Capabilities.md)
+**Changelog**: v7.0 — Tickets tab team queue grouping/filtering, Coding tab "NOT READY" status display, Boss AI nav indicator per-queue breakdown, queue status display in Progress Dashboard | v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
 
 ---
 
@@ -72,6 +72,36 @@ Organized by status with priority badges:
 - **Resolved** — Completed and closed
 - **Escalated** — Needs human or Boss AI attention
 - **In Review** — Clarity Agent checking response
+
+#### Team Queue Grouping (v7.0)
+
+Tickets can be filtered and grouped by their assigned team queue. A dropdown at the top of the Tickets tab allows selecting:
+
+```
+┌──────────────────────────────────────┐
+│ Filter by Team: [All Teams ▼]       │
+│   ○ All Teams                        │
+│   ○ Orchestrator (catch-all)         │
+│   ○ Planning                         │
+│   ○ Verification                     │
+│   ○ Coding Director                  │
+└──────────────────────────────────────┘
+```
+
+Each ticket displays a **team queue badge** showing which team it's assigned to:
+
+| Badge Color | Team Queue | Label |
+|-------------|-----------|-------|
+| Gray | Orchestrator | `ORCH` |
+| Blue | Planning | `PLAN` |
+| Green | Verification | `VERIFY` |
+| Orange | Coding Director | `CODE` |
+
+The badge appears next to the priority badge (e.g., `[P1] [PLAN] Decompose auth module`).
+
+> **👤 User View**: Tickets are now organized by team. Use the dropdown to see only tickets from a specific team, or view all at once. Each ticket shows a colored team badge so you can quickly identify which part of the system is handling it.
+
+> **🔧 Developer View**: Team queue assignment is stored in the `assigned_queue` column on the `tickets` table. The badge is rendered based on `ticket.assigned_queue` value matching the `LeadAgentQueue` enum. Filtering calls `GET /api/tickets?queue=planning` (query parameter). The `GET /api/queues` endpoint returns per-team queue depths for the overview.
 
 ### Tasks Tab
 Current task queue sorted by priority, showing:
@@ -516,7 +546,7 @@ Below the Visual Designer canvas:
 - Draft components render on canvas with dashed outline, "DRAFT" badge, and approve/reject controls
 - **Click-to-select pattern**: Draft components use persistent click-based selection (not hover). Click a draft to show Approve/Reject buttons below it; click again or click elsewhere to deselect. Buttons persist until explicitly dismissed.
 
-### Progress Dashboard — IMPLEMENTED (v4.0)
+### Progress Dashboard — IMPLEMENTED (v4.0, updated v7.0)
 
 Live ticket processing dashboard on the Planning page:
 
@@ -526,13 +556,17 @@ Live ticket processing dashboard on the Planning page:
 │ [====================--------] 62% (23/37 tickets)          │
 │ Current: TK-014 Develop admin panel   Queue: 8   Phase: 3  │
 │ [Planning Team badge]                                       │
+├─────────────────────────────────────────────────────────────┤
+│ Team Queues:  ORCH: 2  │  PLAN: 3  │  VERIFY: 1  │ CODE: 2│
+│ Slots: 1/1 active      │  2/2      │  1/1        │ 0/0    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 - Shows progress bar, current ticket, queue depth, phase, elapsed timer, agent badge
+- **v7.0**: Per-team queue depth and slot utilization shown in bottom row
 - Auto-appears when ticket processing starts (via SSE `ticket:processing_started` event)
 - Auto-hides when processing completes with 5s delay
-- Polls `/api/processing/status` for updates
+- Polls `/api/processing/status` for updates; queue data from `GET /api/queues`
 - Persists across page navigation via localStorage (`generationInProgress`, `generationStartTime`)
 
 ### Project Status Click-to-Select — IMPLEMENTED (v4.0)
@@ -583,7 +617,7 @@ Replaces free-form AI chat with focused 1-question-at-a-time popup:
 - Conflict detection panel when contradictory answers found
 - P1 questions pulse red badge in nav bar
 
-### Boss AI Nav Indicator
+### Boss AI Nav Indicator (updated v7.0)
 
 ```
 ┌─────────────────────────────────────┐
@@ -591,16 +625,23 @@ Replaces free-form AI chat with focused 1-question-at-a-time popup:
 ├─────────────────────────────────────┤
 │ Status: Idle (last check: 2 min)   │
 │ Phase: Stage 1 — Designing         │
-│ Queue: 3 tickets | 0 errors        │
+│ Total Queue: 8 tickets | 0 errors  │
+│ ┌─────────────────────────────────┐ │
+│ │ ORCH: 2  PLAN: 3  VER: 1  CD: 2│ │
+│ │ Slots: 1+2+1+0 / 4 total       │ │
+│ └─────────────────────────────────┘ │
 ├─────────────────────────────────────┤
 │ Last Assessment:                    │
-│ "System healthy. Design QA in       │
-│  progress. 2 questions pending."    │
+│ "Planning queue overloaded. Moving  │
+│  2 slots from orchestrator to       │
+│  planning team."                    │
 └─────────────────────────────────────┘
 ```
 
 - Gray (idle), blue+spinner (checking), red+badge (issues found)
 - Event-driven activation (not polling)
+- **v7.0**: Shows per-team queue depths and slot allocation breakdown
+- Boss assessment messages now reference specific team queues and slot rebalancing decisions
 
 ### Settings Page
 
@@ -623,6 +664,50 @@ Replaces free-form AI chat with focused 1-question-at-a-time popup:
 │ [Save Settings]                                          │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Coding Tab — NOT READY Status (v7.0)
+
+The Coding tab in the webapp shows the status of the Coding Director and external coding agent:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Coding Agent                                             │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│ When NO task is pending:                                 │
+│ ┌──────────────────────────────────────────────────────┐ │
+│ │  🔴 Pending Task... NOT READY                        │ │
+│ │  No coding tasks in queue.                           │ │
+│ │  Tasks will appear here when the Planning team       │ │
+│ │  creates code_generation tickets.                    │ │
+│ └──────────────────────────────────────────────────────┘ │
+│                                                          │
+│ When a task IS active:                                   │
+│ ┌──────────────────────────────────────────────────────┐ │
+│ │  🟢 Active: Implement user authentication module     │ │
+│ │  Prepared context: 12 files, 3 plan sections         │ │
+│ │  Prerequisites: ✅ All met                           │ │
+│ └──────────────────────────────────────────────────────┘ │
+│                                                          │
+│ When tasks are pending in queue:                         │
+│ ┌──────────────────────────────────────────────────────┐ │
+│ │  🟡 Pending (3 in queue)                             │ │
+│ │  Next: TK-089 Add pagination to API endpoints        │ │
+│ │  Prerequisites: ⚠ 1 missing (blocked by TK-087)     │ │
+│ └──────────────────────────────────────────────────────┘ │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+- Polls `GET /api/coding/status` every 5 seconds for current state
+- Shows `hasPendingTask`, `currentTask`, and `queueDepth` from CodingDirectorAgent
+- Red indicator when no tasks available (NOT READY)
+- Green indicator when actively processing a coding task
+- Yellow indicator when tasks are queued but prerequisites may be blocking
+
+> **👤 User View**: The Coding tab shows you what the external coding agent is working on (or waiting for). "NOT READY" means there's nothing in the coding queue yet — the Planning team needs to create coding tasks first. Once tasks flow in, you'll see the active task and queue depth.
+
+> **🔧 Developer View**: Status comes from `CodingDirectorAgent.getQueueStatus()` exposed via `GET /api/coding/status`. The endpoint returns `{ hasPendingTask, currentTask, queueDepth }`. The UI polls this every 5s. SSE events (`ticket:enqueued` with `queue=coding_director`) can trigger immediate refresh.
 
 ### Guided Tour (First Run)
 

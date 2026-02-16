@@ -77,6 +77,15 @@ const DEFAULT_CONFIG: COEConfig = {
     modelHoldTimeoutMs: 3600000,     // 1 hour hold timeout for model swap
     maxModelsPerCycle: 2,            // max 2 different models per boss cycle (prevent excessive swapping)
     multiModelEnabled: false,        // default: single model mode (one LLM loaded at a time)
+    // v7.0: Team queue orchestration
+    teamSlotAllocation: {            // Boss-controlled slot allocation per team (total = bossParallelBatchSize)
+        orchestrator: 1,
+        planning: 1,
+        verification: 1,
+        coding_director: 0,         // Coding Director starts with 0 — Boss allocates when coding work arrives
+    },
+    cancelledTicketReviewIntervalMs: 1800000,   // 30 minutes — Boss reviews cancelled tickets for re-engagement
+    maxSupportAgentSyncTimeoutMs: 60000,        // 60 seconds — max time for sync support agent call
 };
 
 export class ConfigManager {
@@ -169,6 +178,10 @@ export class ConfigManager {
             activeModel: loaded.activeModel,
             maxModelsPerCycle: loaded.maxModelsPerCycle ?? DEFAULT_CONFIG.maxModelsPerCycle,
             multiModelEnabled: loaded.multiModelEnabled ?? DEFAULT_CONFIG.multiModelEnabled,
+            // v7.0: Team queue orchestration
+            teamSlotAllocation: loaded.teamSlotAllocation ?? DEFAULT_CONFIG.teamSlotAllocation,
+            cancelledTicketReviewIntervalMs: loaded.cancelledTicketReviewIntervalMs ?? DEFAULT_CONFIG.cancelledTicketReviewIntervalMs,
+            maxSupportAgentSyncTimeoutMs: loaded.maxSupportAgentSyncTimeoutMs ?? DEFAULT_CONFIG.maxSupportAgentSyncTimeoutMs,
         };
     }
 

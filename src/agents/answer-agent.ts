@@ -1,9 +1,20 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse, TicketPriority } from '../types';
+import { AgentType, AgentContext, AgentResponse, TicketPriority, SupportDocument } from '../types';
+import { DocumentManagerService } from '../core/document-manager';
 
 export class AnswerAgent extends BaseAgent {
     readonly name = 'Answer Agent';
     readonly type = AgentType.Answer;
+    private documentManager: DocumentManagerService | null = null;
+
+    /**
+     * v7.0: Inject DocumentManagerService so Answer Agent can search
+     * support documents before calling the LLM.
+     */
+    setDocumentManager(dm: DocumentManagerService): void {
+        this.documentManager = dm;
+    }
+
     readonly systemPrompt = `You are the Answer Agent for the Copilot Orchestration Extension (COE).
 
 ## Your ONE Job
@@ -38,7 +49,64 @@ Example 2 — Low confidence, escalated:
 ANSWER: I cannot determine whether the MCP server should use JSON-RPC or REST for the new endpoint. The current implementation uses custom HTTP routes, but the plan references MCP protocol compliance which implies JSON-RPC.
 CONFIDENCE: 40
 SOURCES: src/mcp/server.ts, Plan: MCP Compliance
-ESCALATE: true`;
+ESCALATE: true
+
+## Support Documentation (v7.0)
+If support documents are provided below your question, use them as primary sources.
+They contain verified research findings from previous investigations and are more reliable than guessing.
+Always cite support documents as sources when you use them: "Support Doc: [document_name]"
+
+## Escalation & Support (v7.0)
+If you cannot proceed because information is missing or prerequisites aren't met:
+- Use action "escalate_to_boss" with: ticket_id, reason, recommended_target queue, what info is needed
+- Use action "call_support_agent" with mode "async" for research tasks (Research Agent gathering docs)
+Include actions as a JSON array under an "actions" key alongside your normal output.`;
+
+    /**
+     * v7.0: Override processMessage to search support documents before LLM call.
+     * If relevant documents are found, they're prepended to the message as context,
+     * potentially allowing the LLM to answer with higher confidence from verified sources.
+     */
+    async processMessage(message: string, context: AgentContext): Promise<AgentResponse> {
+        let enhancedMessage = message;
+
+        if (this.documentManager) {
+            try {
+                // Extract keywords from the question for document search
+                const questionWords = message
+                    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+                    .split(/\s+/)
+                    .filter(w => w.length >= 4)
+                    .slice(0, 5);
+
+                const allDocs: SupportDocument[] = [];
+                const seen = new Set<string>();
+
+                for (const keyword of questionWords) {
+                    if (allDocs.length >= 5) break;
+                    const docs = this.documentManager.searchDocuments({ keyword });
+                    for (const doc of docs) {
+                        if (!seen.has(doc.id) && allDocs.length < 5) {
+                            seen.add(doc.id);
+                            allDocs.push(doc);
+                        }
+                    }
+                }
+
+                if (allDocs.length > 0) {
+                    const docContext = this.documentManager.formatContextDocs(allDocs);
+                    enhancedMessage = `${docContext}\n\n--- QUESTION ---\n${message}`;
+                    this.outputChannel.appendLine(
+                        `[AnswerAgent] Found ${allDocs.length} support document(s) for question context`
+                    );
+                }
+            } catch (error) {
+                this.outputChannel.appendLine(`[AnswerAgent] Document search failed: ${error}`);
+            }
+        }
+
+        return super.processMessage(enhancedMessage, context);
+    }
 
     protected async parseResponse(content: string, context: AgentContext): Promise<AgentResponse> {
         let confidence = 80;

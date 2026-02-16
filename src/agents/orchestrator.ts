@@ -17,6 +17,7 @@ import { GapHunterAgent } from './gap-hunter-agent';
 import { DesignHardenerAgent } from './design-hardener-agent';
 import { DecisionMemoryAgent } from './decision-memory-agent';
 import { ReviewAgent } from './review-agent';
+import { CodingDirectorAgent } from './coding-director-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
@@ -30,7 +31,7 @@ import {
 const INTENT_CATEGORIES = [
     'planning', 'verification', 'ui_testing', 'observation',
     'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
-    'review', 'question', 'research', 'custom', 'general',
+    'review', 'coding_director', 'question', 'research', 'custom', 'general',
 ] as const;
 
 /**
@@ -46,11 +47,12 @@ const INTENT_PRIORITY: Record<string, number> = {
     gap_hunter: 5,
     design_hardener: 6,
     decision_memory: 7,
-    planning: 8,
-    question: 9,
-    research: 10,
-    custom: 11,
-    general: 12,
+    coding_director: 8,
+    planning: 9,
+    question: 10,
+    research: 11,
+    custom: 12,
+    general: 13,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -113,6 +115,11 @@ const KEYWORD_MAP: Record<string, string[]> = {
         'ticket review', 'quality check', 'review output', 'check deliverable',
         'approval status', 'review queue', 'pending review', 'review result',
     ],
+    coding_director: [
+        'code generation', 'generate code', 'write code', 'coding task',
+        'external agent', 'coding agent', 'mcp task', 'next task',
+        'code implementation', 'coding queue', 'coding status',
+    ],
     custom: [
         'custom agent', 'run agent', 'specialist', 'domain expert',
         'custom tool', 'agent gallery', 'my agent', 'specialized',
@@ -145,19 +152,21 @@ Classify every incoming message into EXACTLY ONE intent category, then route it 
    Examples: "harden the design", "propose missing components", "fill the gaps found by gap hunter"
 8. **decision_memory** — Looking up past decisions, user preferences, conflict checks.
    Examples: "what did the user decide about auth?", "check for conflicting decisions", "recall past preferences"
-9. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
+9. **coding_director** — Code generation tasks, external coding agent interface, MCP task management.
+   Examples: "generate code for the auth module", "what's the coding agent status?", "prepare next coding task"
+10. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
    Examples: "plan a REST API with auth", "break this feature into tasks", "create a roadmap for v2"
-10. **question** — Asking for information, clarification, or explanation.
+11. **question** — Asking for information, clarification, or explanation.
     Examples: "how does the database schema work?", "what's the difference between P1 and P2?", "explain the verification flow"
-11. **research** — Investigation, comparison, benchmarking, or deep analysis.
+12. **research** — Investigation, comparison, benchmarking, or deep analysis.
     Examples: "compare SQLite vs PostgreSQL for our use case", "investigate why tests are slow", "best practices for MCP servers?"
-12. **custom** — Explicitly requesting a custom or specialized agent.
+13. **custom** — Explicitly requesting a custom or specialized agent.
     Examples: "run my custom lint agent", "invoke the security specialist", "call agent gallery"
-13. **general** — Does not fit any of the above. Fallback to Answer Agent.
+14. **general** — Does not fit any of the above. Fallback to Answer Agent.
 
 ## Tie-Breaking Rules
 If a message matches multiple categories, use this priority (highest first):
-verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general.
+verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
 Example: "verify my plan is correct" matches both verification and planning — choose verification.
 Example: "review the design quality" matches both review and design_architect — choose review.
 
@@ -173,6 +182,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
 - gap_hunter → Gap Hunter Agent
 - design_hardener → Design Hardener Agent
 - decision_memory → Decision Memory Agent
+- coding_director → Coding Director Agent
 - planning → Planning Team
 - question → Answer Agent
 - research → Research Agent
@@ -185,7 +195,15 @@ When classifying, respond with ONLY the category name as a single lowercase word
 - Track task queue health: if >20 pending tasks, flag for Boss AI review
 - On task completion reports: schedule delayed verification (configurable delay)
 - On verification failure: retry once after 30 seconds, then create investigation ticket
-- Never crash — wrap all agent calls in error handling`;
+- Never crash — wrap all agent calls in error handling
+
+## Escalation & Support (v7.0)
+If you cannot proceed or information is missing:
+- **escalate_to_boss**: Return ticket to Boss AI with reason and recommended target queue
+- **call_support_agent**: Call support agents (answer, research, clarity, decision_memory)
+  - sync mode: Quick lookups (answer, clarity, decision_memory)
+  - async mode: Research tasks (research agent)
+- **save_document**: Save findings to documentation system for future reference`;
 
     private planningAgent!: PlanningAgent;
     private answerAgent!: AnswerAgent;
@@ -201,6 +219,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
     private designHardenerAgent!: DesignHardenerAgent;
     private decisionMemoryAgent!: DecisionMemoryAgent;
     private reviewAgent!: ReviewAgent;
+    private codingDirectorAgent!: CodingDirectorAgent;
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
     private eventBus: EventBus | null = null;
@@ -249,6 +268,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
         this.designHardenerAgent = new DesignHardenerAgent(this.database, this.llm, this.config, this.outputChannel);
         this.decisionMemoryAgent = new DecisionMemoryAgent(this.database, this.llm, this.config, this.outputChannel);
         this.reviewAgent = new ReviewAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.codingDirectorAgent = new CodingDirectorAgent(this.database, this.llm, this.config, this.outputChannel);
 
         await Promise.all([
             this.planningAgent.initialize(),
@@ -265,6 +285,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.designHardenerAgent.initialize(),
             this.decisionMemoryAgent.initialize(),
             this.reviewAgent.initialize(),
+            this.codingDirectorAgent.initialize(),
         ]);
 
         this.outputChannel.appendLine('All agents initialized.');
@@ -407,6 +428,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             case 'design_hardener': return this.designHardenerAgent;
             case 'decision_memory': return this.decisionMemoryAgent;
             case 'review': return this.reviewAgent;
+            case 'coding_director': return this.codingDirectorAgent;
             case 'question': return this.answerAgent;
             case 'research': return this.researchAgent;
             case 'custom': return this.customAgentRunner;
@@ -432,6 +454,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             design_hardener: this.designHardenerAgent,
             decision_memory: this.decisionMemoryAgent,
             review: this.reviewAgent,
+            coding_director: this.codingDirectorAgent,
         };
         return agents[name.toLowerCase()] || null;
     }
@@ -543,6 +566,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
     getDesignHardenerAgent(): DesignHardenerAgent { return this.designHardenerAgent; }
     getDecisionMemoryAgent(): DecisionMemoryAgent { return this.decisionMemoryAgent; }
     getReviewAgent(): ReviewAgent { return this.reviewAgent; }
+    getCodingDirectorAgent(): CodingDirectorAgent { return this.codingDirectorAgent; }
 
     /**
      * Get all agents (including the orchestrator itself) as an array.
@@ -565,6 +589,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
             this.designHardenerAgent,
             this.decisionMemoryAgent,
             this.reviewAgent,
+            this.codingDirectorAgent,
         ];
     }
 

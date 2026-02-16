@@ -1,10 +1,10 @@
 # 04 — Workflows & How It All Works
 
-**Version**: 4.0  
-**Last Updated**: February 2026  
-**Status**: ✅ Current  
-**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [03-Agent-Teams-and-Roles](03-Agent-Teams-and-Roles.md)  
-**Changelog**: v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
+**Version**: 7.0
+**Last Updated**: February 2026
+**Status**: ✅ Current
+**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [03-Agent-Teams-and-Roles](03-Agent-Teams-and-Roles.md)
+**Changelog**: v7.0 — Added 4-team queue workflow, round-robin slot allocation, support agent call patterns (sync/async), lead agent escalation-to-boss flow, cancelled ticket re-engagement, documentation system workflow, file cleanup workflow, Coding Director handoff workflow. v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
 
 ---
 
@@ -859,6 +859,294 @@ interface CodingHandbackPackage {
 3. Code compiles (`tsc --noEmit`)
 4. Changes within task scope (no unexpected files modified)
 5. No blocker-severity issues
+
+---
+
+## Workflow 17: Per-Team Queue Processing (v7.0) — IMPLEMENTED
+
+The single queue is replaced by 4 team queues with round-robin slot balancing managed by Boss AI.
+
+```
+┌──────────────────────────────────────────────────────┐
+│                   TICKET ARRIVES                      │
+└──────────────────┬───────────────────────────────────┘
+                   │
+                   ▼
+         ┌─────────────────┐
+         │ routeToTeamQueue │
+         │ (deterministic)  │
+         └────────┬────────┘
+                  │
+    ┌─────────────┼─────────────┬──────────────┐
+    │             │             │              │
+    ▼             ▼             ▼              ▼
+┌────────┐  ┌─────────┐  ┌──────────┐  ┌───────────┐
+│ORCH    │  │PLANNING │  │VERIFY    │  │CODING DIR │
+│Queue   │  │Queue    │  │Queue     │  │Queue      │
+│(catch- │  │(plans,  │  │(testing, │  │(code_gen  │
+│ all)   │  │ design) │  │ QA)      │  │ tasks)    │
+└────┬───┘  └────┬────┘  └────┬─────┘  └────┬──────┘
+     │           │            │              │
+     └───────────┼────────────┼──────────────┘
+                 │
+                 ▼
+    ┌──────────────────────────┐
+    │  fillSlots() Round-Robin │
+    │  Walk TEAM_ORDER:        │
+    │  Planning → Verification │
+    │  → CodingDir → Orch      │
+    │  Pick first team with:   │
+    │  • pending tickets AND   │
+    │  • allocatedSlots > active│
+    └──────────┬───────────────┘
+               │
+               ▼
+    ┌──────────────────────────┐
+    │  processSlot() for team  │
+    │  Route to lead agent     │
+    │  Agent can:              │
+    │  • call_support_agent    │
+    │  • escalate_to_boss      │
+    │  • block_ticket          │
+    └──────────────────────────┘
+```
+
+**Routing Rules**:
+| `operation_type` | Target Queue |
+|-----------------|-------------|
+| `code_generation` | CodingDirector |
+| `verification` | Verification |
+| `plan_generation`, `design_change`, `gap_analysis`, `design_score` | Planning |
+| `boss_directive` | Based on payload `target_queue`, or Orchestrator |
+| Everything else | Orchestrator (catch-all) |
+| `ticket.assigned_queue` set | Override — Boss can force-route |
+
+**Slot Allocation**: Boss AI dynamically adjusts via `update_slot_allocation` action. Total across all teams limited to `maxParallelTickets`.
+
+---
+
+## Workflow 18: Lead Agent Escalation (v7.0) — IMPLEMENTED
+
+When a lead agent cannot proceed, it escalates back to Boss AI with structured reason.
+
+```
+Lead Agent Processing Ticket
+        │
+        ▼
+   Can proceed?
+        │
+   Yes──┤──── No
+        │       │
+        ▼       ▼
+   Complete  ┌──────────────────┐
+   normally  │ escalate_to_boss │
+             │ payload:         │
+             │ • ticket_id      │
+             │ • reason         │
+             │ • recommended    │
+             │   target queue   │
+             │ • blocking info  │
+             └────────┬─────────┘
+                      │
+                      ▼
+             ┌────────────────┐
+             │ Ticket marked  │
+             │ Blocked        │
+             │ Boss directive │
+             │ ticket created │
+             └────────┬───────┘
+                      │
+                      ▼
+             ┌────────────────┐
+             │ Boss AI routes │
+             │ to correct     │
+             │ team or user   │
+             └────────────────┘
+```
+
+---
+
+## Workflow 19: Support Agent Calls (v7.0) — IMPLEMENTED
+
+Lead agents can call support agents during ticket processing in two modes:
+
+**Sync Mode** (for quick lookups, <60s timeout):
+```
+Lead Agent ──► call_support_agent(mode: 'sync')
+                │
+                ▼
+           orchestrator.callAgent(agent_name, query, context)
+                │
+                ▼ (blocks until response or timeout)
+           Response returned to lead agent
+           Lead agent continues processing
+```
+
+**Async Mode** (for research tasks, creates sub-ticket):
+```
+Lead Agent ──► call_support_agent(mode: 'async')
+                │
+                ▼
+           Create sub-ticket with
+           blocking_ticket_id = parent ticket
+                │
+                ▼
+           Sub-ticket enqueued in
+           appropriate team queue
+                │
+                ▼
+           Parent ticket marked Blocked
+           (unblocks when sub-ticket resolves)
+```
+
+**Support Agent Recommendations**:
+| Support Agent | Recommended Mode | Use Case |
+|--------------|-----------------|----------|
+| Answer | sync | Quick lookups about project setup, existing code |
+| Research | async | Gather documentation, deep investigation |
+| Clarity | sync | Rewrite unclear specs, score content quality |
+| Decision Memory | sync | Check past decisions, detect conflicts |
+| Observation | sync | System health patterns, metrics |
+
+---
+
+## Workflow 20: Documentation & Reference System (v7.0) — IMPLEMENTED
+
+How support documents flow through the system:
+
+```
+Research Agent finds info
+        │
+        ▼ save_document action (confidence >= 60)
+DocumentManagerService
+        │
+        ▼ Save to support_documents table
+        │ folder_name inferred from topic
+        │ tagged with source_ticket_id
+        │
+        ▼ docs:document_saved event
+┌───────────────────────────────────┐
+│ Support Documents Available For:  │
+│ • Answer Agent pre-LLM search    │
+│ • Pipeline context injection      │
+│ • Boss AI strategic context       │
+│ • Coding Director task prep       │
+└───────────────────────────────────┘
+```
+
+**Pipeline Context Injection**: During ticket processing, `DocumentManagerService.gatherContextDocs(ticket)` extracts keywords from the ticket and searches for matching support documents. Top 5 by relevance are injected as `=== SUPPORT DOCUMENTATION ===` sections in the agent's message.
+
+---
+
+## Workflow 21: Agent File Cleanup (v7.0) — IMPLEMENTED
+
+Detects, reads, processes, and organizes stray files created by the external coding agent.
+
+```
+External coding agent creates file
+(e.g., "Phase 3 Implementation.md" in root)
+        │
+        ▼ FileSystemWatcher detects (5s debounce)
+AgentFileCleanupService.processAgentFile()
+        │
+        ├── Read file content
+        ├── Classify type (plan, readme, report, output)
+        ├── Check if looks agent-generated
+        │
+        ▼ Save to support_documents
+DocumentManagerService.saveDocument()
+        │ folder = "Agent Output" or inferred
+        │
+        ▼ Create Boss directive ticket
+"Review agent output: {filename}"
+        │
+        ▼ Boss AI reviews
+        │
+        ├── Approve → optionally delete original file
+        └── Reject → keep original, log reason
+```
+
+**Detected File Patterns**:
+- `Phase N*.{md,txt}` — Implementation phase plans
+- `implementation[_ -]plan.{md,txt}` — Implementation plans
+- `agent[_ -]output*.{md,txt,json}` — Direct agent outputs
+- `task[_ -]summary*.{md,txt}` — Task summaries
+- `coding[_ -]plan*.{md,txt}` — Coding plans
+- `design[_ -]spec*.{md,txt}` — Design specifications
+- `progress[_ -]report*.{md,txt}` — Progress reports
+
+---
+
+## Workflow 22: Coding Director Handoff (v7.0) — IMPLEMENTED
+
+How the Coding Director prepares tasks for the external coding agent:
+
+```
+code_generation ticket enters CodingDirector queue
+        │
+        ▼
+CodingDirectorAgent.prepareForExternalAgent(ticket)
+        │
+        ├── Pre-flight check:
+        │   • Acceptance criteria >= 10 chars?
+        │   • Task body >= 20 chars?
+        │   • Blocking tickets resolved?
+        │
+        ├── Context packaging:
+        │   • Plan context (if available)
+        │   • Support documents (via DocumentManager)
+        │   • File paths to modify
+        │
+        ├── Prerequisites met?
+        │   │
+        │   No ──► call_support_agent or escalate_to_boss
+        │   │
+        │   Yes
+        │   │
+        ▼   ▼
+MCP getNextTask returns PreparedCodingTask
+        │
+        ▼
+External coding agent works on task
+        │
+        ▼ reportTaskDone
+CodingDirectorAgent.processExternalResult()
+        │
+        ├── Success → audit log + route to verification
+        └── Failure → audit log + escalate to Boss
+```
+
+**Webapp Coding Tab Status**:
+- "NOT READY" — No coding tasks in queue
+- "Pending (N in queue)" — Tasks waiting for preparation
+- "Active: [task title]" — Currently being processed by external agent
+
+---
+
+## Workflow 23: Cancelled Ticket Re-engagement (v7.0) — IMPLEMENTED
+
+Boss AI periodically reviews cancelled tickets to re-engage those whose conditions have changed:
+
+```
+Every 30 minutes (configurable):
+        │
+        ▼
+Boss AI reviewCancelledTickets()
+        │
+        ▼ Load cancelled tickets from DB
+        │
+        ▼ For each cancelled ticket:
+        │   • Blocker resolved?
+        │   • Missing info now available?
+        │   • Conditions changed?
+        │
+        ├── Re-engage → reengageTicket()
+        │   • Mark status back to Open
+        │   • Route to appropriate team queue
+        │   • Emit boss:ticket_reengaged event
+        │
+        └── Stay cancelled → no action
+```
 
 ---
 

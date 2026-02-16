@@ -1,10 +1,10 @@
 # 09 — Features & Capabilities
 
-**Version**: 3.0  
-**Last Updated**: February 2026  
-**Status**: ✅ Current  
-**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md)  
-**Changelog**: v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
+**Version**: 7.0
+**Last Updated**: February 2026
+**Status**: ✅ Current
+**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md)
+**Changelog**: v7.0 — Added Category 11 (Team Queue System), Category 12 (Documentation & File Management), Coding Director Agent, updated agent count (16), updated test count (2,770+), v7.0 compliance section | v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
 
 ---
 
@@ -20,7 +20,7 @@ This is the complete feature catalog for COE — every capability the system pro
 
 ## Overview
 
-COE includes 50+ features across 10 categories. This document lists every capability the system provides, organized by what it does for the user.
+COE includes 65+ features across 12 categories. This document lists every capability the system provides, organized by what it does for the user.
 
 **Status Legend**: ✅ Implemented | 🔧 In Progress | 📋 Planned
 
@@ -97,12 +97,12 @@ One-click state reset that reloads everything from disk, verifies consistency, a
 ## Category 3: Agent Management (6 Features)
 
 ### Multi-Agent Orchestration ✅
-Routes work to specialized agents based on intent classification, with fallback strategies and timeout detection.
-**Status**: Implemented in `src/agents/orchestrator.ts`. Two-stage classification (keyword + LLM), 6 routing categories, error boundaries, verification retry.
+Routes work to 16 specialized agents based on intent classification, with fallback strategies and timeout detection.
+**Status**: Implemented in `src/agents/orchestrator.ts`. Two-stage classification (keyword + LLM), 14 routing categories, error boundaries, verification retry. v7.0: Added Coding Director agent, 4-team queue routing.
 
 ### Boss AI Supervisor ✅
-Top-level oversight agent that monitors system health, resolves inter-team conflicts, enforces plan alignment, and limits task overload.
-**Status**: Implemented in `src/agents/boss-agent.ts`. All 7 thresholds active: task overload, agent failure, plan drift, escalation backlog, repeated failures, stale tickets, user escalation.
+Top-level oversight agent that monitors system health, manages 4 team queues, resolves inter-team conflicts, enforces plan alignment, dynamically allocates processing slots, and reviews cancelled tickets for re-engagement.
+**Status**: Implemented in `src/agents/boss-agent.ts`. All 7 thresholds active + v7.0: per-queue management, slot allocation, cancelled ticket review, notepad sections, team-aware dispatching.
 
 ### Custom Agent Builder ✅
 Visual interface for creating specialized read-only agents with goals, checklists, routing rules, and permission controls.
@@ -242,6 +242,54 @@ Register/unregister devices, track device presence, sync-enabled flags, and per-
 
 ---
 
+## Category 11: Team Queue System (6 Features) — v7.0 ✅
+
+### 4-Team Queue Architecture ✅
+Replaces single processing queue with 4 team-specific queues: Orchestrator (catch-all), Planning, Verification, and Coding Director. Each queue has independent depth, slot allocation, and processing.
+**Status**: Implemented in `src/core/ticket-processor.ts`. `routeToTeamQueue()` maps operation_type to team. `assigned_queue` column on tickets table.
+
+### Round-Robin Slot Balancing ✅
+Boss AI dynamically allocates processing slots across teams based on workload. Least-recently-served team with pending work gets the next slot. Empty queues are skipped.
+**Status**: Implemented in `fillSlots()` with `roundRobinIndex` and `TEAM_ORDER`. `updateSlotAllocation()` allows Boss to reallocate slots dynamically.
+
+### Lead Agent Escalation ✅
+Lead agents can escalate tickets back to Boss AI with structured payloads including reason, recommended target queue, and blocking info. Boss AI resolves escalations by re-routing, gathering missing info, or escalating to user.
+**Status**: Implemented via `escalate_to_boss` action type + `handleEscalation()` in ticket processor. `EscalationPayload` interface.
+
+### Support Agent Calls (Sync/Async) ✅
+Lead agents can call support agents inline (sync, <60s) for quick lookups or create sub-tickets (async) for longer research tasks. Sync calls block the current ticket; async creates a linked sub-ticket.
+**Status**: Implemented via `call_support_agent` action type + `executeSupportCall()`. Sync timeout enforced by `maxSupportAgentSyncTimeoutMs`.
+
+### Ticket Cancel & Re-engagement ✅
+Boss AI can cancel tickets (removed from queue, marked cancelled in DB) and periodically reviews cancelled tickets to re-engage if conditions have changed.
+**Status**: Implemented via `cancelTicket()` and `reengageTicket()` methods. Boss reviews cancelled tickets every `cancelledTicketReviewIntervalMs` (default: 30 min).
+
+### Structured Task Assignment ✅
+Boss AI creates structured task assignments with explicit success criteria, target agents, and evaluation methods. Criteria are evaluated deterministically after agent completion.
+**Status**: Implemented via `assign_task` action type + `task_assignments` table + `evaluateAssignmentCriteria()`. 5 verification methods: output_contains, ticket_resolved, file_exists, info_gathered, manual_check.
+
+---
+
+## Category 12: Documentation & File Management (4 Features) — v7.0 ✅
+
+### Support Document System ✅
+Organized knowledge base where Research Agent saves findings, Answer Agent searches before calling LLM, and agents inject relevant docs into pipeline context.
+**Status**: Implemented in `src/core/document-manager.ts`. `support_documents` table with folder/category/tag organization. CRUD API endpoints at `/api/documents`.
+
+### Agent File Cleanup ✅
+Detects stray `.md`/`.txt` files created by external coding agents in workspace root, saves content to documentation system, creates Boss review tickets, and optionally cleans up originals.
+**Status**: Implemented in `src/core/agent-file-cleanup.ts`. FileSystemWatcher with 5s debounce. 4 detection patterns. Boss review required before cleanup.
+
+### Coding Director Agent ✅
+Manages the interface between internal orchestration and external coding agent (MCP). Performs pre-flight checks on coding tasks, builds comprehensive context bundles, and processes completion reports.
+**Status**: Implemented in `src/agents/coding-director-agent.ts`. `prepareForExternalAgent()`, `processExternalResult()`, `getQueueStatus()`. Webapp Coding tab shows status via `GET /api/coding/status`.
+
+### Pipeline Context Injection ✅
+Relevant support documents are automatically injected into agent context during ticket processing. Documents are keyword-matched, ranked by relevance and verification status, and formatted as a delimited section in the agent's message.
+**Status**: Implemented in `TicketProcessorService.processTicketPipeline()` via `DocumentManagerService.gatherContextDocs()`. Max 5 docs per pipeline run.
+
+---
+
 ## Feature Priorities (What Gets Built First)
 
 | Priority | Count | What |
@@ -249,6 +297,7 @@ Register/unregister devices, track device presence, sync-enabled flags, and per-
 | **P1 (Must Have)** | 12 | Ticket DB, orchestrator routing, sidebar UI, agent coordination, verification, MCP tools |
 | **P2 (Should Have)** | 13 | Custom agents, GitHub sync, evolution system, context management, planning wizard |
 | **P2+ (v2.0)** | 12 | Ethics engine, transparency logger, sync service, conflict resolver, coding agent, component schemas |
+| **P2+ (v7.0)** | 10 | Team queues, round-robin balancing, lead agent escalation, support agent calls, document system, file cleanup, Coding Director, context injection, cancel/re-engage, structured assignments |
 | **P3 (Nice to Have)** | 10 | Advanced analytics, RL optimization, Copilot Workspace integration, Docker MCP toolkit |
 
 ---
@@ -263,13 +312,15 @@ flowchart TB
     end
 
     subgraph "Execution"
-        QUEUE[Task Queue] --> MCP[MCP Server]
+        QUEUE[4 Team Queues] --> MCP[MCP Server]
         MCP --> VERIFY[Verification]
+        MCP --> CODEDIR[Coding Director]
     end
 
     subgraph "Intelligence"
         BOSS[Boss AI] --> AGENTS[Agent Orchestration]
         AGENTS --> EVOLVE[Self-Improvement]
+        BOSS --> SLOTS[Slot Allocation]
     end
 
     subgraph "Communication"
@@ -277,11 +328,20 @@ flowchart TB
         GITHUB[GitHub Sync] --> TICKETS
     end
 
+    subgraph "Knowledge"
+        DOCS[Document Manager] --> RESEARCH[Research Agent]
+        DOCS --> ANSWER[Answer Agent]
+        CLEANUP[File Cleanup] --> DOCS
+    end
+
     DECOMP --> QUEUE
     MCP --> AGENTS
     VERIFY --> TICKETS
     BOSS --> QUEUE
     EVOLVE --> AGENTS
+    SLOTS --> QUEUE
+    DOCS --> QUEUE
+    CODEDIR --> MCP
 ```
 
 ---
@@ -338,22 +398,25 @@ flowchart TB
 | Context Management (v1.1) | 4 | 4 | 0 | 0 | 100% |
 | Ethics & Transparency (v2.0) | 3 | 3 | 0 | 0 | 100% |
 | Multi-Device Sync (v2.0) | 5 | 5 | 0 | 0 | 100% |
-| **TOTAL** | **53** | **42** | **6** | **5** | **79%** |
+| Team Queue System (v7.0) | 6 | 6 | 0 | 0 | 100% |
+| Documentation & File Mgmt (v7.0) | 4 | 4 | 0 | 0 | 100% |
+| **TOTAL** | **63** | **52** | **6** | **5** | **83%** |
 
 ### Agent Compliance (Plan Intent vs Actual)
 
 | Agent | Compliance | Notes |
 |-------|-----------|-------|
-| Orchestrator | 85% | Core routing solid. Missing: orchestrator-level loop detection |
-| Planning Agent | 100% | Fully matches plan spec |
-| Answer Agent | 100% | Fully matches plan spec |
-| Verification Agent | 100% | Fully matches plan spec |
-| Research Agent | 100% | Fixed: ESCALATE parsing + auto-escalation |
+| Orchestrator | 90% | Core routing solid, 14 categories, 16 agents. Missing: orchestrator-level loop detection |
+| Planning Agent | 100% | Fully matches plan spec. v7.0: escalation + support agent calls |
+| Answer Agent | 100% | Fully matches plan spec. v7.0: support document search before LLM |
+| Verification Agent | 100% | Fully matches plan spec. v7.0: escalation + support agent calls |
+| Research Agent | 100% | Fixed: ESCALATE parsing + auto-escalation. v7.0: save_document actions |
 | Clarity Agent | 100% | Fully matches plan spec |
-| Boss Agent | 100% | Fixed: All 7 thresholds now active |
+| Boss Agent | 100% | v7.0: 4-queue management, slot allocation, cancel/re-engage, notepad |
 | Custom Agent | 100% | Fully matches plan spec including hardlocks |
 | CodingAgentService | 100% | All 6 intents, ethics gate, code gen, diffs |
 | Review Agent | 100% | Deterministic complexity + LLM scoring, auto-approval matrix |
+| Coding Director | 100% | v7.0: Pre-flight, context packaging, result processing, queue status |
 
 ### v2.0 Service Compliance
 
@@ -460,6 +523,60 @@ flowchart TB
 - **Total tests**: 2,500+
 - **Coverage target**: 100% (enforced in jest.config.js)
 
+### v7.0 Features (February 2026)
+
+#### Team Queue System ✅
+- **4-Team Queue Architecture** — Orchestrator, Planning, Verification, Coding Director queues with independent depth and slot allocation
+- **Round-Robin Slot Balancing** — Boss AI dynamically allocates slots; least-recently-served team with work gets next slot
+- **Lead Agent Escalation** — Structured `EscalationPayload` with reason, recommended target, blocking info
+- **Support Agent Calls** — Sync mode (<60s inline) and async mode (sub-ticket with `blocking_ticket_id`)
+- **Ticket Cancel & Re-engagement** — Boss cancels tickets, periodically reviews for re-engagement (every 30 min)
+- **Structured Task Assignment** — `assign_task` action with 5 verification methods (output_contains, ticket_resolved, file_exists, info_gathered, manual_check)
+
+#### Documentation & File Management ✅
+- **Support Document System** — `support_documents` table with folder/category/tag organization, CRUD API
+- **Agent File Cleanup** — FileSystemWatcher detects stray `.md`/`.txt` files, saves to docs, creates Boss review tickets
+- **Pipeline Context Injection** — Relevant support docs auto-injected into agent context (max 5, keyword-matched, ranked)
+- **Answer Agent Doc Search** — Searches support documents BEFORE calling LLM; may answer without LLM call
+
+#### Coding Director Agent ✅
+- **Pre-flight Checks** — Validates acceptance criteria, description length, blocking ticket status before coding tasks
+- **Context Packaging** — Builds comprehensive context bundle (task, plan, support docs, retry history)
+- **Result Processing** — Parses completion reports, validates files_modified, routes to verification
+- **Queue Status** — `GET /api/coding/status` for webapp Coding tab (NOT READY / Active / Pending)
+
+#### Boss AI v7.0 Enhancements ✅
+- **Per-Queue Management** — Full status visibility across all 4 team queues
+- **Slot Allocation** — Dynamic slot reallocation via `update_slot_allocation` action
+- **Cancelled Ticket Review** — Periodic check of cancelled tickets for re-engagement
+- **Notepad Sections** — Persistent `boss_notepad` table (queue_strategy, blockers, patterns, next_actions)
+- **Team-Aware Dispatching** — Can target specific team queues in dispatch actions
+
+#### Ticket System Enhancements ✅
+- **Team Queue Badges** — Colored team badges on ticket display (ORCH gray, PLAN blue, VERIFY green, CODE orange)
+- **Queue Filtering** — Dropdown filter on Tickets tab to filter by team queue
+- **Queue Move** — `POST /api/queues/move` endpoint for manual ticket queue reassignment
+
+### v7.0 Service Compliance
+
+| Service | Compliance | Notes |
+|---------|-----------|-------|
+| TicketProcessorService (v7.0) | 100% | 4 team queues, round-robin, escalation, support calls |
+| DocumentManagerService | 100% | Save/search/gather/verify/delete, folder organization |
+| AgentFileCleanupService | 100% | Detection patterns, debounce, Boss review, cleanup |
+| CodingDirectorAgent | 100% | Pre-flight, context packaging, result processing |
+| BossAgent (v7.0) | 100% | Queue management, slot allocation, cancel/re-engage |
+| ResearchAgent (v7.0) | 100% | save_document action for findings >= 60 confidence |
+| AnswerAgent (v7.0) | 100% | Support document search before LLM |
+| PlanningAgent (v7.0) | 100% | Escalation + support agent call instructions |
+| VerificationAgent (v7.0) | 100% | Escalation + support agent call instructions |
+
+### Updated Test Coverage (v7.0)
+
+- **Test suites**: 53+
+- **Total tests**: 2,770+
+- **Coverage target**: 100% (enforced in jest.config.js)
+
 ### Remaining Gaps (Planned)
 
 1. **Adaptive Wizard Paths** — UI-level question branching by project scale
@@ -470,6 +587,7 @@ flowchart TB
 6. **PRD Auto-Generation** — Automatic PRD maintenance from plans
 7. **Orchestrator Loop Detection** — Pattern tracking across all agent calls
 8. **Visual Verification Webview** — Dedicated VS Code panel (API ready)
+9. **Back-End Designer Agent** — Planned for next project (deferred from v7.0)
 
 ---
 
@@ -494,6 +612,12 @@ The features don't exist in isolation — they depend on each other. This table 
 | Design QA Pipeline | Design Architect, Gap Hunter, Hardener | — |
 | Ticket Processor | Database, Agent Router, Verification | Ghost Tickets |
 | Decision Memory | Database, LLM Service | Question Queue |
+| Team Queue System | Ticket Processor, Database | Boss AI |
+| Document Manager | Database, Event Bus | Research Agent, Answer Agent |
+| File Cleanup | Document Manager, File Watcher | Boss AI |
+| Coding Director | Team Queue System, MCP Server | Document Manager |
+| Support Agent Calls | Ticket Processor, Team Queues | All lead agents |
+| Structured Assignments | Database, Boss AI | Team Queues |
 
 ---
 

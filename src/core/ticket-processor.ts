@@ -1,12 +1,17 @@
 /**
  * TicketProcessorService — Auto-processing engine for tickets
  *
- * Two independent queues:
- *   1. Main queue: Normal ticket processing (serial, priority-ordered)
- *   2. Boss queue: Boss AI action tickets (separate serial queue, never blocked by main)
+ * v7.0: 4 team queues with Boss AI round-robin slot balancing:
+ *   1. Orchestrator queue — catch-all for unclassified work
+ *   2. Planning queue — planning, design, research coordination
+ *   3. Verification queue — testing, review, QA
+ *   4. Coding Director queue — interface to external coding agent
+ *
+ * Boss AI controls slot allocation per team and uses soft-preference
+ * round-robin to balance processing across teams.
  *
  * Handles agent routing, verification dispatch, tiered retry, ghost tickets,
- * ticket limits, and idle watchdog.
+ * ticket limits, idle watchdog, cancel/re-engage, and support agent calls.
  *
  * Wire in: extension.ts after orchestrator initialization.
  */
@@ -16,7 +21,7 @@ import { EventBus, COEEvent, COEEventType } from './event-bus';
 import { ConfigManager } from './config';
 import {
     Ticket, TicketStatus, TicketPriority, AgentContext, AgentResponse, AgentAction, TicketRun,
-    ProjectPhase, PHASE_ORDER, PhaseGateResult,
+    ProjectPhase, PHASE_ORDER, PhaseGateResult, LeadAgentQueue, TeamQueueStatus,
 } from '../types';
 
 // ==================== INTERFACES ====================
@@ -62,6 +67,17 @@ export interface OrchestratorLike {
     getBossAgent(): BossAgentLike;
     /** v4.3: Direct access to ClarityAgent for user-friendly message rewrites */
     getClarityAgent(): ClarityAgentLike;
+}
+
+/** v7.0: Minimal interface for DocumentManagerService, avoiding tight coupling */
+export interface DocumentManagerLike {
+    gatherContextDocs(ticket: Ticket): import('../types').SupportDocument[];
+    formatContextDocs(docs: import('../types').SupportDocument[]): string;
+    searchDocuments(query: { keyword?: string }): import('../types').SupportDocument[];
+    saveDocument(
+        folderName: string, docName: string, content: string,
+        meta?: Record<string, unknown>
+    ): import('../types').SupportDocument;
 }
 
 interface QueuedTicket {
@@ -300,10 +316,37 @@ function routeTicketToPipeline(ticket: Ticket): AgentPipeline | null {
 // ==================== TICKET PROCESSOR SERVICE ====================
 
 export class TicketProcessorService {
-    // v5.0: Single Boss-managed queue (replaces dual mainQueue + bossQueue)
-    private queue: QueuedTicket[] = [];
+    // v7.0: 4 team queues replace single unified queue
+    private teamQueues = new Map<LeadAgentQueue, QueuedTicket[]>([
+        [LeadAgentQueue.Orchestrator, []],
+        [LeadAgentQueue.Planning, []],
+        [LeadAgentQueue.Verification, []],
+        [LeadAgentQueue.CodingDirector, []],
+    ]);
+    /** v7.0: Per-team status tracking for round-robin balancing */
+    private teamStatus = new Map<LeadAgentQueue, TeamQueueStatus>([
+        [LeadAgentQueue.Orchestrator, { queue: LeadAgentQueue.Orchestrator, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
+        [LeadAgentQueue.Planning, { queue: LeadAgentQueue.Planning, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
+        [LeadAgentQueue.Verification, { queue: LeadAgentQueue.Verification, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
+        [LeadAgentQueue.CodingDirector, { queue: LeadAgentQueue.CodingDirector, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 0 }],
+    ]);
+    /** v7.0: Ordered team list for round-robin traversal */
+    private readonly TEAM_ORDER: LeadAgentQueue[] = [
+        LeadAgentQueue.Planning,
+        LeadAgentQueue.Verification,
+        LeadAgentQueue.CodingDirector,
+        LeadAgentQueue.Orchestrator,  // Catch-all goes last
+    ];
+    /** v7.0: Round-robin index — tracks which team to serve next */
+    private roundRobinIndex = 0;
+    /** v7.0: Backward-compatible flat queue accessor (computed from team queues) */
+    private get queue(): QueuedTicket[] {
+        const flat: QueuedTicket[] = [];
+        for (const q of this.teamQueues.values()) flat.push(...q);
+        return flat;
+    }
     /** v6.0: Parallel processing slots — replaces boolean `isProcessing` */
-    private activeSlots = new Map<string, { ticketId: string; startedAt: number }>();
+    private activeSlots = new Map<string, { ticketId: string; startedAt: number; team: LeadAgentQueue }>();
     /** v6.0: Max concurrent ticket pipelines (from config). Default: 3. */
     private maxParallelTickets = 3;
     private bossCycleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -322,9 +365,12 @@ export class TicketProcessorService {
         heldAt: number;
         timeoutMs: number;
         queueEntry: QueuedTicket;
+        team: LeadAgentQueue;
     }> = [];
     /** v6.0: Flag to prevent concurrent fillSlots() calls */
     private fillingSlots = false;
+    /** v7.0: Document manager for support document context injection */
+    private documentManager: DocumentManagerLike | null = null;
 
     constructor(
         private database: Database,
@@ -334,6 +380,474 @@ export class TicketProcessorService {
         private outputChannel: OutputChannelLike
     ) {
         this.maxParallelTickets = this.config.getConfig().bossParallelBatchSize ?? 3;
+        // v7.0: Initialize slot allocation from config
+        this.applySlotAllocation(this.config.getConfig().teamSlotAllocation);
+    }
+
+    /**
+     * v7.0: Inject DocumentManagerService for support document context injection.
+     * Called during extension activation after DocumentManager is created.
+     */
+    setDocumentManager(dm: DocumentManagerLike): void {
+        this.documentManager = dm;
+        this.outputChannel.appendLine('[TicketProcessor] DocumentManagerService injected.');
+    }
+
+    // ==================== TEAM QUEUE MANAGEMENT (v7.0) ====================
+
+    /**
+     * v7.0: Route a ticket to the appropriate team queue.
+     *
+     * Rules (in order of precedence):
+     * 1. ticket.assigned_queue overrides all (Boss can force-route)
+     * 2. operation_type = 'code_generation' → CodingDirector
+     * 3. operation_type = 'verification' → Verification
+     * 4. operation_type = 'plan_generation' | 'design_change' | 'gap_analysis' | 'design_score' → Planning
+     * 5. operation_type = 'boss_directive' → uses payload target_queue, or Orchestrator
+     * 6. Default → Orchestrator (catch-all)
+     */
+    routeToTeamQueue(ticket: Ticket): LeadAgentQueue {
+        // 1. Explicit assignment overrides everything
+        if (ticket.assigned_queue) {
+            const validQueues = Object.values(LeadAgentQueue) as string[];
+            if (validQueues.includes(ticket.assigned_queue)) {
+                return ticket.assigned_queue as LeadAgentQueue;
+            }
+        }
+
+        const op = ticket.operation_type || '';
+
+        // 2. Code generation → Coding Director
+        if (op === 'code_generation') return LeadAgentQueue.CodingDirector;
+
+        // 3. Verification → Verification team
+        if (op === 'verification') return LeadAgentQueue.Verification;
+
+        // 4. Planning-family operations → Planning team
+        if (['plan_generation', 'design_change', 'gap_analysis', 'design_score'].includes(op)) {
+            return LeadAgentQueue.Planning;
+        }
+
+        // 5. Boss directives — check body for target_queue hint, else Orchestrator
+        if (op === 'boss_directive') {
+            const body = (ticket.body || '').toLowerCase();
+            if (body.includes('target_queue:planning') || body.includes('target_queue: planning')) {
+                return LeadAgentQueue.Planning;
+            }
+            if (body.includes('target_queue:verification') || body.includes('target_queue: verification')) {
+                return LeadAgentQueue.Verification;
+            }
+            if (body.includes('target_queue:coding_director') || body.includes('target_queue: coding_director')) {
+                return LeadAgentQueue.CodingDirector;
+            }
+            return LeadAgentQueue.Orchestrator;
+        }
+
+        // 6. Title-based heuristics for finer routing
+        const title = ticket.title.toLowerCase();
+        if (title.startsWith('phase: design') || title.startsWith('phase: data model') || title.startsWith('phase: task generation')) {
+            return LeadAgentQueue.Planning;
+        }
+        if (title.startsWith('phase: verification') || title.startsWith('verify:')) {
+            return LeadAgentQueue.Verification;
+        }
+        if (title.startsWith('coding:') || title.startsWith('rework:')) {
+            return LeadAgentQueue.CodingDirector;
+        }
+
+        // 7. Default: Orchestrator (catch-all)
+        return LeadAgentQueue.Orchestrator;
+    }
+
+    /**
+     * v7.0: Apply slot allocation from config to team status.
+     * Boss AI can dynamically change this via update_slot_allocation action.
+     */
+    private applySlotAllocation(allocation?: Record<string, number>): void {
+        if (!allocation) return;
+        for (const [team, slots] of Object.entries(allocation)) {
+            const status = this.teamStatus.get(team as LeadAgentQueue);
+            if (status) {
+                status.allocatedSlots = slots;
+            }
+        }
+    }
+
+    /**
+     * v7.0: Update slot allocation dynamically (Boss AI action).
+     * Validates total doesn't exceed maxParallelTickets.
+     */
+    updateSlotAllocation(allocation: Record<string, number>): boolean {
+        const total = Object.values(allocation).reduce((sum, n) => sum + n, 0);
+        if (total > this.maxParallelTickets) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Slot allocation rejected: total ${total} exceeds max ${this.maxParallelTickets}`
+            );
+            return false;
+        }
+        this.applySlotAllocation(allocation);
+        this.config.updateConfig({ teamSlotAllocation: allocation });
+        this.eventBus.emit('boss:slot_allocation_updated', 'ticket-processor', { allocation });
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Slot allocation updated: ${JSON.stringify(allocation)}`
+        );
+        return true;
+    }
+
+    /**
+     * v7.0: Get the total queue size across all teams.
+     */
+    private getTotalQueueSize(): number {
+        let total = 0;
+        for (const q of this.teamQueues.values()) total += q.length;
+        return total;
+    }
+
+    /**
+     * v7.0: Get team queue by name. Returns the array (mutable).
+     */
+    private getTeamQueue(team: LeadAgentQueue): QueuedTicket[] {
+        return this.teamQueues.get(team) || [];
+    }
+
+    /**
+     * v7.0: Count active slots for a specific team.
+     */
+    private getActiveSlotCountForTeam(team: LeadAgentQueue): number {
+        let count = 0;
+        for (const slot of this.activeSlots.values()) {
+            if (slot.team === team) count++;
+        }
+        return count;
+    }
+
+    /**
+     * v7.0: Remove a ticket from all team queues by ID.
+     * Returns the QueuedTicket entry and which team it was in, or null if not found.
+     */
+    private removeFromTeamQueues(ticketId: string): { entry: QueuedTicket; team: LeadAgentQueue } | null {
+        for (const [team, q] of this.teamQueues) {
+            const idx = q.findIndex(e => e.ticketId === ticketId);
+            if (idx >= 0) {
+                const [entry] = q.splice(idx, 1);
+                return { entry, team };
+            }
+        }
+        return null;
+    }
+
+    /**
+     * v7.0: Check if a ticket is in any team queue.
+     */
+    private isInAnyQueue(ticketId: string): boolean {
+        for (const q of this.teamQueues.values()) {
+            if (q.some(e => e.ticketId === ticketId)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * v7.0: Move a ticket between team queues.
+     */
+    moveTicketToQueue(ticketId: string, targetQueue: LeadAgentQueue): boolean {
+        const removed = this.removeFromTeamQueues(ticketId);
+        if (!removed) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] moveTicketToQueue: ticket ${ticketId} not found in any queue`
+            );
+            return false;
+        }
+
+        const targetQueueArr = this.getTeamQueue(targetQueue);
+        targetQueueArr.push(removed.entry);
+        this.sortQueue(targetQueueArr);
+
+        // Update ticket in DB
+        this.database.updateTicket(ticketId, { assigned_queue: targetQueue });
+
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Moved ticket ${ticketId} from ${removed.team} → ${targetQueue}`
+        );
+        this.eventBus.emit('boss:ticket_moved_queue', 'ticket-processor', {
+            ticketId, fromQueue: removed.team, toQueue: targetQueue,
+        });
+        return true;
+    }
+
+    /**
+     * v7.0: Cancel a ticket — remove from queue, mark cancelled in DB.
+     */
+    cancelTicket(ticketId: string, reason?: string): boolean {
+        // Remove from queue
+        this.removeFromTeamQueues(ticketId);
+
+        // Also remove from active slots if running
+        for (const [slotId, slot] of this.activeSlots) {
+            if (slot.ticketId === ticketId) {
+                this.activeSlots.delete(slotId);
+                break;
+            }
+        }
+
+        const ticket = this.database.getTicket(ticketId);
+        if (!ticket) return false;
+
+        this.database.updateTicket(ticketId, {
+            status: TicketStatus.Cancelled,
+            processing_status: null,
+            cancellation_reason: reason || 'Cancelled by Boss AI',
+        });
+
+        if (reason) {
+            this.database.addTicketReply(ticketId, 'boss-ai', `Ticket cancelled: ${reason}`);
+        }
+
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Cancelled TK-${ticket.ticket_number}: ${reason || 'no reason'}`
+        );
+        this.eventBus.emit('boss:ticket_cancelled', 'ticket-processor', {
+            ticketId, ticketNumber: ticket.ticket_number, reason,
+        });
+        return true;
+    }
+
+    /**
+     * v7.0: Re-engage a previously cancelled ticket.
+     * Loads from DB, re-routes to appropriate team queue, marks Open.
+     */
+    reengageTicket(ticketId: string): boolean {
+        const ticket = this.database.getTicket(ticketId);
+        if (!ticket) return false;
+        if (ticket.status !== TicketStatus.Cancelled) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] reengageTicket: TK-${ticket.ticket_number} is not cancelled (status: ${ticket.status})`
+            );
+            return false;
+        }
+
+        // Reset status
+        this.database.updateTicket(ticketId, {
+            status: TicketStatus.Open,
+            processing_status: 'queued',
+            cancellation_reason: null,
+        });
+        this.database.addTicketReply(ticketId, 'boss-ai',
+            'Ticket re-engaged by Boss AI — conditions may have changed.');
+
+        // Route to appropriate team queue
+        const team = this.routeToTeamQueue(ticket);
+        this.database.updateTicket(ticketId, { assigned_queue: team });
+
+        const teamQueue = this.getTeamQueue(team);
+        teamQueue.push({
+            ticketId: ticket.id,
+            priority: ticket.priority,
+            enqueuedAt: Date.now(),
+            operationType: ticket.operation_type || 'unknown',
+            errorRetryCount: 0,
+        });
+        this.sortQueue(teamQueue);
+
+        this.outputChannel.appendLine(
+            `[TicketProcessor] Re-engaged TK-${ticket.ticket_number} → ${team} queue`
+        );
+        this.eventBus.emit('boss:ticket_reengaged', 'ticket-processor', {
+            ticketId, ticketNumber: ticket.ticket_number, team,
+        });
+
+        this.kickBossCycle();
+        return true;
+    }
+
+    /**
+     * v7.0: Get status of all team queues (for Boss AI and webapp).
+     */
+    getTeamQueueStatus(): TeamQueueStatus[] {
+        const statuses: TeamQueueStatus[] = [];
+        // Fetch cancelled tickets once outside the loop for efficiency
+        const cancelledTickets = this.database.getCancelledTickets?.() ?? [];
+
+        for (const team of this.TEAM_ORDER) {
+            const q = this.getTeamQueue(team);
+            const status = this.teamStatus.get(team)!;
+            const cancelledForTeam = cancelledTickets.filter(t => t.assigned_queue === team).length;
+
+            statuses.push({
+                queue: team,
+                pending: q.length,
+                active: this.getActiveSlotCountForTeam(team),
+                blocked: q.filter(e => {
+                    const t = this.database.getTicket(e.ticketId);
+                    return t?.blocking_ticket_id != null;
+                }).length,
+                cancelled: cancelledForTeam,
+                lastServedAt: status.lastServedAt,
+                allocatedSlots: status.allocatedSlots,
+            });
+        }
+        return statuses;
+    }
+
+    /**
+     * v7.0: Review cancelled tickets for potential re-engagement.
+     * Called by Boss AI on its periodic cycle.
+     * Returns list of ticket IDs that were re-engaged.
+     */
+    reviewCancelledTickets(): string[] {
+        const cancelled = this.database.getCancelledTickets();
+        const reengaged: string[] = [];
+
+        for (const ticket of cancelled) {
+            // Check if blocking ticket has been resolved
+            if (ticket.blocking_ticket_id) {
+                const blocker = this.database.getTicket(ticket.blocking_ticket_id);
+                if (blocker && blocker.status === TicketStatus.Resolved) {
+                    if (this.reengageTicket(ticket.id)) {
+                        reengaged.push(ticket.id);
+                    }
+                }
+            }
+        }
+
+        if (reengaged.length > 0) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Cancelled ticket review: re-engaged ${reengaged.length} ticket(s)`
+            );
+        }
+
+        return reengaged;
+    }
+
+    // ==================== SUPPORT AGENT CALLS (v7.0 Phase 3) ====================
+
+    /**
+     * v7.0: Execute a support agent call — either synchronously (inline) or asynchronously (sub-ticket).
+     *
+     * Sync mode: Directly calls the support agent and returns its response content.
+     *   Used for quick lookups (Answer Agent, Decision Memory, Clarity).
+     *
+     * Async mode: Creates a sub-ticket in the appropriate team queue and returns the ticket ID.
+     *   Used for research tasks that may take a while (Research Agent).
+     */
+    async executeSupportCall(call: {
+        agent_name: string;
+        query: string;
+        ticket_id: string;
+        mode: 'sync' | 'async';
+        callback_action: 'resume' | 'block' | 'escalate';
+    }): Promise<string | null> {
+        const maxSyncTimeout = this.config.getConfig?.()?.maxSupportAgentSyncTimeoutMs ?? 60000;
+
+        if (call.mode === 'sync') {
+            // Synchronous: call the agent directly with a timeout
+            try {
+                this.eventBus.emit('support:sync_call', 'ticket-processor', {
+                    agent: call.agent_name, ticketId: call.ticket_id,
+                });
+
+                const context: AgentContext = {
+                    conversationHistory: [],
+                    ticket: call.ticket_id ? this.database.getTicket(call.ticket_id) ?? undefined : undefined,
+                };
+
+                const response = await Promise.race([
+                    this.orchestrator.callAgent(call.agent_name, call.query, context),
+                    new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error('Support agent sync timeout')), maxSyncTimeout)
+                    ),
+                ]);
+
+                return response.content || null;
+            } catch (err) {
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Support sync call to ${call.agent_name} failed: ${err}`
+                );
+                return null;
+            }
+        } else {
+            // Asynchronous: create a sub-ticket that will be processed in a team queue
+            try {
+                const parentTicket = call.ticket_id ? this.database.getTicket(call.ticket_id) : null;
+                const subTicket = this.database.createTicket({
+                    title: `[Support] ${call.agent_name}: ${call.query.substring(0, 80)}`,
+                    body: `Support agent call from ticket ${parentTicket?.ticket_number || '?'}.\n\nQuery: ${call.query}`,
+                    priority: (parentTicket?.priority as TicketPriority) || TicketPriority.P2,
+                    operation_type: call.agent_name === 'research' ? 'research' : 'ai_question',
+                    auto_created: true,
+                    parent_ticket_id: call.ticket_id || null,
+                    blocking_ticket_id: call.callback_action === 'block' ? call.ticket_id : null,
+                });
+
+                // If the parent should be blocked waiting for this result
+                if (call.callback_action === 'block' && call.ticket_id) {
+                    this.database.updateTicket(call.ticket_id, {
+                        status: TicketStatus.Blocked,
+                        blocking_ticket_id: subTicket.id,
+                    });
+                }
+
+                this.eventBus.emit('support:async_ticket_created', 'ticket-processor', {
+                    subTicketId: subTicket.id, parentTicketId: call.ticket_id, agent: call.agent_name,
+                });
+
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Support async ticket ${subTicket.ticket_number} created for ${call.agent_name}`
+                );
+
+                return subTicket.id;
+            } catch (err) {
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Support async ticket creation failed: ${err}`
+                );
+                return null;
+            }
+        }
+    }
+
+    /**
+     * v7.0: Evaluate task assignment success criteria against agent response.
+     * Returns an array of criteria results showing which passed/failed.
+     */
+    evaluateAssignmentCriteria(
+        criteria: Array<{ criterion: string; verification_method: string; required: boolean }>,
+        response: AgentResponse,
+        sourceTicketId?: string
+    ): Array<{ criterion: string; passed: boolean; detail: string; required: boolean }> {
+        return criteria.map(c => {
+            switch (c.verification_method) {
+                case 'output_contains': {
+                    // Check if the response content contains the expected substring
+                    const content = (response.content || '').toLowerCase();
+                    const keyword = c.criterion.toLowerCase();
+                    const passed = content.includes(keyword);
+                    return { criterion: c.criterion, passed, detail: passed ? 'Found in output' : 'Not found in output', required: c.required };
+                }
+                case 'ticket_resolved': {
+                    // Check if a linked ticket is resolved
+                    if (sourceTicketId) {
+                        const ticket = this.database.getTicket(sourceTicketId);
+                        const passed = ticket?.status === TicketStatus.Resolved;
+                        return { criterion: c.criterion, passed, detail: passed ? 'Ticket resolved' : 'Ticket not yet resolved', required: c.required };
+                    }
+                    return { criterion: c.criterion, passed: false, detail: 'No source ticket to check', required: c.required };
+                }
+                case 'info_gathered': {
+                    // Check if support_documents table has a matching entry
+                    const docs = this.database.searchSupportDocuments?.({ keyword: c.criterion }) ?? [];
+                    const passed = docs.length > 0;
+                    return { criterion: c.criterion, passed, detail: passed ? `Found ${docs.length} document(s)` : 'No matching documents found', required: c.required };
+                }
+                case 'file_exists': {
+                    // Placeholder — file checking requires workspace access not available here
+                    return { criterion: c.criterion, passed: false, detail: 'File check not available in this context', required: c.required };
+                }
+                case 'manual_check':
+                default: {
+                    // Manual checks always fail — need human verification
+                    return { criterion: c.criterion, passed: false, detail: 'Requires manual verification', required: c.required };
+                }
+            }
+        });
     }
 
     /**
@@ -419,7 +933,7 @@ export class TicketProcessorService {
                     this.startupAssessmentRunning = false;
                     if (!this.disposed) {
                         // If tickets arrived during the assessment, or assessment found work
-                        if (this.queue.length > 0 || this.kickRequestedDuringStartup) {
+                        if (this.getTotalQueueSize() > 0 || this.kickRequestedDuringStartup) {
                             this.kickRequestedDuringStartup = false;
                             this.bossCycle();
                         } else {
@@ -453,7 +967,7 @@ export class TicketProcessorService {
         const openQueued = this.database.getTicketsByStatus('open')
             .filter(t => t.processing_status === 'queued');
         for (const ticket of openQueued) {
-            const inQueue = this.queue.some(q => q.ticketId === ticket.id);
+            const inQueue = this.isInAnyQueue(ticket.id);
             if (!inQueue) {
                 recovered.push(ticket);
             }
@@ -530,15 +1044,20 @@ export class TicketProcessorService {
                 errorRetryCount: 0,
             };
 
-            this.queue.push(entry);
+            // v7.0: Route to appropriate team queue
+            const team = this.routeToTeamQueue(ticket);
+            this.database.updateTicket(ticket.id, { assigned_queue: team });
+            this.getTeamQueue(team).push(entry);
 
             this.eventBus.emit('ticket:recovered', 'ticket-processor', {
-                ticketId: ticket.id, ticketNumber: ticket.ticket_number,
+                ticketId: ticket.id, ticketNumber: ticket.ticket_number, team,
             });
         }
 
-        // Sort unified queue
-        this.sortQueue(this.queue);
+        // Sort all team queues
+        for (const q of this.teamQueues.values()) {
+            this.sortQueue(q);
+        }
 
         // v5.0: If deferProcessing is true (startup), don't kick processing yet —
         // Boss AI startup assessment will kick bossCycle() after running first.
@@ -568,7 +1087,10 @@ export class TicketProcessorService {
                 'Ticket recovered via manual recovery trigger.'
             );
 
-            this.queue.push({
+            // v7.0: Route to team queue
+            const team = this.routeToTeamQueue(ticket);
+            this.database.updateTicket(ticket.id, { assigned_queue: team });
+            this.getTeamQueue(team).push({
                 ticketId: ticket.id,
                 priority: ticket.priority,
                 enqueuedAt: Date.now(),
@@ -577,11 +1099,11 @@ export class TicketProcessorService {
             });
 
             this.eventBus.emit('ticket:recovered', 'ticket-processor', {
-                ticketId: ticket.id, ticketNumber: ticket.ticket_number,
+                ticketId: ticket.id, ticketNumber: ticket.ticket_number, team,
             });
         }
 
-        this.sortQueue(this.queue);
+        for (const q of this.teamQueues.values()) this.sortQueue(q);
         this.kickBossCycle();
 
         return stuckTickets.length;
@@ -592,10 +1114,10 @@ export class TicketProcessorService {
      */
     private enqueueTicket(ticket: Ticket): void {
         // v5.0: Prevent duplicate entries — ticket may already be in queue (e.g. blocked ticket unblocked)
-        const alreadyQueued = this.queue.some(q => q.ticketId === ticket.id);
-        if (alreadyQueued) {
-            // Ticket is already queued — just re-sort and kick the cycle
-            this.sortQueue(this.queue);
+        if (this.isInAnyQueue(ticket.id)) {
+            // Ticket is already queued — just re-sort the relevant team queue and kick the cycle
+            const team = this.routeToTeamQueue(ticket);
+            this.sortQueue(this.getTeamQueue(team));
             this.kickBossCycle();
             return;
         }
@@ -611,30 +1133,36 @@ export class TicketProcessorService {
                 const bumped = this.bumpLowestPriority();
                 if (!bumped) {
                     this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), P1 ticket waiting for slot`);
-                    // v5.0 fix: Don't set 'queued' when ticket is NOT in the queue — use null
-                    // The ticket stays in 'open' status and will be picked up by recovery on next cycle
                     return;
                 }
             } else {
                 this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), ticket waiting for slot`);
-                // v5.0 fix: Don't set 'queued' when ticket is NOT in the queue
                 return;
             }
         }
 
-        // Update status
-        this.database.updateTicket(ticket.id, { processing_status: 'queued' });
-        this.eventBus.emit('ticket:queued', 'ticket-processor', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
+        // v7.0: Route to appropriate team queue
+        const team = this.routeToTeamQueue(ticket);
 
-        // v5.0: Single unified queue — Boss directives get priority via sort
-        this.queue.push({
+        // Update status and assigned queue
+        this.database.updateTicket(ticket.id, {
+            processing_status: 'queued',
+            assigned_queue: team,
+        });
+        this.eventBus.emit('ticket:queued', 'ticket-processor', {
+            ticketId: ticket.id, ticketNumber: ticket.ticket_number, team,
+        });
+
+        // Push to the team's queue
+        const teamQueue = this.getTeamQueue(team);
+        teamQueue.push({
             ticketId: ticket.id,
             priority: ticket.priority,
             enqueuedAt: Date.now(),
             operationType: ticket.operation_type || 'unknown',
             errorRetryCount: 0,
         });
-        this.sortQueue(this.queue);
+        this.sortQueue(teamQueue);
         this.kickBossCycle();
     }
 
@@ -670,33 +1198,38 @@ export class TicketProcessorService {
             this.bossCycleTimer = null;
         }
 
+        const totalQueued = this.getTotalQueueSize();
         this.eventBus.emit('boss:cycle_started', 'ticket-processor', {
-            queueSize: this.queue.length,
+            queueSize: totalQueued,
             activeSlots: this.activeSlots.size,
             maxSlots: this.maxParallelTickets,
+            teamQueues: this.getTeamQueueStatus(),
         });
         this.outputChannel.appendLine(
-            `[TicketProcessor] Boss cycle started — ${this.queue.length} ticket(s) in queue, ${this.activeSlots.size}/${this.maxParallelTickets} slots active`
+            `[TicketProcessor] Boss cycle started — ${totalQueued} ticket(s) in queue, ${this.activeSlots.size}/${this.maxParallelTickets} slots active`
         );
 
         // v6.0: Run Boss inter-ticket orchestration ONCE per cycle (not per ticket)
-        if (this.activeSlots.size === 0 && this.queue.length > 0) {
+        if (this.activeSlots.size === 0 && totalQueued > 0) {
             await this.runBossInterTicket();
         }
 
-        // Re-sort queue (Boss actions may have added/changed tickets)
-        this.sortQueue(this.queue);
+        // Re-sort all team queues (Boss actions may have added/changed tickets)
+        for (const q of this.teamQueues.values()) this.sortQueue(q);
 
         // v6.0: Fill all available parallel slots
         this.fillSlots();
     }
 
     /**
-     * v6.0: Fill available processing slots with tickets from the queue.
+     * v7.0: Fill available processing slots using round-robin team balancing.
      *
-     * Called after bossCycle() starts and after any slot completes/errors.
-     * Uses peekNextProcessable() to find eligible tickets (unblocked, right AI mode).
-     * Launches processSlot() for each — fire-and-forget (runs concurrently).
+     * Soft-preference round-robin:
+     * 1. Walk through TEAM_ORDER starting from roundRobinIndex
+     * 2. Pick first team that has: pending tickets AND allocatedSlots > currently active for that team
+     * 3. Take the next processable ticket from that team's queue
+     * 4. Advance roundRobinIndex
+     * 5. Repeat until all slots filled or no eligible teams
      */
     private fillSlots(): void {
         if (this.disposed || this.fillingSlots) return;
@@ -706,56 +1239,97 @@ export class TicketProcessorService {
             // Refresh batch size from config
             this.maxParallelTickets = this.config.getConfig().bossParallelBatchSize ?? 3;
 
-            // v6.0: Check hold queue for timed-out tickets — release them back to main queue
+            // v6.0: Check hold queue for timed-out tickets — release them back
             this.checkHoldQueueTimeouts();
 
-            while (this.activeSlots.size < this.maxParallelTickets && !this.disposed) {
-                const result = this.peekNextProcessable();
-                if (!result) break; // No more processable tickets
+            let noProgressCount = 0;
+            const maxAttempts = this.TEAM_ORDER.length * 2; // Safety: prevent infinite loop
 
-                const { entry, index } = result;
-                const ticket = this.database.getTicket(entry.ticketId);
+            while (this.activeSlots.size < this.maxParallelTickets && !this.disposed && noProgressCount < maxAttempts) {
+                // v7.0: Round-robin team selection
+                let slotFilled = false;
 
-                // AI mode checks — may skip/defer the ticket
-                if (ticket && !this.checkAIModeForSlot(ticket, entry, index)) {
-                    continue; // Ticket was handled (skipped or deferred) — try next
-                }
+                for (let attempt = 0; attempt < this.TEAM_ORDER.length; attempt++) {
+                    const teamIdx = (this.roundRobinIndex + attempt) % this.TEAM_ORDER.length;
+                    const team = this.TEAM_ORDER[teamIdx];
+                    const teamQueue = this.getTeamQueue(team);
+                    const teamStat = this.teamStatus.get(team)!;
+                    const activeForTeam = this.getActiveSlotCountForTeam(team);
 
-                // Remove from queue and add to active slot
-                this.queue.splice(index, 1);
-                const slotId = `slot_${Date.now()}_${entry.ticketId.substring(0, 8)}`;
-                this.activeSlots.set(slotId, { ticketId: entry.ticketId, startedAt: Date.now() });
+                    // Skip if no pending tickets or team is at slot limit
+                    if (teamQueue.length === 0) continue;
+                    if (activeForTeam >= teamStat.allocatedSlots && teamStat.allocatedSlots > 0) continue;
 
-                this.outputChannel.appendLine(
-                    `[TicketProcessor] Slot ${this.activeSlots.size}/${this.maxParallelTickets} filled: TK-${ticket?.ticket_number} "${ticket?.title}" (${entry.priority})`
-                );
+                    // Find next processable ticket in this team's queue
+                    const result = this.peekNextProcessableFromTeam(team);
+                    if (!result) continue;
 
-                this.eventBus.emit('boss:slot_started', 'ticket-processor', {
-                    slotId,
-                    ticketId: entry.ticketId,
-                    ticketNumber: ticket?.ticket_number,
-                    activeSlots: this.activeSlots.size,
-                    queueRemaining: this.queue.length,
-                });
+                    const { entry, index } = result;
+                    const ticket = this.database.getTicket(entry.ticketId);
 
-                if (ticket) {
-                    this.eventBus.emit('boss:dispatching_ticket', 'ticket-processor', {
+                    // AI mode checks — may skip/defer the ticket
+                    if (ticket && !this.checkAIModeForSlot(ticket, entry, index, team)) {
+                        continue; // Ticket was handled — try next team
+                    }
+
+                    // Remove from team queue and add to active slot
+                    teamQueue.splice(index, 1);
+                    const slotId = `slot_${Date.now()}_${entry.ticketId.substring(0, 8)}`;
+                    this.activeSlots.set(slotId, { ticketId: entry.ticketId, startedAt: Date.now(), team });
+
+                    // Update team status
+                    teamStat.lastServedAt = Date.now();
+
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Slot ${this.activeSlots.size}/${this.maxParallelTickets} filled [${team}]: TK-${ticket?.ticket_number} "${ticket?.title}" (${entry.priority})`
+                    );
+
+                    this.eventBus.emit('boss:slot_started', 'ticket-processor', {
+                        slotId,
                         ticketId: entry.ticketId,
-                        ticketNumber: ticket.ticket_number,
-                        title: ticket.title,
-                        priority: entry.priority,
-                        queueRemaining: this.queue.length,
+                        ticketNumber: ticket?.ticket_number,
+                        team,
+                        activeSlots: this.activeSlots.size,
+                        queueRemaining: this.getTotalQueueSize(),
                     });
+
+                    if (ticket) {
+                        this.eventBus.emit('boss:dispatching_ticket', 'ticket-processor', {
+                            ticketId: entry.ticketId,
+                            ticketNumber: ticket.ticket_number,
+                            title: ticket.title,
+                            priority: entry.priority,
+                            team,
+                            queueRemaining: this.getTotalQueueSize(),
+                        });
+                    }
+
+                    // Fire-and-forget — run slot concurrently (don't await)
+                    this.processSlot(slotId, entry).catch(() => { /* error handled in processSlot */ });
+
+                    // Advance round-robin past this team
+                    this.roundRobinIndex = (teamIdx + 1) % this.TEAM_ORDER.length;
+                    slotFilled = true;
+                    break; // Exit inner loop — restart from new round-robin position
                 }
 
-                // Fire-and-forget — run slot concurrently (don't await)
-                this.processSlot(slotId, entry).catch(() => { /* error handled in processSlot */ });
+                if (!slotFilled) {
+                    noProgressCount++;
+                    break; // No team had eligible tickets — stop filling
+                } else {
+                    noProgressCount = 0;
+                }
             }
 
-            // v6.0: If no processable main queue tickets but hold queue has items,
+            this.eventBus.emit('queue:balance_cycle', 'ticket-processor', {
+                teamQueues: this.getTeamQueueStatus(),
+                activeSlots: this.activeSlots.size,
+                roundRobinIndex: this.roundRobinIndex,
+            });
+
+            // v6.0: If no processable tickets but hold queue has items,
             // check if we should trigger a model swap (Pause & Swap strategy)
-            if (this.activeSlots.size === 0 && !this.peekNextProcessable() && this.holdQueue.length > 0 && !this.disposed) {
-                // Fire-and-forget model swap check — if it releases tickets, it'll call fillSlots() again
+            if (this.activeSlots.size === 0 && this.getTotalQueueSize() === 0 && this.holdQueue.length > 0 && !this.disposed) {
                 this.checkModelSwapNeeded().then(released => {
                     if (released && !this.disposed) {
                         this.fillSlots(); // Re-fill slots with newly released tickets
@@ -768,7 +1342,7 @@ export class TicketProcessorService {
                 this.lastActivityTimestamp = Date.now();
                 this.eventBus.emit('boss:cycle_completed', 'ticket-processor', {
                     ticketsProcessed: 0,
-                    queueRemaining: this.queue.length,
+                    queueRemaining: this.getTotalQueueSize(),
                     activeSlots: 0,
                     holdQueueSize: this.holdQueue.length,
                 });
@@ -780,20 +1354,20 @@ export class TicketProcessorService {
     }
 
     /**
-     * v6.0: Find the next processable ticket in the queue.
+     * v7.0: Find the next processable ticket from a specific team queue.
      *
      * Skips:
      * - Tickets already in an active slot
-     * - Tickets blocked by a ticket NOT currently being processed
-     * - Tickets whose blocker IS in an active slot (must wait for it to finish)
+     * - Tickets blocked by an unresolved ticket
      *
-     * Returns the queue entry and its index, or null.
+     * Returns the queue entry and its index within the team queue, or null.
      */
-    private peekNextProcessable(): { entry: QueuedTicket; index: number } | null {
+    private peekNextProcessableFromTeam(team: LeadAgentQueue): { entry: QueuedTicket; index: number } | null {
+        const teamQueue = this.getTeamQueue(team);
         const activeTicketIds = new Set([...this.activeSlots.values()].map(s => s.ticketId));
 
-        for (let i = 0; i < this.queue.length; i++) {
-            const entry = this.queue[i];
+        for (let i = 0; i < teamQueue.length; i++) {
+            const entry = teamQueue[i];
 
             // Skip if already in a slot
             if (activeTicketIds.has(entry.ticketId)) continue;
@@ -801,7 +1375,7 @@ export class TicketProcessorService {
             const ticket = this.database.getTicket(entry.ticketId);
             if (!ticket) {
                 // Missing ticket — remove from queue silently
-                this.queue.splice(i, 1);
+                teamQueue.splice(i, 1);
                 i--;
                 continue;
             }
@@ -810,29 +1384,35 @@ export class TicketProcessorService {
             if (ticket.blocking_ticket_id) {
                 const blocker = this.database.getTicket(ticket.blocking_ticket_id);
                 if (blocker && blocker.status !== TicketStatus.Resolved) {
-                    // Blocker not resolved — is it currently being processed?
-                    if (activeTicketIds.has(ticket.blocking_ticket_id)) {
-                        // Blocker is in a slot — skip this ticket for now (it'll be processable when blocker finishes)
-                        continue;
-                    }
-                    // Blocker exists but isn't being processed and isn't resolved — skip
-                    continue;
+                    continue; // Blocked — skip
                 }
             }
 
             return { entry, index: i };
         }
 
-        return null; // No processable tickets
+        return null;
     }
 
     /**
-     * v6.0: Check AI mode for a ticket before slotting it.
+     * v6.0/v7.0: Find the next processable ticket across ALL team queues.
+     * Used by model swap logic and other places that need a global check.
+     */
+    private peekNextProcessable(): { entry: QueuedTicket; index: number; team: LeadAgentQueue } | null {
+        for (const team of this.TEAM_ORDER) {
+            const result = this.peekNextProcessableFromTeam(team);
+            if (result) return { ...result, team };
+        }
+        return null;
+    }
+
+    /**
+     * v7.0: Check AI mode for a ticket before slotting it.
      *
      * Returns true if the ticket should be processed normally.
      * Returns false if the ticket was handled (skipped/deferred) — caller should try next.
      */
-    private checkAIModeForSlot(ticket: Ticket, entry: QueuedTicket, queueIndex: number): boolean {
+    private checkAIModeForSlot(ticket: Ticket, entry: QueuedTicket, queueIndex: number, team?: LeadAgentQueue): boolean {
         const globalAIMode = this.config.getConfig().aiMode ?? 'smart';
         const ticketAILevel = this.getAILevel(ticket);
         const effectiveMode = this.resolveEffectiveAIMode(globalAIMode, ticketAILevel);
@@ -841,7 +1421,12 @@ export class TicketProcessorService {
             this.outputChannel.appendLine(
                 `[TicketProcessor] AI mode is "manual" — skipping TK-${ticket.ticket_number} "${ticket.title}"`
             );
-            this.queue.splice(queueIndex, 1);
+            // v7.0: Remove from specific team queue
+            if (team) {
+                this.getTeamQueue(team).splice(queueIndex, 1);
+            } else {
+                this.removeFromTeamQueues(entry.ticketId);
+            }
             return false;
         }
 
@@ -869,7 +1454,12 @@ export class TicketProcessorService {
                 ai_continued: false,
                 dismiss_count: 0,
             });
-            this.queue.splice(queueIndex, 1);
+            // v7.0: Remove from specific team queue
+            if (team) {
+                this.getTeamQueue(team).splice(queueIndex, 1);
+            } else {
+                this.removeFromTeamQueues(entry.ticketId);
+            }
             return false;
         }
 
@@ -899,7 +1489,12 @@ export class TicketProcessorService {
                     ai_continued: false,
                     dismiss_count: 0,
                 });
-                this.queue.splice(queueIndex, 1);
+                // v7.0: Remove from specific team queue
+                if (team) {
+                    this.getTeamQueue(team).splice(queueIndex, 1);
+                } else {
+                    this.removeFromTeamQueues(entry.ticketId);
+                }
                 return false;
             }
             // Backend/infrastructure — fall through to auto-process
@@ -930,7 +1525,7 @@ export class TicketProcessorService {
                 this.eventBus.emit('boss:ticket_completed', 'ticket-processor', {
                     ticketId: entry.ticketId,
                     ticketNumber: ticket?.ticket_number,
-                    queueRemaining: this.queue.length,
+                    queueRemaining: this.getTotalQueueSize(),
                     activeSlots: this.activeSlots.size - 1,
                 });
             } else {
@@ -956,7 +1551,7 @@ export class TicketProcessorService {
             this.lastActivityTimestamp = Date.now();
 
             // If all slots empty and queue empty → cycle completed
-            if (this.activeSlots.size === 0 && this.queue.length === 0) {
+            if (this.activeSlots.size === 0 && this.getTotalQueueSize() === 0) {
                 this.eventBus.emit('boss:cycle_completed', 'ticket-processor', {
                     ticketsProcessed: 0,
                     queueRemaining: 0,
@@ -997,10 +1592,11 @@ export class TicketProcessorService {
         if (timedOut.length > 0) {
             this.holdQueue = remaining;
             for (const held of timedOut) {
-                // Re-enqueue the ticket at its original position/priority
-                this.queue.push(held.queueEntry);
+                // v7.0: Re-enqueue to team queue
+                const team = held.team;
+                this.getTeamQueue(team).push(held.queueEntry);
                 this.outputChannel.appendLine(
-                    `[TicketProcessor] Hold timeout: ticket ${held.ticketId} released back to queue ` +
+                    `[TicketProcessor] Hold timeout: ticket ${held.ticketId} released back to ${team} queue ` +
                     `(was waiting for model "${held.requiredModel}" for ${Math.round((now - held.heldAt) / 60000)} min)`
                 );
                 this.eventBus.emit('boss:ticket_unheld', 'ticket-processor', {
@@ -1012,7 +1608,7 @@ export class TicketProcessorService {
                 this.database.addAuditLog('boss-ai', 'hold_timeout',
                     `Ticket ${held.ticketId} released after ${Math.round((now - held.heldAt) / 60000)} min hold (model: ${held.requiredModel})`);
             }
-            this.sortQueue(this.queue);
+            for (const q of this.teamQueues.values()) this.sortQueue(q);
         }
     }
 
@@ -1035,14 +1631,15 @@ export class TicketProcessorService {
         if (released.length > 0) {
             this.holdQueue = remaining;
             for (const held of released) {
-                this.queue.push(held.queueEntry);
+                // v7.0: Re-enqueue to original team queue
+                this.getTeamQueue(held.team).push(held.queueEntry);
                 this.eventBus.emit('boss:ticket_unheld', 'ticket-processor', {
                     ticketId: held.ticketId,
                     reason: 'model_available',
                     requiredModel: held.requiredModel,
                 });
             }
-            this.sortQueue(this.queue);
+            for (const q of this.teamQueues.values()) this.sortQueue(q);
             this.outputChannel.appendLine(
                 `[TicketProcessor] Released ${released.length} held ticket(s) for model "${model}"`
             );
@@ -1264,7 +1861,10 @@ export class TicketProcessorService {
                     this.database.addTicketReply(stuckTicket.id, 'system',
                         'Ticket recovered by Boss AI idle check — was stuck in processing state.'
                     );
-                    this.queue.push({
+                    // v7.0: Route to team queue
+                    const team = this.routeToTeamQueue(stuckTicket);
+                    this.database.updateTicket(stuckTicket.id, { assigned_queue: team });
+                    this.getTeamQueue(team).push({
                         ticketId: stuckTicket.id,
                         priority: stuckTicket.priority,
                         enqueuedAt: Date.now(),
@@ -1272,14 +1872,14 @@ export class TicketProcessorService {
                         errorRetryCount: 0,
                     });
                     this.eventBus.emit('ticket:recovered', 'ticket-processor', {
-                        ticketId: stuckTicket.id, ticketNumber: stuckTicket.ticket_number,
+                        ticketId: stuckTicket.id, ticketNumber: stuckTicket.ticket_number, team,
                     });
                 }
-                this.sortQueue(this.queue);
+                for (const q of this.teamQueues.values()) this.sortQueue(q);
             }
 
             // If tickets are now available, start the Boss cycle
-            if (this.queue.length > 0 && this.activeSlots.size < this.maxParallelTickets) {
+            if (this.getTotalQueueSize() > 0 && this.activeSlots.size < this.maxParallelTickets) {
                 this.bossCycle();
             } else {
                 // Nothing to do — start another countdown
@@ -1321,10 +1921,15 @@ export class TicketProcessorService {
                 this.outputChannel.appendLine(
                     `[TicketProcessor] TK-${ticket.ticket_number} blocked by TK-${blocker.ticket_number} — deferring`
                 );
-                // Move to back of queue so other tickets can process
+                // v7.0: Move to back of its team queue so other tickets can process
                 if (queueEntry) {
-                    this.queue.shift(); // Remove from front
-                    this.queue.push(queueEntry); // Push to back
+                    const team = this.routeToTeamQueue(ticket);
+                    const teamQueue = this.getTeamQueue(team);
+                    const idx = teamQueue.indexOf(queueEntry);
+                    if (idx >= 0) {
+                        teamQueue.splice(idx, 1);
+                        teamQueue.push(queueEntry);
+                    }
                 }
                 return false; // Signal caller to break and retry later
             } else if (blocker && blocker.status === TicketStatus.Resolved) {
@@ -1411,6 +2016,24 @@ export class TicketProcessorService {
                         `flag the conflict in your response and suggest how to resolve it.\n\n` +
                         planFileCtx +
                         `\n=== END PLAN REFERENCE DOCUMENTS ===`;
+                }
+            }
+
+            // v7.0: Inject relevant support documents into agent context
+            if (this.documentManager) {
+                try {
+                    const relevantDocs = this.documentManager.gatherContextDocs(ticket);
+                    if (relevantDocs.length > 0) {
+                        const docContext = this.documentManager.formatContextDocs(relevantDocs);
+                        agentMessage += `\n\n${docContext}`;
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Injected ${relevantDocs.length} support doc(s) into TK-${ticket.ticket_number} context`
+                        );
+                    }
+                } catch (error) {
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Support document injection failed (non-fatal): ${error}`
+                    );
                 }
             }
 
@@ -1510,6 +2133,33 @@ export class TicketProcessorService {
                     } else {
                         pipelineContext = `${promptText}\n\n--- ${step.agentName} Output (Requirements/Plan) ---\n${response.content}\n\n--- Your Task (${nextStep.agentName}) ---\nUsing the above output as your input, complete the ${nextStep.deliverableType} work for: ${ticket.title}`;
                     }
+                }
+            }
+
+            // v7.0 Phase 3: Handle escalation/support actions from pipeline agents
+            if (response.actions && response.actions.length > 0) {
+                for (const action of response.actions) {
+                    if (action.type === 'escalate_to_boss' || action.type === 'call_support_agent' ||
+                        action.type === 'block_ticket' || action.type === 'save_document') {
+                        // Process these actions through the boss action handler
+                        await this.executeBossActions([action], 'pipeline-agent');
+                    }
+                }
+
+                // If escalation was requested, mark run as escalated and skip review
+                const hasEscalation = response.actions.some(a => a.type === 'escalate_to_boss');
+                if (hasEscalation) {
+                    this.database.completeTicketRun(run.id, {
+                        status: 'failed',
+                        response_received: response.content,
+                        error_message: 'Escalated to Boss AI',
+                        tokens_used: response.tokensUsed ?? undefined,
+                        duration_ms: Date.now() - startTime,
+                    });
+                    this.eventBus.emit('ticket:escalated', 'ticket-processor', {
+                        ticketId, reason: 'Agent requested escalation',
+                    });
+                    return true; // Escalation handled — exit pipeline
                 }
             }
 
@@ -1748,23 +2398,22 @@ export class TicketProcessorService {
                     processing_status: 'queued',
                 });
 
-                // Remove current entry from front of queue (it was peeked)
-                if (this.queue.length > 0 && this.queue[0].ticketId === ticketId) {
-                    this.queue.shift();
-                }
+                // v7.0: Remove from team queue if still present, then re-add
+                this.removeFromTeamQueues(ticketId);
 
-                // Push new entry with incremented retry count to back of queue
-                this.queue.push({
+                // Push new entry with incremented retry count to team queue
+                const team = this.routeToTeamQueue(ticket);
+                this.getTeamQueue(team).push({
                     ticketId: ticket.id,
                     priority: ticket.priority,
                     enqueuedAt: Date.now(),
                     operationType: ticket.operation_type || 'unknown',
                     errorRetryCount: currentErrorRetry + 1,
                 });
-                this.sortQueue(this.queue);
+                this.sortQueue(this.getTeamQueue(team));
 
                 this.eventBus.emit('ticket:requeued', 'ticket-processor', {
-                    ticketId, attempt: currentErrorRetry + 1, reason: 'agent_error',
+                    ticketId, attempt: currentErrorRetry + 1, reason: 'agent_error', team,
                 });
             } else {
                 // Max error retries exceeded: escalate
@@ -1772,10 +2421,8 @@ export class TicketProcessorService {
                     `[TicketProcessor] TK-${ticket.ticket_number} max error retries (${maxErrorRetries}) exceeded, escalating`
                 );
 
-                // Remove from front of queue
-                if (this.queue.length > 0 && this.queue[0].ticketId === ticketId) {
-                    this.queue.shift();
-                }
+                // v7.0: Remove from team queue
+                this.removeFromTeamQueues(ticketId);
 
                 this.database.updateTicket(ticketId, {
                     status: TicketStatus.Escalated,
@@ -1926,13 +2573,14 @@ export class TicketProcessorService {
                 if (child.processing_status === 'queued' || child.processing_status === 'processing') continue;
 
                 // Check it isn't already in our in-memory queue
-                const alreadyQueued = this.queue.some(q => q.ticketId === child.id);
-                if (alreadyQueued) continue;
+                if (this.isInAnyQueue(child.id)) continue;
 
                 const aiLevel = this.getAILevel(child);
                 if (aiLevel === 'manual') continue;
 
-                this.database.updateTicket(child.id, { processing_status: 'queued' });
+                // v7.0: Route to team queue
+                const team = this.routeToTeamQueue(child);
+                this.database.updateTicket(child.id, { processing_status: 'queued', assigned_queue: team });
                 this.database.addTicketReply(child.id, 'system',
                     `Parent ticket TK-${parentTicketNumber} resolved — this sub-ticket is now ready for processing.`);
 
@@ -1944,15 +2592,15 @@ export class TicketProcessorService {
                     errorRetryCount: 0,
                 };
 
-                this.queue.push(entry);
+                this.getTeamQueue(team).push(entry);
                 enqueued++;
                 this.outputChannel.appendLine(
-                    `[TicketProcessor] Sub-ticket TK-${child.ticket_number} enqueued (parent TK-${parentTicketNumber} resolved)`
+                    `[TicketProcessor] Sub-ticket TK-${child.ticket_number} enqueued → ${team} (parent TK-${parentTicketNumber} resolved)`
                 );
             }
 
             if (enqueued > 0) {
-                this.sortQueue(this.queue);
+                for (const q of this.teamQueues.values()) this.sortQueue(q);
                 this.outputChannel.appendLine(
                     `[TicketProcessor] ${enqueued} sub-ticket(s) of TK-${parentTicketNumber} enqueued for processing`
                 );
@@ -1994,17 +2642,18 @@ export class TicketProcessorService {
             );
             this.eventBus.emit('ticket:retry', 'ticket-processor', { ticketId: ticket.id, attempt: currentRetry + 1 });
 
-            this.database.updateTicket(ticket.id, { processing_status: 'queued' });
+            // v7.0: Re-enqueue into team queue
+            const team = this.routeToTeamQueue(ticket);
+            this.database.updateTicket(ticket.id, { processing_status: 'queued', assigned_queue: team });
 
-            // Re-enqueue into unified queue
-            this.queue.push({
+            this.getTeamQueue(team).push({
                 ticketId: ticket.id,
                 priority: ticket.priority,
                 enqueuedAt: Date.now(),
                 operationType: ticket.operation_type || 'unknown',
                 errorRetryCount: 0,
             });
-            this.sortQueue(this.queue);
+            this.sortQueue(this.getTeamQueue(team));
         } else {
             // Escalate: create ghost ticket for user with noob-friendly explanation
             this.outputChannel.appendLine(`[TicketProcessor] TK-${ticket.ticket_number} max retries reached, escalating to user`);
@@ -2044,13 +2693,15 @@ export class TicketProcessorService {
      * Bump lowest-priority ticket to pending when at limit (for P1 tickets).
      */
     private bumpLowestPriority(): boolean {
-        // Find a P3 ticket in the queue to bump
-        const p3Index = this.queue.findIndex(q => q.priority === TicketPriority.P3);
-        if (p3Index >= 0) {
-            const bumped = this.queue.splice(p3Index, 1)[0];
-            this.database.updateTicket(bumped.ticketId, { processing_status: null as any });
-            this.outputChannel.appendLine(`[TicketProcessor] Bumped P3 ticket ${bumped.ticketId} for P1 priority`);
-            return true;
+        // v7.0: Find a P3 ticket in any team queue to bump
+        for (const [, teamQueue] of this.teamQueues) {
+            const p3Index = teamQueue.findIndex(q => q.priority === TicketPriority.P3);
+            if (p3Index >= 0) {
+                const bumped = teamQueue.splice(p3Index, 1)[0];
+                this.database.updateTicket(bumped.ticketId, { processing_status: null as any });
+                this.outputChannel.appendLine(`[TicketProcessor] Bumped P3 ticket ${bumped.ticketId} for P1 priority`);
+                return true;
+            }
         }
         return false;
     }
@@ -2170,19 +2821,19 @@ export class TicketProcessorService {
                 // Always log inter-ticket assessment for audit trail
                 const interText = (healthResponse.content || '(no response)').trim();
                 this.database.addAuditLog('boss-ai', 'inter_ticket_check',
-                    `[queue=${this.queue.length}] ${interText.substring(0, 300)}${actionsExecuted > 0 ? ` | Actions: ${actionsExecuted}` : ''}`
+                    `[queue=${this.getTotalQueueSize()}] ${interText.substring(0, 300)}${actionsExecuted > 0 ? ` | Actions: ${actionsExecuted}` : ''}`
                 );
             }
 
-            // Re-sort the queue in case priorities changed or new tickets were added
-            this.sortQueue(this.queue);
+            // Re-sort all team queues in case priorities changed or new tickets were added
+            for (const q of this.teamQueues.values()) this.sortQueue(q);
 
-            // v5.0: LLM-driven intelligent ticket selection
-            // After deterministic sort (baseline), ask Boss AI to pick the best ticket
-            if (this.queue.length > 1 && boss.selectNextTicket) {
+            // v7.0: LLM-driven intelligent ticket selection across all team queues
+            const allQueued = this.queue; // flat snapshot for candidate building
+            if (allQueued.length > 1 && boss.selectNextTicket) {
                 try {
-                    // Build candidate list from top 10 unblocked tickets
-                    const candidateEntries = this.queue.slice(0, 10);
+                    // Build candidate list from top 10 tickets across all queues
+                    const candidateEntries = allQueued.slice(0, 10);
                     const candidates = candidateEntries.map(entry => {
                         const ticket = this.database.getTicket(entry.ticketId);
                         return {
@@ -2198,23 +2849,26 @@ export class TicketProcessorService {
                             lastError: ticket?.last_error ?? null,
                             createdAt: ticket?.created_at ?? new Date().toISOString(),
                         };
-                    }).filter(c => c.ticketNumber > 0); // filter out any missing tickets
+                    }).filter(c => c.ticketNumber > 0);
 
                     if (candidates.length > 1) {
                         const selectedId = await boss.selectNextTicket(candidates);
-                        if (selectedId && selectedId !== this.queue[0].ticketId) {
-                            // Move selected ticket to front of queue
-                            const idx = this.queue.findIndex(q => q.ticketId === selectedId);
-                            if (idx > 0) {
-                                const [selected] = this.queue.splice(idx, 1);
-                                this.queue.unshift(selected);
-                                const selectedTicket = this.database.getTicket(selectedId);
-                                this.outputChannel.appendLine(
-                                    `[TicketProcessor] Boss AI selected TK-${selectedTicket?.ticket_number} "${selectedTicket?.title}" — moved to front (was #${idx + 1})`
-                                );
-                                this.database.addAuditLog('boss-ai', 'intelligent_selection',
-                                    `Selected TK-${selectedTicket?.ticket_number} from ${candidates.length} candidates. Moved from position ${idx + 1} to front.`
-                                );
+                        if (selectedId) {
+                            // v7.0: Move selected ticket to front of its team queue
+                            for (const [team, teamQueue] of this.teamQueues) {
+                                const idx = teamQueue.findIndex(q => q.ticketId === selectedId);
+                                if (idx > 0) {
+                                    const [selected] = teamQueue.splice(idx, 1);
+                                    teamQueue.unshift(selected);
+                                    const selectedTicket = this.database.getTicket(selectedId);
+                                    this.outputChannel.appendLine(
+                                        `[TicketProcessor] Boss AI selected TK-${selectedTicket?.ticket_number} "${selectedTicket?.title}" — moved to front of ${team} queue`
+                                    );
+                                    this.database.addAuditLog('boss-ai', 'intelligent_selection',
+                                        `Selected TK-${selectedTicket?.ticket_number} from ${candidates.length} candidates. Moved to front of ${team} queue.`
+                                    );
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2228,42 +2882,47 @@ export class TicketProcessorService {
 
             // Also parse NEXT_TICKET from health check response as secondary signal
             const nextTicketMatch = (healthResponse.content || '').match(/NEXT_TICKET:\s*(?:TK-)?(\d+|[0-9a-f-]{36})/i);
-            if (nextTicketMatch && this.queue.length > 1) {
+            if (nextTicketMatch && this.getTotalQueueSize() > 1) {
                 const nextVal = nextTicketMatch[1];
-                // Try as ticket number first, then as UUID
-                const matchIdx = this.queue.findIndex(q => {
-                    const t = this.database.getTicket(q.ticketId);
-                    return t?.ticket_number?.toString() === nextVal || q.ticketId === nextVal;
-                });
-                if (matchIdx > 0) {
-                    const [picked] = this.queue.splice(matchIdx, 1);
-                    this.queue.unshift(picked);
-                    const pickedTicket = this.database.getTicket(picked.ticketId);
-                    this.outputChannel.appendLine(
-                        `[TicketProcessor] Boss health-check NEXT_TICKET signal: TK-${pickedTicket?.ticket_number} moved to front`
-                    );
+                // v7.0: Find in team queues and move to front
+                for (const [, teamQueue] of this.teamQueues) {
+                    const matchIdx = teamQueue.findIndex(q => {
+                        const t = this.database.getTicket(q.ticketId);
+                        return t?.ticket_number?.toString() === nextVal || q.ticketId === nextVal;
+                    });
+                    if (matchIdx > 0) {
+                        const [picked] = teamQueue.splice(matchIdx, 1);
+                        teamQueue.unshift(picked);
+                        const pickedTicket = this.database.getTicket(picked.ticketId);
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Boss health-check NEXT_TICKET signal: TK-${pickedTicket?.ticket_number} moved to front`
+                        );
+                        break;
+                    }
                 }
             }
 
             this.eventBus.emit('boss:inter_ticket_completed', 'ticket-processor', {
-                queueSize: this.queue.length,
+                queueSize: this.getTotalQueueSize(),
                 critical: isCritical,
                 actionsExecuted,
                 summary: healthResponse.content.substring(0, 200),
+                teamQueues: this.getTeamQueueStatus(),
             });
 
-            // Emit which ticket was picked next
-            if (this.queue.length > 0) {
-                const nextEntry = this.queue[0];
-                const nextTicket = this.database.getTicket(nextEntry.ticketId);
+            // Emit which ticket was picked next (first processable across all teams)
+            const nextProcessable = this.peekNextProcessable();
+            if (nextProcessable) {
+                const nextTicket = this.database.getTicket(nextProcessable.entry.ticketId);
                 this.eventBus.emit('boss:picked_next_ticket', 'ticket-processor', {
-                    ticketId: nextEntry.ticketId,
+                    ticketId: nextProcessable.entry.ticketId,
                     ticketNumber: nextTicket?.ticket_number,
                     title: nextTicket?.title,
-                    priority: nextEntry.priority,
+                    priority: nextProcessable.entry.priority,
+                    team: nextProcessable.team,
                 });
                 this.outputChannel.appendLine(
-                    `[TicketProcessor] Boss picked next ticket: TK-${nextTicket?.ticket_number} "${nextTicket?.title}"`
+                    `[TicketProcessor] Boss picked next ticket: TK-${nextTicket?.ticket_number} "${nextTicket?.title}" [${nextProcessable.team}]`
                 );
             }
         } catch (err) {
@@ -2457,11 +3116,14 @@ export class TicketProcessorService {
                         }
 
                         this.database.updateTicket(repTicketId, { priority: newPriority as TicketPriority });
-                        // Also update the queue entry
-                        const queueEntry = this.queue.find(q => q.ticketId === repTicketId);
-                        if (queueEntry) {
-                            queueEntry.priority = newPriority;
-                            this.sortQueue(this.queue);
+                        // v7.0: Update the queue entry in its team queue
+                        for (const [, teamQueue] of this.teamQueues) {
+                            const qe = teamQueue.find(q => q.ticketId === repTicketId);
+                            if (qe) {
+                                qe.priority = newPriority;
+                                this.sortQueue(teamQueue);
+                                break;
+                            }
                         }
 
                         this.outputChannel.appendLine(
@@ -2485,19 +3147,23 @@ export class TicketProcessorService {
                             break;
                         }
 
-                        const idx = this.queue.findIndex(q => q.ticketId === reorderTicketId);
-                        if (idx >= 0) {
-                            const [moved] = this.queue.splice(idx, 1);
-                            if (position === 'front') {
-                                this.queue.unshift(moved);
-                            } else {
-                                this.queue.push(moved);
+                        // v7.0: Find in team queues and reorder within that team
+                        for (const [team, teamQueue] of this.teamQueues) {
+                            const idx = teamQueue.findIndex(q => q.ticketId === reorderTicketId);
+                            if (idx >= 0) {
+                                const [moved] = teamQueue.splice(idx, 1);
+                                if (position === 'front') {
+                                    teamQueue.unshift(moved);
+                                } else {
+                                    teamQueue.push(moved);
+                                }
+                                this.outputChannel.appendLine(
+                                    `[TicketProcessor] Boss moved ticket ${reorderTicketId} to ${position} of ${team} queue`
+                                );
+                                this.database.addAuditLog('boss-ai', 'reorder_queue',
+                                    `Moved ${reorderTicketId} to ${position} of ${team}`);
+                                break;
                             }
-                            this.outputChannel.appendLine(
-                                `[TicketProcessor] Boss moved ticket ${reorderTicketId} to ${position} of queue`
-                            );
-                            this.database.addAuditLog('boss-ai', 'reorder_queue',
-                                `Moved ${reorderTicketId} to ${position}`);
                         }
                         executed++;
                         break;
@@ -2514,16 +3180,16 @@ export class TicketProcessorService {
                             break;
                         }
 
-                        // Remove from main queue
-                        const holdIdx = this.queue.findIndex(q => q.ticketId === holdTicketId);
-                        if (holdIdx >= 0) {
-                            const [holdEntry] = this.queue.splice(holdIdx, 1);
+                        // v7.0: Remove from team queue
+                        const holdRemoved = this.removeFromTeamQueues(holdTicketId);
+                        if (holdRemoved) {
                             this.holdQueue.push({
                                 ticketId: holdTicketId,
                                 requiredModel: requiredModel || 'unknown',
                                 heldAt: Date.now(),
                                 timeoutMs: holdTimeoutMs,
-                                queueEntry: holdEntry,
+                                queueEntry: holdRemoved.entry,
+                                team: holdRemoved.team,
                             });
                             this.outputChannel.appendLine(
                                 `[TicketProcessor] Boss held ticket ${holdTicketId} — waiting for model "${requiredModel}"`
@@ -2541,22 +3207,314 @@ export class TicketProcessorService {
                     case 'update_notepad': {
                         const notepadContent = (action.payload.content as string) || '';
                         const notepadMode = (action.payload.mode as string) || 'replace';
+                        const notepadSection = (action.payload.section as string) || 'general';
 
+                        // v7.0: Use proper boss_notepad table
                         if (notepadMode === 'append') {
-                            const current = this.database.getAuditLog(1)
-                                .find(a => a.action === 'boss_notepad')?.detail ?? '';
-                            this.database.addAuditLog('boss-ai', 'boss_notepad',
-                                current + '\n' + notepadContent);
+                            const existing = this.database.getBossNotepadSection(notepadSection);
+                            this.database.updateBossNotepadSection(notepadSection,
+                                (existing || '') + '\n' + notepadContent);
                         } else {
-                            this.database.addAuditLog('boss-ai', 'boss_notepad', notepadContent);
+                            this.database.updateBossNotepadSection(notepadSection, notepadContent);
                         }
 
                         this.outputChannel.appendLine(
-                            `[TicketProcessor] Boss notepad updated (${notepadMode}): ${notepadContent.substring(0, 100)}`
+                            `[TicketProcessor] Boss notepad [${notepadSection}] updated (${notepadMode}): ${notepadContent.substring(0, 100)}`
                         );
                         this.eventBus.emit('boss:notepad_updated', 'ticket-processor', {
-                            mode: notepadMode, contentLength: notepadContent.length,
+                            mode: notepadMode, section: notepadSection, contentLength: notepadContent.length,
                         });
+                        executed++;
+                        break;
+                    }
+
+                    // ==================== v7.0: TEAM QUEUE ACTIONS ====================
+
+                    case 'cancel_ticket': {
+                        const cancelTicketId = (action.payload.ticket_id as string) || '';
+                        const cancelReason = (action.payload.reason as string) || 'Boss AI decision';
+
+                        if (!cancelTicketId) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss cancel_ticket: missing ticket_id');
+                            break;
+                        }
+
+                        this.cancelTicket(cancelTicketId, cancelReason);
+                        executed++;
+                        break;
+                    }
+
+                    case 'move_to_queue': {
+                        const moveTicketId = (action.payload.ticket_id as string) || '';
+                        const targetQueue = (action.payload.target_queue as string) || '';
+
+                        if (!moveTicketId || !targetQueue) {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss move_to_queue: missing ticket_id or target_queue');
+                            break;
+                        }
+
+                        const validQueues = Object.values(LeadAgentQueue) as string[];
+                        if (!validQueues.includes(targetQueue)) {
+                            this.outputChannel.appendLine(`[TicketProcessor] Boss move_to_queue: invalid target_queue "${targetQueue}"`);
+                            break;
+                        }
+
+                        this.moveTicketToQueue(moveTicketId, targetQueue as LeadAgentQueue);
+                        executed++;
+                        break;
+                    }
+
+                    case 'update_slot_allocation': {
+                        const allocation = action.payload as Record<string, unknown>;
+                        const parsed: Record<string, number> = {};
+                        for (const [key, val] of Object.entries(allocation)) {
+                            if (typeof val === 'number' && Object.values(LeadAgentQueue).includes(key as LeadAgentQueue)) {
+                                parsed[key] = val;
+                            }
+                        }
+
+                        if (Object.keys(parsed).length > 0) {
+                            this.updateSlotAllocation(parsed);
+                        } else {
+                            this.outputChannel.appendLine('[TicketProcessor] Boss update_slot_allocation: no valid allocations');
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    // v7.0 Phase 3: Structured task assignment with success criteria
+                    case 'assign_task': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const targetAgent = payload.target_agent as string;
+                        const taskMessage = payload.task_message as string;
+                        const successCriteria = (payload.success_criteria as Array<{ criterion: string; verification_method: string; required: boolean }>) || [];
+                        const priority = (payload.priority as string) || 'P2';
+                        const sourceTicketId = payload.source_ticket_id as string | undefined;
+                        const targetQueue = payload.target_queue as LeadAgentQueue | undefined;
+                        const timeoutMs = (payload.timeout_ms as number) || 300000;
+
+                        if (!targetAgent || !taskMessage) {
+                            this.outputChannel.appendLine('[TicketProcessor] assign_task: missing target_agent or task_message');
+                            break;
+                        }
+
+                        // Create assignment record
+                        const assignmentRecord = this.database.createTaskAssignment?.({
+                            source_ticket_id: sourceTicketId || null,
+                            target_agent: targetAgent,
+                            target_queue: targetQueue || null,
+                            requester: trigger,
+                            task_message: taskMessage,
+                            success_criteria: JSON.stringify(successCriteria),
+                            priority,
+                            timeout_ms: timeoutMs,
+                        });
+                        const assignmentId = assignmentRecord?.id || `asgn-${Date.now()}`;
+
+                        this.eventBus.emit('boss:assignment_created', 'ticket-processor', {
+                            assignmentId, targetAgent, sourceTicketId, targetQueue,
+                        });
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Assignment ${assignmentId} created: ${targetAgent} ← ${taskMessage.substring(0, 80)}`
+                        );
+
+                        // Execute the assignment: call the agent synchronously
+                        const startTime = Date.now();
+                        try {
+                            const agentCtx: AgentContext = {
+                                conversationHistory: [],
+                                ticket: sourceTicketId ? this.database.getTicket(sourceTicketId) ?? undefined : undefined,
+                            };
+
+                            // Use a timeout-guarded call
+                            const agentResponse = await Promise.race([
+                                this.orchestrator.callAgent(targetAgent, taskMessage, agentCtx),
+                                new Promise<never>((_, reject) =>
+                                    setTimeout(() => reject(new Error('Assignment timeout')), timeoutMs)
+                                ),
+                            ]);
+
+                            const durationMs = Date.now() - startTime;
+                            const criteriaResults = this.evaluateAssignmentCriteria(
+                                successCriteria,
+                                agentResponse,
+                                sourceTicketId
+                            );
+                            const allRequiredPassed = criteriaResults
+                                .filter(cr => cr.required)
+                                .every(cr => cr.passed);
+                            const status = allRequiredPassed ? 'completed' : 'partial';
+
+                            this.database.updateTaskAssignment?.(assignmentId, {
+                                status,
+                                agent_response: agentResponse.content?.substring(0, 5000) || '',
+                                criteria_results: JSON.stringify(criteriaResults),
+                                duration_ms: durationMs,
+                                completed_at: new Date().toISOString(),
+                            });
+
+                            this.eventBus.emit(
+                                allRequiredPassed ? 'boss:assignment_completed' : 'boss:assignment_partial',
+                                'ticket-processor',
+                                { assignmentId, status, durationMs, criteriaResults }
+                            );
+
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Assignment ${assignmentId} ${status} in ${durationMs}ms`
+                            );
+                        } catch (err) {
+                            const durationMs = Date.now() - startTime;
+                            this.database.updateTaskAssignment?.(assignmentId, {
+                                status: 'failed',
+                                agent_response: err instanceof Error ? err.message : String(err),
+                                duration_ms: durationMs,
+                                completed_at: new Date().toISOString(),
+                                escalation_reason: 'Assignment failed: ' + (err instanceof Error ? err.message : String(err)),
+                            });
+
+                            this.eventBus.emit('boss:assignment_failed', 'ticket-processor', {
+                                assignmentId, error: err instanceof Error ? err.message : String(err), durationMs,
+                            });
+
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Assignment ${assignmentId} failed: ${err}`
+                            );
+                        }
+
+                        executed++;
+                        break;
+                    }
+
+                    // v7.0 Phase 3: Escalate ticket back to Boss from a lead agent
+                    case 'escalate_to_boss': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const ticketId = payload.ticket_id as string;
+                        const reason = payload.reason as string || 'Lead agent escalation';
+                        const recommendedTarget = payload.recommended_target as LeadAgentQueue | null;
+                        const blockingInfoNeeded = payload.blocking_info_needed as string | undefined;
+
+                        if (ticketId) {
+                            const ticket = this.database.getTicket(ticketId);
+                            if (ticket) {
+                                // Mark as blocked
+                                this.database.updateTicket(ticketId, {
+                                    status: TicketStatus.Blocked,
+                                    processing_status: null,
+                                    processing_agent: null,
+                                });
+                                this.database.addTicketReply(ticketId, 'lead-agent', `Escalated to Boss: ${reason}`);
+
+                                // Create boss directive ticket pointing to the blocker
+                                const bossDirective = this.database.createTicket({
+                                    title: `[Boss] Escalation: ${reason.substring(0, 80)}`,
+                                    body: `Escalated from ticket ${ticket.ticket_number}: ${ticket.title}\n\nReason: ${reason}${blockingInfoNeeded ? `\n\nBlocking info needed: ${blockingInfoNeeded}` : ''}${recommendedTarget ? `\n\nRecommended target queue: ${recommendedTarget}` : ''}`,
+                                    priority: ticket.priority as TicketPriority || TicketPriority.P2,
+                                    operation_type: 'boss_directive',
+                                    auto_created: true,
+                                    parent_ticket_id: ticketId,
+                                });
+
+                                this.eventBus.emit('queue:escalation_received', 'ticket-processor', {
+                                    ticketId, reason, recommendedTarget, bossDirectiveId: bossDirective.id,
+                                });
+
+                                this.outputChannel.appendLine(
+                                    `[TicketProcessor] Escalation: ticket ${ticket.ticket_number} → Boss (${reason.substring(0, 60)})`
+                                );
+                            }
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    // v7.0 Phase 3: Call a support agent (sync or async)
+                    case 'call_support_agent': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const agentName = payload.agent_name as string;
+                        const query = payload.query as string;
+                        const ticketId = payload.ticket_id as string;
+                        const mode = (payload.mode as string) || 'sync';
+
+                        if (!agentName || !query) {
+                            this.outputChannel.appendLine('[TicketProcessor] call_support_agent: missing agent_name or query');
+                            break;
+                        }
+
+                        const result = await this.executeSupportCall({
+                            agent_name: agentName,
+                            query,
+                            ticket_id: ticketId,
+                            mode: mode as 'sync' | 'async',
+                            callback_action: 'resume',
+                        });
+
+                        if (result) {
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Support call (${mode}) to ${agentName}: ${result.substring(0, 100)}`
+                            );
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    // v7.0 Phase 3: Block a ticket with reason
+                    case 'block_ticket': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const ticketId = payload.ticket_id as string;
+                        const reason = payload.reason as string || 'Blocked by Boss AI';
+                        const blockingTicketId = payload.blocking_ticket_id as string | undefined;
+
+                        if (ticketId) {
+                            this.database.updateTicket(ticketId, {
+                                status: TicketStatus.Blocked,
+                                blocking_ticket_id: blockingTicketId || null,
+                                processing_status: null,
+                                processing_agent: null,
+                            });
+                            this.database.addTicketReply(ticketId, 'boss-ai', `Blocked: ${reason}`);
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Ticket ${ticketId} blocked: ${reason.substring(0, 80)}`
+                            );
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    // v7.0 Phase 3: Save a document to the documentation system
+                    case 'save_document': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const folderName = payload.folder_name as string || 'General';
+                        const docName = payload.document_name as string || 'Untitled';
+                        const content = payload.content as string || '';
+                        const summary = payload.summary as string | undefined;
+                        const category = payload.category as string || 'reference';
+                        const sourceTicketId = payload.source_ticket_id as string | undefined;
+                        const sourceAgent = payload.source_agent as string | undefined;
+                        const tags = (payload.tags as string[]) || [];
+
+                        // Save to support_documents table directly (DocumentManager will wrap this in Phase 5)
+                        const docRecord = this.database.createSupportDocument?.({
+                            plan_id: null,
+                            folder_name: folderName,
+                            document_name: docName,
+                            content,
+                            summary: summary || null,
+                            category,
+                            source_ticket_id: sourceTicketId || null,
+                            source_agent: sourceAgent || null,
+                            tags,
+                            relevance_score: 50,
+                        });
+                        const docId = docRecord?.id || `doc-${Date.now()}`;
+
+                        this.eventBus.emit('docs:document_saved', 'ticket-processor', {
+                            docId, folderName, docName, category, sourceTicketId,
+                        });
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Document saved: ${folderName}/${docName} (${content.length} chars)`
+                        );
                         executed++;
                         break;
                     }
@@ -2587,9 +3545,17 @@ export class TicketProcessorService {
             .filter(t => t.processing_status === 'holding' && t.deliverable_type === 'code_generation');
         if (holdingTickets.length > 0) return holdingTickets[0];
 
-        // Check queue for coding tickets
-        const codingEntry = this.queue.find(q => q.operationType === 'code_generation');
-        if (codingEntry) return this.database.getTicket(codingEntry.ticketId);
+        // v7.0: Check Coding Director team queue first, then others
+        const codingQueue = this.getTeamQueue(LeadAgentQueue.CodingDirector);
+        if (codingQueue.length > 0) {
+            return this.database.getTicket(codingQueue[0].ticketId);
+        }
+
+        // Fallback: check all queues for coding tickets
+        for (const q of this.teamQueues.values()) {
+            const codingEntry = q.find(e => e.operationType === 'code_generation');
+            if (codingEntry) return this.database.getTicket(codingEntry.ticketId);
+        }
 
         return null;
     }
@@ -2717,19 +3683,22 @@ export class TicketProcessorService {
         activeSlots: number;
         maxSlots: number;
         holdQueueSize: number;
+        // v7.0: Per-team queue breakdown
+        teamQueues: TeamQueueStatus[];
     } {
         const now = Date.now();
         const isActive = this.activeSlots.size > 0;
+        const totalQueueSize = this.getTotalQueueSize();
 
         return {
             // v5.0: New unified fields
-            queueSize: this.queue.length,
+            queueSize: totalQueueSize,
             isProcessing: isActive,
             // Backward-compatible aliases (mapped from unified queue)
-            mainQueueSize: this.queue.length,
-            bossQueueSize: 0, // No separate boss queue in v5.0
+            mainQueueSize: totalQueueSize,
+            bossQueueSize: 0, // No separate boss queue in v5.0+
             mainProcessing: isActive,
-            bossProcessing: false, // No separate boss processing in v5.0
+            bossProcessing: false, // No separate boss processing in v5.0+
             lastActivityTimestamp: this.lastActivityTimestamp,
             idleMinutes: Math.round((now - this.lastActivityTimestamp) / 60000),
             bossState: this.bossState,
@@ -2739,6 +3708,8 @@ export class TicketProcessorService {
             activeSlots: this.activeSlots.size,
             maxSlots: this.maxParallelTickets,
             holdQueueSize: this.holdQueue.length,
+            // v7.0: Per-team queue breakdown
+            teamQueues: this.getTeamQueueStatus(),
         };
     }
 
@@ -2746,7 +3717,7 @@ export class TicketProcessorService {
      * Remove a ticket from queues (e.g., when cancelled).
      */
     removeFromQueue(ticketId: string): void {
-        this.queue = this.queue.filter(q => q.ticketId !== ticketId);
+        this.removeFromTeamQueues(ticketId);
     }
 
     // ==================== PHASE ADVANCEMENT ====================
@@ -3091,8 +4062,8 @@ export class TicketProcessorService {
         }
         this.eventHandlers = [];
 
-        // Clear queue and slots
-        this.queue = [];
+        // Clear all team queues and slots
+        for (const q of this.teamQueues.values()) q.length = 0;
         this.activeSlots.clear();
         this.holdQueue = [];
         this.bossState = 'idle';

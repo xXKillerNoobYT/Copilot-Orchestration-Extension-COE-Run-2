@@ -4,7 +4,7 @@ import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from '../core/config';
 import { CodingAgentService } from '../core/coding-agent';
 import { getEventBus } from '../core/event-bus';
-import { AgentContext, DesignComponent, PlanStatus, TaskPriority, TicketPriority, TicketStatus } from '../types';
+import { AgentContext, DesignComponent, LeadAgentQueue, PlanStatus, TaskPriority, TicketPriority, TicketStatus } from '../types';
 
 /** Shared no-op output channel for inline service construction */
 export const noopOutputChannel = { appendLine(_msg: string) {} } as any;
@@ -4478,6 +4478,8 @@ Only return the JSON array.`;
                 idleMinutes: queueStatus.idleMinutes,
                 bossState: queueStatus.bossState,
                 bossNextCheckMs: queueStatus.bossNextCheckMs,
+                // v7.0: Per-team queue breakdown
+                teamQueues: (queueStatus as any).teamQueues ?? [],
             });
             return true;
         }
@@ -4486,6 +4488,198 @@ Only return the JSON array.`;
         if (route === 'tickets/recover-stuck' && method === 'POST') {
             const recovered = ticketProcessor ? ticketProcessor.recoverStuckTickets() : 0;
             json(res, { recovered, message: `Recovered ${recovered} stuck tickets` });
+            return true;
+        }
+
+        // ==================== TEAM QUEUES (v7.0) ====================
+
+        // GET /api/queues — returns all 4 team queue statuses
+        if (route === 'queues' && method === 'GET') {
+            if (!ticketProcessor) {
+                json(res, { queues: [], totalPending: 0, totalActive: 0, totalSlots: 0 });
+                return true;
+            }
+            const teamQueues = ticketProcessor.getTeamQueueStatus();
+            const status = ticketProcessor.getStatus();
+            json(res, {
+                queues: teamQueues,
+                totalPending: teamQueues.reduce((s, q) => s + q.pending, 0),
+                totalActive: teamQueues.reduce((s, q) => s + q.active, 0),
+                totalBlocked: teamQueues.reduce((s, q) => s + q.blocked, 0),
+                totalCancelled: teamQueues.reduce((s, q) => s + q.cancelled, 0),
+                totalSlots: status.maxSlots,
+                activeSlots: status.activeSlots,
+                holdQueueSize: status.holdQueueSize,
+            });
+            return true;
+        }
+
+        // POST /api/queues/move — move a ticket to a different team queue
+        if (route === 'queues/move' && method === 'POST') {
+            const body = await parseBody(req);
+            const ticketId = body.ticketId as string | undefined;
+            const targetQueue = body.targetQueue as string | undefined;
+            if (!ticketId || !targetQueue) {
+                json(res, { error: 'ticketId and targetQueue are required' }, 400);
+                return true;
+            }
+            // Validate targetQueue is a valid LeadAgentQueue
+            const validQueues = Object.values(LeadAgentQueue) as string[];
+            if (!validQueues.includes(targetQueue)) {
+                json(res, { error: `Invalid targetQueue. Must be one of: ${validQueues.join(', ')}` }, 400);
+                return true;
+            }
+            if (!ticketProcessor) {
+                json(res, { error: 'Ticket processor not available' }, 503);
+                return true;
+            }
+            const moved = ticketProcessor.moveTicketToQueue(ticketId, targetQueue as LeadAgentQueue);
+            if (moved) {
+                json(res, { success: true, ticketId, targetQueue, message: `Ticket moved to ${targetQueue} queue` });
+            } else {
+                json(res, { error: 'Ticket not found in any queue' }, 404);
+            }
+            return true;
+        }
+
+        // POST /api/queues/cancel — cancel a ticket (remove from queue)
+        if (route === 'queues/cancel' && method === 'POST') {
+            const body = await parseBody(req);
+            const ticketId = body.ticketId as string | undefined;
+            const reason = body.reason as string | undefined;
+            if (!ticketId) {
+                json(res, { error: 'ticketId is required' }, 400);
+                return true;
+            }
+            if (!ticketProcessor) {
+                json(res, { error: 'Ticket processor not available' }, 503);
+                return true;
+            }
+            const cancelled = ticketProcessor.cancelTicket(ticketId, reason || 'Manual cancellation');
+            if (cancelled) {
+                json(res, { success: true, ticketId, message: 'Ticket cancelled' });
+            } else {
+                json(res, { error: 'Ticket not found in any queue or already cancelled' }, 404);
+            }
+            return true;
+        }
+
+        // POST /api/queues/reengage — re-engage a cancelled ticket
+        if (route === 'queues/reengage' && method === 'POST') {
+            const body = await parseBody(req);
+            const ticketId = body.ticketId as string | undefined;
+            if (!ticketId) {
+                json(res, { error: 'ticketId is required' }, 400);
+                return true;
+            }
+            if (!ticketProcessor) {
+                json(res, { error: 'Ticket processor not available' }, 503);
+                return true;
+            }
+            const reengaged = ticketProcessor.reengageTicket(ticketId);
+            if (reengaged) {
+                json(res, { success: true, ticketId, message: 'Ticket re-engaged' });
+            } else {
+                json(res, { error: 'Ticket not found or not in cancelled state' }, 404);
+            }
+            return true;
+        }
+
+        // ==================== CODING DIRECTOR ENDPOINTS (v7.0) ====================
+
+        // GET /api/coding/status — coding director queue status
+        if (route === 'coding/status' && method === 'GET') {
+            const codingDirector = orchestrator.getCodingDirectorAgent();
+            const queueStatus = codingDirector.getQueueStatus();
+            const codingQueueDepth = ticketProcessor
+                ? ticketProcessor.getTeamQueueStatus().find(
+                    (q: { queue: string }) => q.queue === 'coding_director'
+                )?.pending ?? 0
+                : 0;
+            json(res, {
+                hasPendingTask: queueStatus.hasPendingTask,
+                currentTask: queueStatus.currentTask || null,
+                queueDepth: codingQueueDepth,
+            });
+            return true;
+        }
+
+        // ==================== DOCUMENT ENDPOINTS (v7.0) ====================
+
+        // GET /api/documents — list all documents (filterable by folder, category, keyword)
+        if (route === 'documents' && method === 'GET') {
+            const docsUrl = new URL(req.url || '', 'http://localhost');
+            const folder = docsUrl.searchParams.get('folder') || undefined;
+            const category = docsUrl.searchParams.get('category') || undefined;
+            const keyword = docsUrl.searchParams.get('keyword') || undefined;
+            const planId = docsUrl.searchParams.get('plan_id') || undefined;
+
+            const docs = database.searchSupportDocuments({
+                folder_name: folder,
+                category,
+                keyword,
+                plan_id: planId,
+            });
+            json(res, docs);
+            return true;
+        }
+
+        // GET /api/documents/folders — list all folder names
+        if (route === 'documents/folders' && method === 'GET') {
+            const folders = database.listDocumentFolders();
+            json(res, folders);
+            return true;
+        }
+
+        // GET /api/documents/:id — get single document
+        if (route.startsWith('documents/') && !route.includes('folders') && method === 'GET') {
+            const docId = route.replace('documents/', '');
+            const doc = database.getSupportDocument(docId);
+            if (doc) {
+                json(res, doc);
+            } else {
+                json(res, { error: 'Document not found' }, 404);
+            }
+            return true;
+        }
+
+        // POST /api/documents — create a new document
+        if (route === 'documents' && method === 'POST') {
+            const body = await parseBody(req);
+            const folderName = body.folder_name as string | undefined;
+            const documentName = body.document_name as string | undefined;
+            const content = body.content as string | undefined;
+
+            if (!folderName || !documentName || content === undefined) {
+                json(res, { error: 'folder_name, document_name, and content are required' }, 400);
+                return true;
+            }
+
+            const record = database.createSupportDocument({
+                folder_name: folderName,
+                document_name: documentName,
+                content: content || '',
+                summary: (body.summary as string) || null,
+                category: (body.category as string) || 'reference',
+                source_ticket_id: (body.source_ticket_id as string) || null,
+                source_agent: (body.source_agent as string) || null,
+                tags: Array.isArray(body.tags) ? body.tags as string[] : [],
+                relevance_score: typeof body.relevance_score === 'number' ? body.relevance_score : 50,
+                plan_id: (body.plan_id as string) || null,
+            });
+            json(res, record, 201);
+            return true;
+        }
+
+        // DELETE /api/documents/:id — delete a document
+        if (route.startsWith('documents/') && !route.includes('folders') && method === 'DELETE') {
+            const docId = route.replace('documents/', '');
+            const deleted = database.deleteSupportDocument(docId);
+            if (deleted) {
+                json(res, { success: true, message: 'Document deleted' });
+            } else {
+                json(res, { error: 'Document not found' }, 404);
+            }
             return true;
         }
 

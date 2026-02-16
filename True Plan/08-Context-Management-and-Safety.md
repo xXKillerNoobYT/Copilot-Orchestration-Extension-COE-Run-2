@@ -1,10 +1,10 @@
 # 08 — Context Management & Safety Systems
 
-**Version**: 3.0  
-**Last Updated**: February 2026  
-**Status**: ✅ Current  
-**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [07-Program-Lifecycle-and-Evolution](07-Program-Lifecycle-and-Evolution.md)  
-**Changelog**: v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
+**Version**: 7.0
+**Last Updated**: February 2026
+**Status**: ✅ Current
+**Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [07-Program-Lifecycle-and-Evolution](07-Program-Lifecycle-and-Evolution.md)
+**Changelog**: v7.0 — Added Documentation & Reference System (support documents, folder organization, context injection), Agent File Cleanup safety rules, support document context injection into pipeline, per-team queue safety considerations | v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
 
 ---
 
@@ -626,6 +626,9 @@ COE follows a structured data retention policy (all configurable):
 | System logs | 30 days | — | 30 days |
 | Evolution signals | 30 days rolling | — | 30 days |
 | Context snapshots | 7 days | — | 7 days |
+| Support documents | No limit | — | Never (knowledge base) |
+| Task assignments | 90 days | — | 365 days |
+| Boss notepad | No limit | — | Never (persistent state) |
 | RL dataset | No limit | — | Never (needed for training) |
 
 **Archival Process**: Runs daily via `BossAgent.runHousekeeping()`. Resolved tickets older than 90 days are moved to `tickets_archive`. Archived tickets older than 365 days are permanently deleted. All archival actions logged.
@@ -680,6 +683,8 @@ MVP is single-user local. Post-MVP roles (if team features added):
 | MCP remote access | Very Low | High | localhost binding, no external listeners |
 | Data leak via AI model | Low | Medium | Local model, no cloud transmission |
 | Denial of service (runaway agent) | Medium | Low | Runtime limits, loop detection, timeouts |
+| Poisoned support documents | Low | Medium | Verification flag, relevance scoring, Boss review of agent output |
+| Agent file injection | Low | Low | Pattern matching only, workspace root boundary, Boss review required |
 
 ### Secrets Management Best Practices
 
@@ -725,6 +730,180 @@ MVP is single-user local. Post-MVP roles (if team features added):
 
 ---
 
+## Documentation & Reference System (v7.0) — IMPLEMENTED
+
+The `DocumentManagerService` provides an organized knowledge base that agents can write to and read from. Research findings, coding agent output, and user-provided references are stored in a structured folder system.
+
+> **👤 User View**: As agents research topics for your project, their findings are automatically saved to organized folders. When the same question comes up later, the system checks saved documents first — potentially answering instantly without calling the AI. You can view, manage, and manually add documents via the API.
+
+> **🔧 Developer View**: Documents are stored in the `support_documents` table. The `DocumentManagerService` (`src/core/document-manager.ts`) provides save/search/gather/verify/delete operations. Research Agent emits `save_document` actions for findings with confidence >= 60. Answer Agent searches documents BEFORE calling the LLM. Context injection happens in `TicketProcessorService.processTicketPipeline()`.
+
+### Document Storage
+
+| Field | Purpose |
+|-------|---------|
+| `folder_name` | Logical grouping (e.g., "LM Studio", "Authentication", "Agent Output") |
+| `document_name` | Descriptive name for the document |
+| `content` | Full document text |
+| `summary` | AI-generated one-line summary |
+| `category` | Classification: `reference`, `research`, `decision`, `agent_output` |
+| `tags` | Searchable tag array (JSON) |
+| `is_verified` | Whether a human or verification agent has confirmed accuracy |
+| `relevance_score` | 0-100 scoring for context injection priority |
+| `source_agent` | Which agent created the document |
+| `source_ticket_id` | Which ticket prompted the research |
+
+### Context Injection Safety
+
+When support documents are injected into agent context during pipeline execution:
+
+1. **Relevance filtering** — Only documents matching ticket keywords are included (via `gatherContextDocs()`)
+2. **Token budget awareness** — Document content is truncated to fit within the agent's token budget
+3. **Freshness preference** — More recent documents scored higher
+4. **Verification preference** — Verified documents (`is_verified = true`) ranked above unverified
+5. **No circular injection** — Documents created by the current ticket's processing are excluded
+6. **Max document count** — At most 5 relevant documents injected per pipeline run
+7. **Clearly delimited** — Documents appear in a `--- Support Documentation ---` section with clear boundaries to prevent prompt injection
+
+### Document Lifecycle
+
+```
+Research Agent gathers findings
+         │
+         ▼
+   Confidence >= 60?
+   ├── Yes → save_document action → DocumentManagerService.saveDocument()
+   │         → Folder inferred from topic keywords
+   │         → Tags auto-generated
+   │         → is_verified = false (new docs unverified)
+   └── No  → Findings included in ticket response only (not persisted)
+         │
+         ▼
+   Answer Agent receives question
+   ├── Search documents first (keyword match)
+   ├── Match found → Include in LLM context (may answer without LLM)
+   └── No match → Proceed with normal LLM call
+         │
+         ▼
+   Verification (optional)
+   ├── User or Verification Agent marks document verified
+   └── Verified docs get priority in future context injection
+```
+
+### Document API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/documents` | GET | List all documents (filterable by folder, category) |
+| `/api/documents/folders` | GET | List all folder names |
+| `/api/documents/:id` | GET | Get single document |
+| `/api/documents` | POST | Manual document creation |
+| `/api/documents/:id` | DELETE | Delete document |
+
+---
+
+## Agent File Cleanup Safety (v7.0) — IMPLEMENTED
+
+The `AgentFileCleanupService` detects, reads, and organizes stray files created by external coding agents in the workspace root.
+
+> **👤 User View**: When the external coding agent creates `.md` or `.txt` files in your project root (like implementation plans or phase notes), COE automatically detects them, saves the content to the documentation system, and creates a review ticket. The original files can be cleaned up after Boss AI reviews them.
+
+> **🔧 Developer View**: The service is in `src/core/agent-file-cleanup.ts`. A VS Code `FileSystemWatcher` monitors the workspace root for `*.md` and `*.txt` files matching known agent output patterns. Detected files are processed with a 5-second debounce to avoid catching files mid-write.
+
+### Detection Patterns
+
+Files matching these patterns are flagged as agent output:
+
+| Pattern | Example |
+|---------|---------|
+| `Phase \d+.*\.(md\|txt)` | `Phase 3 Implementation Plan.md` |
+| `implementation[_ -]plan\.(md\|txt)` | `implementation-plan.md` |
+| `readme\.(md\|txt)` (root only) | `README.md` (only in workspace root, not in `src/`) |
+| `agent[_ -]output.*\.(md\|txt\|json)` | `agent_output_2026-02-15.md` |
+
+### Safety Rules
+
+1. **Never delete without review** — Files are only deleted after Boss AI reviews the corresponding ticket
+2. **Content preserved first** — File content is always saved to `support_documents` before any cleanup action
+3. **No source code touched** — Only files in workspace root matching agent patterns are processed; files in `src/`, `tests/`, `node_modules/`, etc. are never touched
+4. **Debounced detection** — 5-second delay prevents processing files still being written
+5. **Workspace boundary** — Path traversal protection ensures only workspace root files are accessed
+6. **Boss review required** — A Boss directive ticket is created for each detected file: "Review agent output: {filename}"
+7. **Reversible** — Original file content lives in `support_documents` even if the file is later deleted
+
+### Processing Flow
+
+```
+FileSystemWatcher detects new .md/.txt in workspace root
+         │ (5s debounce)
+         ▼
+   Match agent output pattern?
+   ├── No  → Ignore
+   └── Yes → Read file content
+              │
+              ▼
+         Classify: plan, readme, report, other
+              │
+              ▼
+         Save to support_documents
+         (folder = "Agent Output" or inferred)
+              │
+              ▼
+         Create Boss directive ticket:
+         "Review agent output: {filename}"
+              │
+              ▼
+         Emit agent_file:processed event
+              │
+              ▼
+         Boss AI reviews → optionally marks for cleanup
+              │
+              ▼
+         Original file deleted (only after Boss approval)
+```
+
+---
+
+## Per-Team Queue Safety (v7.0)
+
+The 4-team queue system introduces new safety considerations:
+
+### Queue Isolation
+
+- Each team queue operates independently — a stuck ticket in the Planning queue cannot block the Verification queue
+- Slot allocation is enforced: a team cannot exceed its allocated slot count even if other teams have idle slots
+- Total slots across all teams cannot exceed `maxParallelTickets` (configuration-enforced)
+
+### Round-Robin Fairness
+
+- The round-robin scheduler prevents queue starvation — no single team can monopolize processing
+- Empty queues are skipped without counting against the round-robin cycle
+- The `lastServedAt` timestamp per team provides audit trail for fairness
+
+### Cancelled Ticket Safety
+
+- Cancelled tickets are removed from queues immediately (no lingering)
+- Cancellation reason is preserved in the ticket record
+- Boss AI reviews cancelled tickets periodically (default: every 30 minutes)
+- Re-engagement requires Boss AI decision — tickets cannot auto-re-engage
+- Re-engaged tickets are re-routed through `routeToTeamQueue()` (may land in a different team)
+
+### Escalation Safety
+
+- Escalated tickets are marked `Blocked` and removed from active processing slots
+- A Boss directive ticket is auto-created pointing to the blocker
+- Escalation payloads include `recommended_target` queue for Boss to consider
+- Circular escalation detection: if a ticket escalates back to the same team 3+ times, it's flagged for user attention
+
+### Support Agent Call Safety
+
+- **Sync calls**: Enforced timeout of `maxSupportAgentSyncTimeoutMs` (default: 60 seconds)
+- **Async calls**: Create sub-tickets with `blocking_ticket_id` — parent ticket blocks until sub-ticket resolves
+- Support agents cannot call other support agents (no recursive chains)
+- A lead agent can make at most 3 support calls per ticket processing cycle
+
+---
+
 ## File Watchers & Performance
 
 ### Watcher Safety
@@ -748,6 +927,10 @@ COE watches several directories for changes (source code, GitHub issues, plans):
 | Verification delay | 60 seconds | Ensure file stability before checking |
 | Smart retry backoff | 5s → 10s → 20s | Prevent hammering a failing service |
 | Context preload window | 10 minutes | Discard unused preloaded context |
+| Agent file detection debounce | 5 seconds | Prevent processing files mid-write |
+| Support agent sync timeout | 60 seconds | Prevent blocking on slow support calls |
+| Cancelled ticket review interval | 30 minutes | Balance re-engagement checks vs. overhead |
+| Max support calls per ticket | 3 | Prevent unbounded support agent chains |
 
 ---
 

@@ -52,6 +52,8 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
         stage: 1,
         last_error: null,
         last_error_at: null,
+        assigned_queue: null,
+        cancellation_reason: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         ...overrides,

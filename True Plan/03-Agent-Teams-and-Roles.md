@@ -1,10 +1,10 @@
 # 03 — AI Agent Teams & Roles
 
-**Version**: 4.0  
-**Last Updated**: February 2026  
-**Status**: ✅ Current  
-**Depends On**: [01-Vision-and-Goals](01-Vision-and-Goals.md), [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [10-AI-Operating-Principles](10-AI-Operating-Principles.md)  
-**Changelog**: v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
+**Version**: 7.0
+**Last Updated**: February 2026
+**Status**: ✅ Current
+**Depends On**: [01-Vision-and-Goals](01-Vision-and-Goals.md), [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [10-AI-Operating-Principles](10-AI-Operating-Principles.md)
+**Changelog**: v7.0 — 16 agents (added Coding Director), 4 team queues (Orchestrator, Planning, Verification, CodingDirector), lead vs support agent distinction, escalation mechanisms, support agent calls (sync/async), dynamic slot allocation, documentation system, file cleanup service. v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
 
 ---
 
@@ -33,19 +33,27 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                           │    BOSS AI       │
                           │  (Supervisor)    │
                           └────────┬────────┘
-                                   │ oversees
-          ┌────────────────────────┼─────────────────────────┐
-          │                        │                         │
-┌─────────▼────┐          ┌───────▼───────┐         ┌───────▼──────────┐
-│ ORCHESTRATOR │          │   PLANNING    │         │  VERIFICATION    │
-│ (Router)     │          │   TEAM        │         │  TEAM            │
-└──────┬───────┘          └───────────────┘         └──────────────────┘
-       │
-       ├──────┬──────────┬──────────────┬───────────────┐
+                                   │ oversees 4 TEAM QUEUES
+          ┌────────────────────────┼──────────────────────────────┐
+          │                        │                              │
+┌─────────▼────────┐      ┌───────▼───────┐      ┌──────────────▼────┐
+│ ORCHESTRATOR     │      │   PLANNING    │      │  VERIFICATION     │
+│ QUEUE (Lead)     │      │   QUEUE (Lead)│      │  QUEUE (Lead)     │
+│ Catch-all router │      │   Plans/Design│      │  Testing/QA       │
+└──────┬───────────┘      └───────────────┘      └───────────────────┘
+       │                                                │
+       │            ┌────────────────────┐              │
+       │            │  CODING DIRECTOR   │              │
+       │            │  QUEUE (Lead)      │              │
+       │            │  External agent    │              │
+       │            │  interface         │              │
+       │            └────────────────────┘              │
+       │                                                │
+       ├──────┬──────────┬──────────────┬───────────────┤
        │      │          │              │               │
 ┌──────▼┐ ┌───▼───┐ ┌───▼─────┐ ┌──────▼──────┐ ┌──────▼─────────┐
 │ANSWER │ │RESEARCH│ │CLARITY  │ │   CUSTOM    │ │ TICKET         │
-│AGENT  │ │ AGENT  │ │ AGENT   │ │   AGENTS    │ │ PROCESSOR      │
+│(Supp) │ │(Supp)  │ │(Supp)   │ │   AGENTS    │ │ PROCESSOR      │
 └───────┘ └────────┘ └─────────┘ └─────────────┘ └────────────────┘
                                                          │
                               ┌───────────────┬──────────┤
@@ -53,7 +61,7 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                      ┌────────▼──────┐ ┌──────▼───┐ ┌───▼──────────┐
                      │DESIGN QA TEAM │ │DECISION  │ │ UI TESTING & │
                      │Architect      │ │MEMORY    │ │ OBSERVATION  │
-                     │Gap Hunter     │ │AGENT     │ │ AGENTS       │
+                     │Gap Hunter     │ │(Supp)    │ │ (Supp)       │
                      │Hardener       │ │          │ │              │
                      └───────────────┘ └──────────┘ └──────────────┘
                                                           │
@@ -63,7 +71,35 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                                                    └─────────────┘
 ```
 
-**15 total agents** (11 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
+**16 total agents** (12 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
+
+### Lead Agents vs Support Agents (v7.0)
+
+In v7.0, agents are classified as either **Lead Agents** or **Support Agents**:
+
+- **Lead Agents** own their team queue and process tickets directly. They can escalate back to Boss AI and call support agents during processing.
+- **Support Agents** are called by lead agents for quick lookups (sync) or deeper investigation (async sub-tickets).
+
+| Role | Agents | Queue |
+|------|--------|-------|
+| **Lead** | Orchestrator, Planning Agent, Verification Agent, Coding Director | Own queue, process tickets |
+| **Support** | Answer, Research, Clarity, Decision Memory, Observation | Called by leads on demand |
+| **Supervisor** | Boss AI | Manages all 4 queues |
+| **QA Specialists** | Design Architect, Gap Hunter, Hardener | Called during design pipeline |
+| **Quality Gate** | Review Agent | Called by Ticket Processor |
+
+### 4 Team Queues (v7.0)
+
+Boss AI manages 4 independent team queues with dynamic slot allocation:
+
+| Queue | Lead Agent | Ticket Types | Routing Rule |
+|-------|-----------|-------------|--------------|
+| **Orchestrator** | Orchestrator | Catch-all, unclassified work | Default when no other queue matches |
+| **Planning** | Planning Agent | Plans, designs, research coordination, gap analysis, design scoring | `operation_type` = plan_generation, design_change, gap_analysis, design_score |
+| **Verification** | Verification Agent | Testing, review, QA, acceptance checking | `operation_type` = verification |
+| **Coding Director** | Coding Director Agent | Interface to external coding agent | `operation_type` = code_generation |
+
+**Round-Robin Slot Balancing**: Boss AI dynamically allocates processing slots across teams. Least-recently-served team with pending work gets the next slot. Empty queues are skipped.
 
 ---
 
@@ -119,6 +155,29 @@ ACTIONS:
 ESCALATE: true
 ```
 
+**v7.0 Enhancements — 4-Queue Management**:
+
+Boss AI now manages 4 team queues with full control over slot allocation, ticket movement, and cancellation:
+
+**Queue Management Actions**:
+| Action | Description |
+|--------|-------------|
+| `assign_task` | Structured task with success criteria and target queue |
+| `move_to_queue` | Move ticket between team queues |
+| `cancel_ticket` | Cancel ticket with reason (periodically re-checks cancelled tickets) |
+| `reorder_queue` | Move ticket to front/back within a team queue |
+| `reprioritize` | Change ticket priority |
+| `dispatch_agent` | Quick agent call (no queue overhead) |
+| `update_slot_allocation` | Dynamically reallocate slots across teams |
+| `escalate` | Ask user for input |
+| `update_notepad` | Persist Boss AI thinking to notepad sections |
+
+**Slot Allocation**: Boss AI dynamically controls how many processing slots each team gets (total limited to `maxParallelTickets`). Example: if planning work is heavy, Boss can allocate `{ orchestrator: 1, planning: 2, verification: 1, coding_director: 0 }`.
+
+**Cancelled Ticket Review**: Every 30 minutes (configurable), Boss AI reviews cancelled tickets. If conditions have changed (blocker resolved, info now available), Boss can re-engage cancelled tickets back into the appropriate queue.
+
+**Notepad Sections**: Boss AI persists its strategic thinking to `boss_notepad` table with sections: `queue_strategy`, `blockers`, `patterns`, `next_actions`.
+
 **Key Constraint**: Only activates on significant thresholds — does not poll or run continuously.
 
 ---
@@ -153,13 +212,14 @@ Stage 1 (Fast, No LLM): Count keyword matches per category. The category with th
 | `gap_hunter` | gap analysis, find gaps, missing components, missing pages, coverage analysis, design gaps, completeness check |
 | `design_hardener` | harden design, fix gaps, complete design, fill gaps, add missing, draft components |
 | `decision_memory` | previous decision, past answer, user preference, decision history, conflict check, what did user say |
+| `coding_director` | code generation, generate code, write code, coding task, external agent, coding queue, prepare code, code context, coding director |
 | `planning` | plan, create, break down, decompose, task, feature, requirement, roadmap, schedule, build, implement, design, architect, structure, organize, timeline |
 | `question` | how, what, why, should, which, where, when, clarify, explain, confused, can, does, tell me, meaning, define |
 | `research` | investigate, analyze, research, deep dive, explore, study, compare, benchmark, tradeoff, alternative, option, evaluate, pros and cons |
 | `custom` | custom agent, my agent, specialized, domain |
 | `general` | (fallback when no keywords match) |
 
-**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > design_architect > gap_hunter > design_hardener > decision_memory > planning > question > research > custom > general.
+**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
 
 Stage 2 (LLM Fallback): If zero keywords match, ask the LLM to classify. If the LLM is offline, default to `general`.
 
@@ -277,6 +337,11 @@ When a task has `estimated_minutes > 45`, decomposition uses a two-stage approac
 - Each step must be ONE unambiguous action (not "implement the feature")
 - Planning ends at task queue generation — no involvement in coding or verification
 
+**Escalation & Support Agent Calls (v7.0)**:
+- If information is missing or prerequisites aren't met, use `escalate_to_boss` with reason and recommended target queue
+- Use `call_support_agent` with mode `sync` for quick lookups (Answer Agent, Decision Memory — <60s timeout)
+- Use `call_support_agent` with mode `async` for research tasks (Research Agent gathering docs — creates sub-ticket)
+
 ---
 
 ## Team 3: Answer Agent
@@ -326,6 +391,9 @@ ESCALATE: false
 - **Fast**: Targets <5 second response time
 - **Evidence-Based**: Always cites sources
 - **Auto-Escalation**: Creates tickets for human decisions when uncertain
+
+**v7.0 Enhancement — Support Document Search**:
+Before calling the LLM, the Answer Agent searches the `support_documents` table via `DocumentManagerService` for relevant documentation. If matching documents are found, they are injected into the agent's context, potentially enabling high-confidence answers from verified sources without needing an LLM call.
 
 ---
 
@@ -403,6 +471,11 @@ Not Started → In Progress → Pending Verification → Verified ✓
 
 **Retry on Failure**: If verification throws an error, retry once after 30 seconds. If it fails twice, create an investigation ticket.
 
+**Escalation & Support Agent Calls (v7.0)**:
+- If information is missing for verification, use `escalate_to_boss` with reason and recommended target queue
+- Use `call_support_agent` with mode `sync` for quick lookups (Answer Agent for project context, Decision Memory for past decisions)
+- Use `call_support_agent` with mode `async` for deeper investigation (Research Agent)
+
 ---
 
 ## Team 5: Research Agent
@@ -452,6 +525,9 @@ RECOMMENDATION: Use bcryptjs because it avoids native module issues and satisfie
 SOURCES: plan.json section 2.1, npm package comparison, OWASP password storage guidelines
 CONFIDENCE: 90
 ```
+
+**v7.0 Enhancement — Support Document Saving**:
+When the Research Agent produces findings with confidence >= 60%, it automatically emits a `save_document` action to save those findings to the `support_documents` table via `DocumentManagerService`. The folder name is inferred from the research topic (e.g., "LM Studio", "Database", "Architecture"), and the document is tagged with the source ticket ID and agent name. This creates a growing knowledge base that the Answer Agent can search before making LLM calls.
 
 ---
 
@@ -761,6 +837,60 @@ Three specialized agents that work together to ensure design quality before codi
 
 ---
 
+## Team 12: Coding Director Agent (v7.0) — IMPLEMENTED
+
+**Role**: Manages the interface between the internal COE orchestration system and the external coding agent (accessed via MCP on port 3030).
+
+**File**: `src/agents/coding-director-agent.ts`
+
+> **👤 User View**: The Coding Director prepares coding tasks for the external AI. It verifies that all prerequisites are met (clear acceptance criteria, resolved dependencies, available context) before handing work to the coding AI. If something is missing, it calls support agents to gather the info or escalates to Boss AI. The Coding tab shows "NOT READY" when no coding tasks are queued, and "Active: [task name]" when work is being processed.
+
+> **🔧 Developer View**: `CodingDirectorAgent` extends `BaseAgent`. It owns the CodingDirector team queue. The `prepareForExternalAgent(ticket)` method performs pre-flight checks (acceptance criteria >= 10 chars, task body >= 20 chars, no unresolved blockers) and packages full context. `processExternalResult(taskId, result)` handles completion reports and routes to verification queue on success or escalates to Boss on failure. The agent exposes `getQueueStatus()` for the webapp's `/api/coding/status` endpoint.
+
+**Responsibilities**:
+1. **Pre-flight Check**: Before a coding task goes to the external agent:
+   - Verify all dependencies are resolved
+   - Verify acceptance criteria are clear and actionable
+   - Verify required context documents are available
+   - If anything is missing, call support agents to gather info first
+2. **Context Packaging**: Build a comprehensive context bundle:
+   - Task title, description, acceptance criteria
+   - Relevant plan files and design documents
+   - Related support documentation
+   - Previous attempt history (if retry)
+   - File paths that will be modified
+3. **Result Processing**: When the external agent completes:
+   - Parse the completion report
+   - Validate claimed files_modified exist
+   - Route to verification queue
+
+**Output Format** — The Coding Director responds with this JSON structure:
+```json
+{
+  "status": "ready | blocked | needs_info",
+  "task_summary": "Brief description of what needs to be coded",
+  "context_quality": 0-100,
+  "prerequisites_met": true | false,
+  "missing_items": ["list of missing prerequisites"],
+  "prepared_context": "Full context string for the external agent",
+  "actions": []
+}
+```
+
+**Support Agents Available**:
+- **answer** (sync): Quick lookups about project setup, existing code
+- **research** (async): Gather documentation needed for coding tasks
+- **clarity** (sync): Rewrite unclear specs into actionable requirements
+- **decision_memory** (sync): Check past decisions about implementation choices
+
+**Escalation**:
+- Acceptance criteria too vague → call clarity agent
+- Design decisions not made → call decision_memory or escalate to Boss
+- Required files/APIs don't exist yet → escalate to Boss with blocker info
+- Multiple conflicting requirements → escalate to Boss for resolution
+
+---
+
 ## The Coding AI (External — Not Part of COE)
 
 **Important**: The actual coding agent (GitHub Copilot) is **not a COE agent** — it's an external tool that COE coordinates.
@@ -924,6 +1054,10 @@ Every agent can fail. This table documents what happens when each agent fails an
 | **Ticket Processor** | Queue stuck (no progress for 5 min) | Idle watchdog timer | Trigger Boss AI health check | Boss classifies cause. If agent error → restart agent. If external → alert user. |
 | **External Coding AI** | MCP connection lost | HTTP connection error | Mark current task as `blocked` | Retry connection 3x at 10s intervals. If still down → queue tasks, alert user. |
 | **External Coding AI** | Inactivity > 30 seconds | Orchestrator stuck-task monitor | Send ping via MCP | If no response after 2 pings → mark task as `stalled`, re-queue |
+| **Coding Director** | Prerequisites never met | Pre-flight check loop | Escalate to Boss with blocker list | Boss resolves blockers or cancels ticket |
+| **Coding Director** | External agent reports failure | `processExternalResult()` | Create escalation to Boss | Boss decides: retry, re-plan, or escalate to user |
+| **Document Manager** | Search returns no relevant docs | Empty result set | Fall back to LLM-only processing | Non-fatal — pipeline continues without doc context |
+| **File Cleanup** | Agent file detection false positive | User rejects cleanup | Skip file, log rejection | Pattern list can be refined |
 
 > **👤 User View**: When an agent fails, COE tries to fix it automatically. You only get notified when the system can't self-recover — usually via a ticket in the Ticket Panel. The ticket explains what went wrong in plain language and tells you what (if anything) you need to do.
 

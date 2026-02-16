@@ -179,7 +179,19 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation, no text befo
       "testing_instructions": "Open README.md and verify the Health Check section exists with correct content"
     }
   ]
-}`;
+}
+
+## Escalation & Support (v7.0)
+If you cannot proceed because information is missing or prerequisites are not met, you may include actions in your response:
+- **escalate_to_boss**: Return ticket to Boss AI with reason and recommended target queue. Use when blocked.
+- **call_support_agent**: Call a support agent for quick lookups or research:
+  - answer (sync): Quick evidence-based answers
+  - research (async): Deep investigation, document gathering
+  - clarity (sync): Score or rewrite unclear content
+  - decision_memory (sync): Look up past decisions
+
+Include actions as a JSON array under an "actions" key alongside your normal output.
+Example: { "actions": [{ "type": "call_support_agent", "payload": { "agent_name": "answer", "query": "What testing framework does this project use?", "ticket_id": "...", "mode": "sync" } }] }`;
 
     protected async parseResponse(content: string, context: AgentContext): Promise<AgentResponse> {
         const actions: AgentAction[] = [];

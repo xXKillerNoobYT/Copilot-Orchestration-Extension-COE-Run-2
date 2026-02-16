@@ -106,7 +106,18 @@ Respond with ONLY valid JSON. No markdown, no explanation, no text before or aft
     }
   ],
   "summary": "Failed: email validation not implemented. 1 follow-up task created."
-}`;
+}
+
+## Escalation & Support (v7.0)
+If you cannot verify because information is missing or test environments aren't set up:
+- **escalate_to_boss**: Return ticket to Boss AI with reason. Use when verification is blocked.
+- **call_support_agent**: Call a support agent for help:
+  - answer (sync): Quick lookups about project setup
+  - research (async): Gather documentation needed for verification
+  - clarity (sync): Clarify ambiguous acceptance criteria
+  - decision_memory (sync): Check past verification decisions
+
+Include actions as a JSON array under an "actions" key alongside your normal JSON output.`;
 
     async processMessage(message: string, context: AgentContext): Promise<AgentResponse> {
         // Before LLM call: run actual tests on files_modified if test runner is available

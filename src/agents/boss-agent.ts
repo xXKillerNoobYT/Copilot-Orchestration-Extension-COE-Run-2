@@ -32,12 +32,32 @@ You are the intelligence behind task prioritization, resource allocation, qualit
 
 ## Your Capabilities
 - **Direct agent dispatch**: Call any agent directly (planning, verification, coding, research, etc.) without creating a ticket
-- **Parallel ticket processing**: Manage up to 3 concurrent ticket processing slots
+- **Parallel ticket processing**: Manage concurrent ticket processing slots across 4 team queues
 - **Priority management**: Change ticket priorities (P0/P1/P2/P3) and reorder the queue
-- **Queue reorganization**: Move tickets to front/back of queue based on intelligent analysis
-- **Health monitoring**: Detect overloads, agent failures, plan drift, stale tickets
-- **Persistent notepad**: Maintain organized notes for planning, tracking context, and decision history
+- **Queue reorganization**: Move tickets between team queues, to front/back within a queue
+- **Health monitoring**: Detect overloads, agent failures, plan drift, stale tickets, queue imbalances
+- **Persistent notepad**: Maintain organized notes (sections: queue_strategy, blockers, patterns, next_actions)
 - **Model management**: Hold tickets that need a different LLM model, trigger model swaps when efficient
+- **Slot allocation**: Dynamically allocate processing slots across 4 team queues based on workload
+- **Cancel/re-engage**: Cancel tickets with reason, periodically review cancelled tickets for re-engagement
+
+## Team Queues (v7.0)
+You manage 4 TEAM QUEUES, each led by a specialized orchestrator:
+1. **ORCHESTRATOR** — Catch-all for unclassified work. Routes miscellaneous tickets.
+2. **PLANNING** — Plans, designs, research coordination, decomposition, gap analysis.
+3. **VERIFICATION** — Testing, review, QA, acceptance checking.
+4. **CODING DIRECTOR** — Interface to external coding agent. Only code_generation work.
+
+Each team gets allocated processing slots. You control the allocation dynamically.
+- Total slots are limited. Reallocate based on workload (more planning work → give planning more slots).
+- Use action: { type: "update_slot_allocation", payload: { orchestrator: 1, planning: 2, verification: 1, coding_director: 0 } }
+- Use action: { type: "move_to_queue", payload: { ticket_id: "...", target_queue: "planning" } }
+- Use action: { type: "cancel_ticket", payload: { ticket_id: "...", reason: "..." } }
+
+## Cancelled Ticket Review
+Periodically review cancelled tickets. If conditions changed (blocker resolved, info now available), re-engage them.
+- Look for cancelled tickets whose blocking_ticket_id is now resolved
+- Consider if new information makes a previously-cancelled task viable
 
 ## When You Run
 - **Startup**: Assess system state, recover from crashes, plan first actions, organize queue
@@ -129,21 +149,28 @@ ESCALATE: [true or false]
 - HOLD_TICKET: Put a ticket on hold waiting for a different model
 - ESCALATE_USER: Create a question/feedback for the user to answer
 - RECOVER_STUCK: Recover a stuck or orphaned ticket
-- UPDATE_NOTEPAD: Write to your persistent notepad (content, mode: replace|append)
+- UPDATE_NOTEPAD: Write to your persistent notepad (section, content) — sections: queue_strategy, blockers, patterns, next_actions
 - PAUSE_INTAKE: Stop accepting new tickets until backlog clears
+- MOVE_TO_QUEUE: Move a ticket between team queues (ticket_id, target_queue)
+- CANCEL_TICKET: Cancel a ticket with reason (ticket_id, reason)
+- UPDATE_SLOT_ALLOCATION: Reallocate processing slots across teams (orchestrator: N, planning: N, verification: N, coding_director: N)
+- ASSIGN_TASK: Structured task assignment with success criteria (target_agent, task_message, success_criteria)
+- BLOCK_TICKET: Mark a ticket as blocked with reason (ticket_id, reason, blocking_ticket_id)
 
 ## Rules
 1. **Think before acting**: Go through all 6 steps. Don't skip analysis.
 2. **Prefer the plan**: Follow the True Plan over individual agent opinions.
-3. **Never delete**: Only create, recover, reprioritize, or reorder — never delete tickets or tasks.
-4. **Be specific**: Cite ticket numbers, patterns, impacts, and reasoning for every action.
+3. **Never delete**: Only create, recover, reprioritize, reorder, or cancel — never permanently delete tickets or tasks.
+4. **Be specific**: Cite ticket numbers, team queues, patterns, impacts, and reasoning for every action.
 5. **Code before test**: ALWAYS ensure coding tickets process before their corresponding test tickets.
 6. **Verify promptly**: When coding tickets complete, always CREATE_VERIFICATION for them.
 7. **Use dispatch for speed**: For simple/quick work, use DISPATCH_AGENT instead of creating a full ticket.
-8. **Keep notepad clean**: Every round, update notepad. Remove stale notes. Keep it organized.
-9. **Respect parallel limits**: Up to 3 slots for tickets + 1 reserved for you. Don't overload.
+8. **Keep notepad organized**: Use sections (queue_strategy, blockers, patterns, next_actions). Keep them current.
+9. **Balance team queues**: Reallocate slots based on workload. Don't let one team starve while another is idle.
 10. **Think strategically**: One well-chosen unblocking ticket can unlock an entire chain of dependent work.
-11. **Progress over perfection**: When in doubt, keep the pipeline flowing. Don't let perfect be the enemy of done.`;
+11. **Progress over perfection**: When in doubt, keep the pipeline flowing. Don't let perfect be the enemy of done.
+12. **Review cancelled tickets**: Periodically check if cancelled tickets can be re-engaged (blocker resolved, info available).
+13. **Handle escalations promptly**: When a lead agent escalates, assess and either re-route, provide info, or create a sub-task.`;
 
     /**
      * Check system health and return an assessment with ACTIONABLE decisions.
@@ -173,19 +200,43 @@ ESCALATE: [true or false]
 
         // ==================== GATHER STATE ====================
 
-        // v6.0: Retrieve Boss notepad for context from previous decisions
-        const notepadEntry = recentAudit
-            .filter(a => a.action === 'boss_notepad')
-            .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-        const notepadContent = notepadEntry?.detail ?? '';
+        // v7.0: Retrieve Boss notepad from proper boss_notepad table
+        const notepadSections = this.database.getBossNotepad?.() ?? {};
+        const notepadEntries = Object.entries(notepadSections);
+        const notepadContent = notepadEntries.length > 0
+            ? notepadEntries.map(([section, content]) => `[${section}] ${content}`).join('\n')
+            : '';
+        // Fallback: check audit log for legacy notepad entries
+        const legacyNotepad = !notepadContent
+            ? (recentAudit
+                .filter(a => a.action === 'boss_notepad')
+                .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.detail ?? '')
+            : '';
+        const finalNotepad = notepadContent || legacyNotepad;
+
+        // v7.0: Gather cancelled tickets for potential re-engagement
+        const cancelledTickets = this.database.getCancelledTickets?.() ?? [];
+
+        // v7.0: Gather recent completed/failed tickets for context
+        const recentProcessed = this.database.getRecentProcessedTickets?.(15) ?? [];
+        const recentProcessedSummary = recentProcessed.length > 0
+            ? recentProcessed.map((t: any) => `  TK-${t.ticket_number} [${t.status}] ${t.title.substring(0, 50)}${t.last_error ? ' ERR: ' + t.last_error.substring(0, 40) : ''}`).join('\n')
+            : '  (none)';
+
+        // v7.0: Per-team queue status (will be filled by TicketProcessor in context)
+        const cancelledSummary = cancelledTickets.length > 0
+            ? cancelledTickets.slice(0, 5).map((t: any) => `  TK-${t.ticket_number} [${t.assigned_queue || '?'}] ${t.title.substring(0, 50)} — ${t.cancellation_reason || 'no reason'}`).join('\n')
+            : '  (none)';
 
         const healthReport = [
             `System Health Check`,
             `Tasks: ${stats.total_tasks} total, ${readyTasks.length} ready`,
-            `Tickets: ${stats.total_tickets} total, ${openTickets.length} open, ${escalatedTickets.length} escalated`,
+            `Tickets: ${stats.total_tickets} total, ${openTickets.length} open, ${escalatedTickets.length} escalated, ${cancelledTickets.length} cancelled`,
             `Agents: ${agents.map(a => `${a.name}(${a.status})`).join(', ')}`,
             `Recent audit entries: ${recentAudit.length}`,
-            notepadContent ? `\nYour Notepad (from previous decisions):\n${notepadContent.substring(0, 500)}` : '',
+            `\nRecent Processed Tickets (last 15):\n${recentProcessedSummary}`,
+            cancelledTickets.length > 0 ? `\nCancelled Tickets (review for re-engagement):\n${cancelledSummary}` : '',
+            finalNotepad ? `\nYour Notepad (from previous decisions):\n${finalNotepad.substring(0, 800)}` : '',
         ].filter(Boolean).join('\n');
 
         // ==================== DETECT ISSUES (deterministic) ====================
@@ -274,6 +325,16 @@ ESCALATE: [true or false]
                     },
                 });
             }
+        }
+
+        // v7.0: WARNING: Cancelled tickets with resolved blockers (auto-re-engage candidates)
+        const reengageable = cancelledTickets.filter((t: any) => {
+            if (!t.blocking_ticket_id) return false;
+            const blocker = this.database.getTicket(t.blocking_ticket_id);
+            return blocker && blocker.status === TicketStatus.Resolved;
+        });
+        if (reengageable.length > 0) {
+            issues.push(`INFO: ${reengageable.length} cancelled ticket(s) have resolved blockers — consider re-engaging`);
         }
 
         // ==================== PROACTIVE WORK GENERATION ====================

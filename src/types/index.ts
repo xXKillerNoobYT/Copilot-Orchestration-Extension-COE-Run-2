@@ -28,7 +28,8 @@ export enum TicketStatus {
     OnHold = 'on_hold',
     Resolved = 'resolved',
     Escalated = 'escalated',
-    Blocked = 'blocked'
+    Blocked = 'blocked',
+    Cancelled = 'cancelled'     // v7.0: Boss AI can cancel tickets (reviewable for re-engagement)
 }
 
 export enum TicketPriority {
@@ -52,7 +53,8 @@ export enum AgentType {
     GapHunter = 'gap_hunter',
     DesignHardener = 'design_hardener',
     DecisionMemory = 'decision_memory',
-    Review = 'review'
+    Review = 'review',
+    CodingDirector = 'coding_director'  // v7.0: Interface to external coding agent
 }
 
 export enum AgentStatus {
@@ -60,6 +62,14 @@ export enum AgentStatus {
     Working = 'working',
     Error = 'error',
     Disabled = 'disabled'
+}
+
+/** v7.0: Lead agent team queues — Boss AI distributes tickets across these */
+export enum LeadAgentQueue {
+    Orchestrator = 'orchestrator',      // Catch-all for unclassified work
+    Planning = 'planning',              // Plans, designs, research coordination, decomposition
+    Verification = 'verification',      // Testing, review, QA, acceptance checking
+    CodingDirector = 'coding_director'  // Interface to external coding agent (MCP)
 }
 
 export enum PlanStatus {
@@ -210,6 +220,9 @@ export interface Ticket {
     // v4.1 — Error tracking for AI retry context
     last_error: string | null;
     last_error_at: string | null;
+    // v7.0 — Team queue assignment
+    assigned_queue: string | null;       // Which lead agent queue this ticket belongs to
+    cancellation_reason: string | null;  // Why this ticket was cancelled (for re-engagement review)
     created_at: string;
     updated_at: string;
 }
@@ -484,6 +497,12 @@ export interface COEConfig {
     maxModelsPerCycle?: number;            // default 2
     /** v6.0: Whether multi-model mode is enabled (default: false, one model at a time). */
     multiModelEnabled?: boolean;           // default false
+    /** v7.0: Boss-controlled slot allocation per team queue. Total must not exceed bossParallelBatchSize. */
+    teamSlotAllocation?: Record<string, number>;
+    /** v7.0: How often Boss reviews cancelled tickets for re-engagement (ms). Default: 30 min. */
+    cancelledTicketReviewIntervalMs?: number;
+    /** v7.0: Max time for a synchronous support agent call (ms). Default: 60s. */
+    maxSupportAgentSyncTimeoutMs?: number;
 }
 
 // --- Agent Framework Types ---
@@ -510,8 +529,119 @@ export interface AgentAction {
         | 'reprioritize'        // v6.0: change ticket priority
         | 'reorder_queue'       // v6.0: move ticket to front/back of queue
         | 'hold_ticket'         // v6.0: put ticket on hold (model mismatch)
-        | 'update_notepad';     // v6.0: Boss AI writes to its persistent notepad
+        | 'update_notepad'      // v6.0: Boss AI writes to its persistent notepad
+        // v7.0: Team queue orchestration
+        | 'assign_task'         // Structured task assignment with success criteria
+        | 'escalate_to_boss'    // Lead agent returns ticket to Boss with structured reason
+        | 'call_support_agent'  // Lead agent calls support agent (sync or async)
+        | 'block_ticket'        // Mark ticket blocked with reason
+        | 'cancel_ticket'       // Remove ticket from queue, mark cancelled
+        | 'move_to_queue'       // Move ticket between team queues
+        | 'save_document'       // Save research findings to support docs folder
+        | 'update_slot_allocation'; // Boss dynamically reallocates team slots
     payload: Record<string, unknown>;
+}
+
+// --- v7.0: Team Queue Orchestration Types ---
+
+/** Structured task assignment — Boss/Orchestrator assigns work with success criteria */
+export interface TaskAssignment {
+    /** Which agent to assign the task to */
+    target_agent: string;
+    /** Human-readable task description (the prompt sent to the agent) */
+    task_message: string;
+    /** Structured success criteria — how to determine if the task succeeded */
+    success_criteria: TaskCriterion[];
+    /** Priority for queue ordering */
+    priority: TicketPriority;
+    /** The source ticket this assignment relates to (if any) */
+    source_ticket_id?: string;
+    /** Who requested this assignment (boss, orchestrator, lead agent) */
+    requester: string;
+    /** Which lead agent queue to route through (null = direct dispatch) */
+    target_queue?: LeadAgentQueue;
+    /** Maximum time before the assignment is considered failed (ms) */
+    timeout_ms?: number;
+    /** Additional context to pass to the agent */
+    context?: Record<string, unknown>;
+}
+
+/** Individual success criterion for a task assignment */
+export interface TaskCriterion {
+    criterion: string;
+    verification_method: 'output_contains' | 'ticket_resolved' | 'file_exists' | 'info_gathered' | 'manual_check';
+    required: boolean;
+}
+
+/** Result of a completed task assignment */
+export interface TaskAssignmentResult {
+    assignment_id: string;
+    status: 'completed' | 'failed' | 'partial' | 'timeout';
+    agent_response: string;
+    criteria_results: Array<{ criterion: string; passed: boolean; detail: string }>;
+    duration_ms: number;
+    escalation_reason?: string;
+}
+
+/** Lead agent escalation payload — sent back to Boss when agent can't proceed */
+export interface EscalationPayload {
+    ticket_id: string;
+    reason: string;
+    recommended_target: LeadAgentQueue | null;
+    blocking_info_needed?: string;
+    priority_override?: TicketPriority;
+}
+
+/** Support agent call — lead agent requests help from a support agent */
+export interface SupportAgentCall {
+    /** Which support agent to call: 'research', 'answer', 'clarity', 'decision_memory', 'observation' */
+    agent_name: string;
+    /** The query/prompt for the support agent */
+    query: string;
+    /** Which ticket this call is for (tracking) */
+    ticket_id: string;
+    /** sync = inline call (agent waits for result), async = sub-ticket (agent's ticket goes on hold) */
+    mode: 'sync' | 'async';
+    /** What to do with the result: resume processing, block ticket, or escalate to boss */
+    callback_action: 'resume' | 'block' | 'escalate';
+}
+
+/** Support document — organized reference material saved by Research Agent */
+export interface SupportDocument {
+    id: string;
+    plan_id: string | null;
+    folder_name: string;
+    document_name: string;
+    content: string;
+    summary: string | null;
+    category: string;
+    source_ticket_id: string | null;
+    source_agent: string | null;
+    tags: string[];
+    is_verified: boolean;
+    verified_by: string | null;
+    relevance_score: number;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Per-team queue status — used by Boss AI for decision-making and UI display */
+export interface TeamQueueStatus {
+    queue: LeadAgentQueue;
+    pending: number;
+    active: number;
+    blocked: number;
+    cancelled: number;
+    lastServedAt: number;       // Timestamp for round-robin balancing
+    allocatedSlots: number;     // Boss-assigned slot count for this team
+}
+
+/** Boss notepad section — persistent memory across Boss cycles */
+export interface BossNotepadSection {
+    id: string;
+    section: string;            // 'queue_strategy' | 'blockers' | 'patterns' | 'next_actions' | 'general'
+    content: string;
+    updated_at: string;
 }
 
 // --- Design Component Types ---

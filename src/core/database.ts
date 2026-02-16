@@ -984,6 +984,77 @@ export class Database {
         `);
         try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_element_status_unique ON element_status(element_id, element_type, plan_id)'); } catch { /* already exists */ }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_status_plan ON element_status(plan_id)'); } catch { /* already exists */ }
+
+        // Migration v7.0: add assigned_queue + cancellation_reason to tickets
+        const ticketV7Columns = [
+            ['assigned_queue', 'TEXT DEFAULT NULL'],
+            ['cancellation_reason', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, type] of ticketV7Columns) {
+            try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${type}`); } catch { /* already exists */ }
+        }
+
+        // Migration v7.0: task_assignments table — structured task tracking with success criteria
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS task_assignments (
+                id TEXT PRIMARY KEY,
+                source_ticket_id TEXT,
+                target_agent TEXT NOT NULL,
+                target_queue TEXT,
+                requester TEXT NOT NULL,
+                task_message TEXT NOT NULL,
+                success_criteria TEXT NOT NULL DEFAULT '[]',
+                priority TEXT NOT NULL DEFAULT 'P2',
+                status TEXT NOT NULL DEFAULT 'pending',
+                agent_response TEXT,
+                criteria_results TEXT,
+                timeout_ms INTEGER NOT NULL DEFAULT 300000,
+                duration_ms INTEGER,
+                escalation_reason TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                FOREIGN KEY (source_ticket_id) REFERENCES tickets(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_task_assignments_status ON task_assignments(status)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_task_assignments_queue ON task_assignments(target_queue)'); } catch { /* already exists */ }
+
+        // Migration v7.0: support_documents table — organized reference material by folder
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS support_documents (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                folder_name TEXT NOT NULL,
+                document_name TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                summary TEXT,
+                category TEXT NOT NULL DEFAULT 'reference',
+                source_ticket_id TEXT,
+                source_agent TEXT,
+                tags TEXT NOT NULL DEFAULT '[]',
+                is_verified INTEGER NOT NULL DEFAULT 0,
+                verified_by TEXT,
+                relevance_score INTEGER NOT NULL DEFAULT 50,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id),
+                FOREIGN KEY (source_ticket_id) REFERENCES tickets(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_support_docs_folder ON support_documents(folder_name)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_support_docs_plan ON support_documents(plan_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_support_docs_category ON support_documents(category)'); } catch { /* already exists */ }
+
+        // Migration v7.0: boss_notepad table — proper persistent notepad (replaces audit log hack)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS boss_notepad (
+                id TEXT PRIMARY KEY,
+                section TEXT NOT NULL DEFAULT 'general',
+                content TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_boss_notepad_section ON boss_notepad(section)'); } catch { /* already exists */ }
     }
 
     private genId(): string {
@@ -1261,6 +1332,9 @@ export class Database {
         if (updates.stage !== undefined) { fields.push('stage = ?'); values.push(updates.stage); }
         if (updates.last_error !== undefined) { fields.push('last_error = ?'); values.push(updates.last_error); }
         if (updates.last_error_at !== undefined) { fields.push('last_error_at = ?'); values.push(updates.last_error_at); }
+        // v7.0: Team queue fields
+        if (updates.assigned_queue !== undefined) { fields.push('assigned_queue = ?'); values.push(updates.assigned_queue); }
+        if (updates.cancellation_reason !== undefined) { fields.push('cancellation_reason = ?'); values.push(updates.cancellation_reason); }
 
         if (fields.length === 0) return existing;
 
@@ -1310,6 +1384,9 @@ export class Database {
             stage: (row.stage as number) ?? 1,
             last_error: (row.last_error as string | null) ?? null,
             last_error_at: (row.last_error_at as string | null) ?? null,
+            // v7.0: Team queue fields
+            assigned_queue: (row.assigned_queue as string | null) ?? null,
+            cancellation_reason: (row.cancellation_reason as string | null) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -4090,6 +4167,218 @@ export class Database {
         return this.db.prepare(
             'SELECT * FROM ai_chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?'
         ).all(sessionId, limit) as AIChatMessage[];
+    }
+
+    // ==================== TASK ASSIGNMENTS (v7.0) ====================
+
+    createTaskAssignment(data: {
+        source_ticket_id?: string | null;
+        target_agent: string;
+        target_queue?: string | null;
+        requester: string;
+        task_message: string;
+        success_criteria?: string;
+        priority?: string;
+        timeout_ms?: number;
+    }): { id: string; status: string; created_at: string } {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO task_assignments (id, source_ticket_id, target_agent, target_queue, requester, task_message, success_criteria, priority, timeout_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id,
+            data.source_ticket_id ?? null,
+            data.target_agent,
+            data.target_queue ?? null,
+            data.requester,
+            data.task_message,
+            data.success_criteria ?? '[]',
+            data.priority ?? 'P2',
+            data.timeout_ms ?? 300000
+        );
+        return this.db.prepare('SELECT id, status, created_at FROM task_assignments WHERE id = ?').get(id) as { id: string; status: string; created_at: string };
+    }
+
+    getTaskAssignment(id: string): Record<string, unknown> | null {
+        return (this.db.prepare('SELECT * FROM task_assignments WHERE id = ?').get(id) as Record<string, unknown>) ?? null;
+    }
+
+    updateTaskAssignment(id: string, updates: Record<string, unknown>): void {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const [key, val] of Object.entries(updates)) {
+            if (key === 'id') continue;
+            fields.push(`${key} = ?`);
+            values.push(val);
+        }
+        if (fields.length === 0) return;
+        values.push(id);
+        this.db.prepare(`UPDATE task_assignments SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    getAssignmentsByQueue(queue: string, status?: string): Record<string, unknown>[] {
+        if (status) {
+            return this.db.prepare('SELECT * FROM task_assignments WHERE target_queue = ? AND status = ? ORDER BY created_at DESC')
+                .all(queue, status) as Record<string, unknown>[];
+        }
+        return this.db.prepare('SELECT * FROM task_assignments WHERE target_queue = ? ORDER BY created_at DESC')
+            .all(queue) as Record<string, unknown>[];
+    }
+
+    getAssignmentsByTicket(ticketId: string): Record<string, unknown>[] {
+        return this.db.prepare('SELECT * FROM task_assignments WHERE source_ticket_id = ? ORDER BY created_at DESC')
+            .all(ticketId) as Record<string, unknown>[];
+    }
+
+    // ==================== SUPPORT DOCUMENTS (v7.0) ====================
+
+    createSupportDocument(data: {
+        plan_id?: string | null;
+        folder_name: string;
+        document_name: string;
+        content: string;
+        summary?: string | null;
+        category?: string;
+        source_ticket_id?: string | null;
+        source_agent?: string | null;
+        tags?: string[];
+        relevance_score?: number;
+    }): { id: string; folder_name: string; document_name: string; created_at: string } {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO support_documents (id, plan_id, folder_name, document_name, content, summary, category, source_ticket_id, source_agent, tags, relevance_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id,
+            data.plan_id ?? null,
+            data.folder_name,
+            data.document_name,
+            data.content,
+            data.summary ?? null,
+            data.category ?? 'reference',
+            data.source_ticket_id ?? null,
+            data.source_agent ?? null,
+            JSON.stringify(data.tags ?? []),
+            data.relevance_score ?? 50
+        );
+        return this.db.prepare('SELECT id, folder_name, document_name, created_at FROM support_documents WHERE id = ?').get(id) as { id: string; folder_name: string; document_name: string; created_at: string };
+    }
+
+    getSupportDocument(id: string): Record<string, unknown> | null {
+        return (this.db.prepare('SELECT * FROM support_documents WHERE id = ?').get(id) as Record<string, unknown>) ?? null;
+    }
+
+    updateSupportDocument(id: string, updates: Record<string, unknown>): void {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const [key, val] of Object.entries(updates)) {
+            if (key === 'id' || key === 'created_at') continue;
+            fields.push(`${key} = ?`);
+            values.push(key === 'tags' && Array.isArray(val) ? JSON.stringify(val) : val);
+        }
+        if (fields.length === 0) return;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        this.db.prepare(`UPDATE support_documents SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    deleteSupportDocument(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM support_documents WHERE id = ?').run(id);
+        return (result as { changes: number }).changes > 0;
+    }
+
+    searchSupportDocuments(query: {
+        folder_name?: string;
+        keyword?: string;
+        category?: string;
+        plan_id?: string;
+        tags?: string[];
+    }): Record<string, unknown>[] {
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+        if (query.folder_name) { conditions.push('folder_name = ?'); params.push(query.folder_name); }
+        if (query.category) { conditions.push('category = ?'); params.push(query.category); }
+        if (query.plan_id) { conditions.push('plan_id = ?'); params.push(query.plan_id); }
+        if (query.keyword) {
+            conditions.push('(content LIKE ? OR summary LIKE ? OR document_name LIKE ?)');
+            const kw = `%${query.keyword}%`;
+            params.push(kw, kw, kw);
+        }
+        if (query.tags && query.tags.length > 0) {
+            const tagConditions = query.tags.map(() => 'tags LIKE ?');
+            conditions.push(`(${tagConditions.join(' OR ')})`);
+            for (const tag of query.tags) {
+                params.push(`%${tag}%`);
+            }
+        }
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+        return this.db.prepare(`SELECT * FROM support_documents ${where} ORDER BY relevance_score DESC, updated_at DESC`).all(...params) as Record<string, unknown>[];
+    }
+
+    getSupportDocumentsByFolder(folderName: string): Record<string, unknown>[] {
+        return this.db.prepare('SELECT * FROM support_documents WHERE folder_name = ? ORDER BY updated_at DESC').all(folderName) as Record<string, unknown>[];
+    }
+
+    listDocumentFolders(): string[] {
+        const rows = this.db.prepare('SELECT DISTINCT folder_name FROM support_documents ORDER BY folder_name').all() as { folder_name: string }[];
+        return rows.map(r => r.folder_name);
+    }
+
+    // ==================== BOSS NOTEPAD (v7.0) ====================
+
+    getBossNotepad(): Record<string, string> {
+        const rows = this.db.prepare('SELECT section, content FROM boss_notepad ORDER BY section').all() as { section: string; content: string }[];
+        const result: Record<string, string> = {};
+        for (const row of rows) {
+            result[row.section] = row.content;
+        }
+        return result;
+    }
+
+    updateBossNotepadSection(section: string, content: string): void {
+        // Upsert: insert or replace for the section
+        const existing = this.db.prepare('SELECT id FROM boss_notepad WHERE section = ?').get(section) as { id: string } | undefined;
+        if (existing) {
+            this.db.prepare("UPDATE boss_notepad SET content = ?, updated_at = datetime('now') WHERE section = ?").run(content, section);
+        } else {
+            this.db.prepare('INSERT INTO boss_notepad (id, section, content) VALUES (?, ?, ?)').run(this.genId(), section, content);
+        }
+    }
+
+    getBossNotepadSection(section: string): string | null {
+        const row = this.db.prepare('SELECT content FROM boss_notepad WHERE section = ?').get(section) as { content: string } | undefined;
+        return row?.content ?? null;
+    }
+
+    // ==================== TICKET QUERY HELPERS (v7.0) ====================
+
+    /** Get the last N processed tickets with full status info (for Boss AI status review) */
+    getRecentProcessedTickets(limit: number = 15): Ticket[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM tickets
+            WHERE processing_status IS NOT NULL OR status IN ('resolved', 'blocked', 'cancelled')
+            ORDER BY updated_at DESC
+            LIMIT ?
+        `).all(limit) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
+    }
+
+    /** Get all cancelled tickets (for Boss AI periodic re-engagement review) */
+    getCancelledTickets(): Ticket[] {
+        const rows = this.db.prepare("SELECT * FROM tickets WHERE status = 'cancelled' ORDER BY updated_at DESC").all() as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
+    }
+
+    /** Get tickets by assigned queue */
+    getTicketsByQueue(queue: string, status?: string): Ticket[] {
+        if (status) {
+            const rows = this.db.prepare('SELECT * FROM tickets WHERE assigned_queue = ? AND status = ? ORDER BY priority ASC, created_at ASC')
+                .all(queue, status) as Record<string, unknown>[];
+            return rows.map(r => this.rowToTicket(r));
+        }
+        const rows = this.db.prepare('SELECT * FROM tickets WHERE assigned_queue = ? ORDER BY priority ASC, created_at ASC')
+            .all(queue) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTicket(r));
     }
 
     close(): void {

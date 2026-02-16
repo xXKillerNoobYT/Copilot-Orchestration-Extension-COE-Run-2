@@ -107,6 +107,15 @@ export type COEEventType =
     | 'boss:slot_started' | 'boss:slot_completed' | 'boss:slot_error'
     | 'boss:model_swap' | 'boss:ticket_held' | 'boss:ticket_unheld'
     | 'boss:notepad_updated' | 'boss:dispatch_agent'
+    // v7.0: Team queue orchestration
+    | 'boss:assignment_created' | 'boss:assignment_completed' | 'boss:assignment_failed' | 'boss:assignment_partial'
+    | 'boss:ticket_cancelled' | 'boss:ticket_reengaged'
+    | 'boss:ticket_moved_queue' | 'boss:slot_allocation_updated'
+    | 'queue:slot_allocated' | 'queue:balance_cycle'
+    | 'queue:escalation_received'
+    | 'support:sync_call' | 'support:async_ticket_created'
+    | 'docs:document_saved' | 'docs:document_updated' | 'docs:document_verified' | 'docs:folder_created'
+    | 'agent_file:detected' | 'agent_file:processed' | 'agent_file:cleaned'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'
