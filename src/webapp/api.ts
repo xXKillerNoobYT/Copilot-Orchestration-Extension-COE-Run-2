@@ -460,10 +460,15 @@ function paginateAndFilter<T extends Record<string, unknown>>(items: T[], params
 
 function parseBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', (chunk: string) => { body += chunk; });
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer | string) => {
+            chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        });
         req.on('end', () => {
-            try { resolve(body ? JSON.parse(body) : {}); }
+            try {
+                const raw = Buffer.concat(chunks).toString('utf-8');
+                resolve(raw ? JSON.parse(raw) : {});
+            }
             catch { reject(new Error('Invalid JSON')); }
         });
         req.on('error', reject);
@@ -698,6 +703,8 @@ export async function handleApiRequest(
                 priority: (body.priority as TicketPriority) || TicketPriority.P2,
                 creator: (body.creator as string) || 'user',
                 parent_ticket_id: parentId,
+                operation_type: (body.operation_type as string) || 'user_created',
+                acceptance_criteria: (body.acceptance_criteria as string) || null,
             });
             eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
             database.addAuditLog('webapp', 'ticket_created', `Ticket TK-${ticket.ticket_number} created via web app`);
@@ -760,6 +767,14 @@ export async function handleApiRequest(
             const run = database.getLatestTicketRun(latestRunTicketId);
             if (!run) { json(res, { error: 'No runs found for this ticket' }, 404); return true; }
             json(res, run);
+            return true;
+        }
+
+        // v5.0: Run steps — modular agent step history per run
+        const runStepsMatch = route.match(/^tickets\/([^/]+)\/runs\/([^/]+)\/steps$/);
+        if (runStepsMatch && method === 'GET') {
+            const steps = database.getRunSteps(runStepsMatch[2]);
+            json(res, steps);
             return true;
         }
 
@@ -872,6 +887,207 @@ export async function handleApiRequest(
             return true;
         }
 
+        // ==================== PLAN FILES (v5.0) ====================
+        // Upload/manage reference documents that form the project's source of truth
+        if (route.startsWith('plan-files') || route.startsWith('plans/') && route.includes('/files')) {
+            // GET /api/plan-files?plan_id=xxx — get all files for a plan
+            if (route === 'plan-files' && method === 'GET') {
+                const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+                if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+                const files = database.getPlanFiles(planId);
+                json(res, files);
+                return true;
+            }
+
+            // POST /api/plan-files — upload a new plan file
+            if (route === 'plan-files' && method === 'POST') {
+                const body = await parseBody(req);
+                const planId = body.plan_id as string;
+                const filename = body.filename as string;
+                const content = body.content as string;
+                if (!planId || !filename || !content) {
+                    json(res, { error: 'plan_id, filename, and content are required' }, 400);
+                    return true;
+                }
+                // Detect file type from extension
+                const ext = (filename.split('.').pop() || '').toLowerCase();
+                const fileType = ext === 'md' ? 'markdown' : ext === 'txt' ? 'text' : ext === 'doc' || ext === 'docx' ? 'document' : 'text';
+                const file = database.addPlanFile({
+                    plan_id: planId,
+                    filename: filename,
+                    file_type: fileType,
+                    content: content,
+                    category: (body.category as string) || 'general',
+                    source_path: body.source_path as string | undefined,
+                    is_linked: !!body.is_linked,
+                });
+                eventBus.emit('plan:file_uploaded', 'webapp', { planId, fileId: (file as any).id, filename });
+                database.addAuditLog('webapp', 'plan_file_uploaded', `Plan file "${filename}" uploaded for plan ${planId}`);
+                json(res, file, 201);
+                return true;
+            }
+
+            // GET /api/plan-files/:id — get a specific plan file
+            const fileId = extractParam(route, 'plan-files/:id');
+            if (fileId && method === 'GET') {
+                const file = database.getPlanFile(fileId);
+                if (!file) { json(res, { error: 'Plan file not found' }, 404); return true; }
+                json(res, file);
+                return true;
+            }
+
+            // PUT /api/plan-files/:id — update a plan file
+            if (fileId && method === 'PUT') {
+                const body = await parseBody(req);
+                const updated = database.updatePlanFile(fileId, body as Record<string, unknown>);
+                if (!updated) { json(res, { error: 'Plan file not found' }, 404); return true; }
+                json(res, updated);
+                return true;
+            }
+
+            // DELETE /api/plan-files/:id — delete a plan file
+            if (fileId && method === 'DELETE') {
+                const deleted = database.deletePlanFile(fileId);
+                json(res, { success: deleted }, deleted ? 200 : 404);
+                return true;
+            }
+
+            // GET /api/plan-files/context?plan_id=xxx — get combined plan file content for agents
+            if (route === 'plan-files/context' && method === 'GET') {
+                const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+                if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+                const context = database.getPlanFileContext(planId);
+                json(res, { plan_id: planId, context: context, file_count: database.getPlanFiles(planId).length });
+                return true;
+            }
+
+            // GET /api/plan-files/changes?plan_id=xxx — get change history for a plan
+            if (route === 'plan-files/changes' && method === 'GET') {
+                const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+                if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+                const changes = database.getPlanFileChanges(planId);
+                json(res, changes);
+                return true;
+            }
+
+            // POST /api/plan-files/sync/:id — sync a linked file from disk (re-read content)
+            const syncFileId = extractParam(route, 'plan-files/sync/:id');
+            if (syncFileId && method === 'POST') {
+                const file = database.getPlanFile(syncFileId);
+                if (!file) { json(res, { error: 'Plan file not found' }, 404); return true; }
+                const sourcePath = file.source_path as string;
+                if (!sourcePath) { json(res, { error: 'File is not linked to a local path' }, 400); return true; }
+                try {
+                    const fs = await import('fs');
+                    if (!fs.existsSync(sourcePath)) {
+                        json(res, { error: 'Source file not found at: ' + sourcePath }, 404);
+                        return true;
+                    }
+                    const newContent = fs.readFileSync(sourcePath, 'utf-8');
+                    const updated = database.updatePlanFile(syncFileId, { content: newContent });
+                    database.addAuditLog('webapp', 'plan_file_synced', `Synced plan file "${file.filename}" from ${sourcePath}`);
+                    json(res, { synced: true, file: updated, version: (updated as any)?.version });
+                } catch (e) {
+                    json(res, { error: 'Failed to sync: ' + String(e) }, 500);
+                }
+                return true;
+            }
+
+            // POST /api/plan-files/folders — link a local folder to a plan
+            if (route === 'plan-files/folders' && method === 'POST') {
+                const body = await parseBody(req);
+                const planId = body.plan_id as string;
+                const folderPath = body.folder_path as string;
+                if (!planId || !folderPath) {
+                    json(res, { error: 'plan_id and folder_path are required' }, 400);
+                    return true;
+                }
+                const folder = database.addPlanFileFolder(planId, folderPath, body.file_patterns as string);
+                database.addAuditLog('webapp', 'plan_folder_linked', `Linked folder "${folderPath}" to plan ${planId}`);
+                json(res, folder, 201);
+                return true;
+            }
+
+            // GET /api/plan-files/folders?plan_id=xxx — get linked folders for a plan
+            if (route === 'plan-files/folders' && method === 'GET') {
+                const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+                if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+                const folders = database.getPlanFileFolders(planId);
+                json(res, folders);
+                return true;
+            }
+
+            // DELETE /api/plan-files/folders/:id — unlink a folder
+            const folderId = extractParam(route, 'plan-files/folders/:id');
+            if (folderId && method === 'DELETE') {
+                const removed = database.removePlanFileFolder(folderId);
+                json(res, { success: removed }, removed ? 200 : 404);
+                return true;
+            }
+
+            // POST /api/plan-files/folders/scan — scan all linked folders for changes
+            if (route === 'plan-files/folders/scan' && method === 'POST') {
+                const body = await parseBody(req);
+                const planId = body.plan_id as string;
+                if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+
+                const folders = database.getPlanFileFolders(planId);
+                const fs = await import('fs');
+                const path = await import('path');
+                let filesAdded = 0;
+                let filesUpdated = 0;
+                const changedFileIds: string[] = [];
+
+                for (const folder of folders) {
+                    const folderPath = folder.folder_path as string;
+                    if (!fs.existsSync(folderPath)) continue;
+
+                    const patterns = ((folder.file_patterns as string) || '*.md,*.txt,*.doc,*.docx').split(',').map(p => p.trim().replace('*.', '.'));
+                    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+
+                    for (const entry of entries) {
+                        if (!entry.isFile()) continue;
+                        const ext = path.extname(entry.name).toLowerCase();
+                        if (!patterns.includes(ext)) continue;
+
+                        const fullPath = path.join(folderPath, entry.name);
+                        const content = fs.readFileSync(fullPath, 'utf-8');
+                        const contentHash = (await import('crypto')).createHash('sha256').update(content).digest('hex').substring(0, 16);
+
+                        // Check if this file already exists in plan_files
+                        const existingFiles = database.getPlanFiles(planId);
+                        const existing = existingFiles.find(f => (f.source_path as string) === fullPath);
+
+                        if (existing) {
+                            // File exists — check if content changed
+                            if ((existing.content_hash as string) !== contentHash) {
+                                database.updatePlanFile(existing.id as string, { content });
+                                filesUpdated++;
+                                changedFileIds.push(existing.id as string);
+                            }
+                        } else {
+                            // New file — add it
+                            const newFile = database.addPlanFile({
+                                plan_id: planId,
+                                filename: entry.name,
+                                content,
+                                source_path: fullPath,
+                                is_linked: true,
+                            });
+                            filesAdded++;
+                            changedFileIds.push((newFile as any).id);
+                        }
+                    }
+
+                    database.updateFolderScanTime(folder.id as string);
+                }
+
+                database.addAuditLog('webapp', 'plan_folders_scanned', `Scanned folders for plan ${planId}: ${filesAdded} added, ${filesUpdated} updated`);
+                json(res, { plan_id: planId, files_added: filesAdded, files_updated: filesUpdated, changed_file_ids: changedFileIds });
+                return true;
+            }
+        }
+
         if (route === 'plans/generate' && method === 'POST') {
             const body = await parseBody(req);
             const name = body.name as string;
@@ -910,6 +1126,24 @@ export async function handleApiRequest(
                 'AI plan generation started.\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel + '\n\nStatus: Waiting for LLM response...',
                 'P1', aiLevel);
 
+            // Get plan file context — either from request body (wizard) or existing files
+            const planFileContext = (body.plan_file_context as string) || '';
+            const planFileSection = planFileContext
+                ? [
+                    '',
+                    '=== REFERENCE DOCUMENTS (Source of Truth) ===',
+                    'The user has provided the following reference documents that describe the project requirements,',
+                    'design specifications, and constraints. Tasks MUST align with these documents.',
+                    'If something in the project description seems to conflict with these documents,',
+                    'prioritize the reference documents as the source of truth.',
+                    '',
+                    planFileContext,
+                    '',
+                    '=== END REFERENCE DOCUMENTS ===',
+                    '',
+                ].join('\n')
+                : '';
+
             const prompt = [
                 `You are a project planning assistant. Create a structured development plan called "${name}".`,
                 `Project Scale: ${scale}`,
@@ -921,7 +1155,7 @@ export async function handleApiRequest(
                 wizFeatures.length > 0 ? `Core Features: ${wizFeatures.join(', ')}` : '',
                 `Tech Stack: ${wizTechStack}`,
                 `AI Assistance Level: ${aiLevel} — ${levelGuidance}`,
-                '',
+                planFileSection,
                 limits.guidance,
                 'Generate atomic tasks (15-45 min each). Each task needs:',
                 '- title: clear action-oriented name',
@@ -932,6 +1166,7 @@ export async function handleApiRequest(
                 '- depends_on_titles: array of task titles this depends on (empty array if none)',
                 '',
                 `IMPORTANT: Generate between ${limits.min} and ${limits.max} tasks. Do NOT exceed ${limits.max} tasks.`,
+                planFileContext ? 'IMPORTANT: Tasks MUST reference and align with the provided Reference Documents. Include specific references to document requirements in task descriptions.' : '',
                 'IMPORTANT: You MUST respond with ONLY valid JSON. No explanation, no markdown, no text before or after.',
                 'Response format:',
                 '{"plan_name": "...", "tasks": [{"title": "...", "description": "...", "priority": "P1", "estimated_minutes": 30, "acceptance_criteria": "...", "depends_on_titles": []}]}',
@@ -1206,7 +1441,10 @@ export async function handleApiRequest(
         // ==================== AUDIT LOG ====================
         if (route === 'audit' && method === 'GET') {
             const params = parsePagination(req);
-            const allAudit = database.getAuditLog(100) as unknown as Record<string, unknown>[];
+            const url = new URL(req.url || '', 'http://localhost');
+            const agentFilter = url.searchParams.get('agent') || undefined;
+            // Fetch a large set from DB — pagination is done client-side by paginateAndFilter
+            const allAudit = database.getAuditLog(1000, agentFilter) as unknown as Record<string, unknown>[];
             json(res, paginateAndFilter(allAudit, params));
             return true;
         }
@@ -1378,11 +1616,18 @@ export async function handleApiRequest(
                 }
             }
 
+            // v5.0: Include plan file context for design generation
+            const designPlanFileCtx = database.getPlanFileContext(planId);
+            const designPlanFileSection = designPlanFileCtx
+                ? `\n\n=== REFERENCE DOCUMENTS ===\nThe user has provided these reference documents. The design MUST align with them:\n${designPlanFileCtx}\n=== END REFERENCE DOCUMENTS ===\n`
+                : '';
+
             const prompt = [
                 `You are an expert UI layout designer. Generate a detailed visual page layout for a project called "${planName}".`,
                 '',
                 `Project: Scale=${scale}, Focus=${focus}, Tech Stack=${wizTechStack}`,
                 planDesc ? `Description: ${planDesc}` : '',
+                designPlanFileSection,
                 taskList,
                 pagesList,
                 rolesList,
@@ -2052,6 +2297,128 @@ export async function handleApiRequest(
             return true;
         }
 
+        // ==================== CODING AUTO-PICK (v5.0) ====================
+        // Auto-selects the next ticket that needs coding work,
+        // creates or reuses a coding session, and generates a prompt
+        if (route === 'coding/auto-pick' && method === 'POST') {
+            // Find the next ticket that needs coding work
+            // Priority: 1) tickets in 'queued' with coding agent 2) open coding tickets 3) any open ticket
+            const allTickets = database.getTicketsByStatus('open');
+            const inReviewTickets = database.getTicketsByStatus('in_review' as any);
+            const allCandidates = [...allTickets, ...inReviewTickets];
+
+            // Find coding-ready tickets
+            let codingTicket = allCandidates.find(t =>
+                t.processing_status === 'queued' &&
+                (t.processing_agent === 'coding' || t.operation_type === 'code_generation')
+            ) || allCandidates.find(t =>
+                t.operation_type === 'code_generation' ||
+                (t.title || '').toLowerCase().startsWith('coding:') ||
+                (t.title || '').toLowerCase().startsWith('rework:')
+            ) || allCandidates.find(t =>
+                t.status === 'open' && t.operation_type !== 'boss_directive'
+            );
+
+            if (!codingTicket) {
+                json(res, { error: 'No tickets need coding work right now', ticket: null, session: null }, 200);
+                return true;
+            }
+
+            // Create or reuse a coding session for this ticket
+            let session;
+            const existingSessions = database.getAllCodingSessions() as unknown as Record<string, unknown>[];
+            const existingSession = existingSessions.find((s: any) =>
+                s.status === 'active' && s.name && s.name.includes(`TK-${String(codingTicket!.ticket_number).padStart(3, '0')}`)
+            );
+
+            if (existingSession) {
+                session = existingSession;
+            } else {
+                session = database.createCodingSession({
+                    name: `TK-${String(codingTicket.ticket_number).padStart(3, '0')}: ${codingTicket.title.substring(0, 50)}`,
+                });
+            }
+
+            // Build a comprehensive prompt from the ticket
+            const ticketReplies = database.getTicketReplies(codingTicket.id);
+            const recentReplies = ticketReplies.slice(-3);
+
+            let autoPrompt = `## Coding Task: TK-${String(codingTicket.ticket_number).padStart(3, '0')}\n\n`;
+            autoPrompt += `**Title:** ${codingTicket.title}\n`;
+            autoPrompt += `**Priority:** ${codingTicket.priority}\n`;
+            autoPrompt += `**Operation:** ${(codingTicket.operation_type || 'general').replace(/_/g, ' ')}\n`;
+            if (codingTicket.acceptance_criteria) {
+                autoPrompt += `\n**Acceptance Criteria:**\n${codingTicket.acceptance_criteria}\n`;
+            }
+            autoPrompt += `\n**Description:**\n${codingTicket.body || codingTicket.title}\n`;
+
+            if (recentReplies.length > 0) {
+                autoPrompt += `\n**Recent Conversation:**\n`;
+                for (const r of recentReplies) {
+                    autoPrompt += `[${r.author}]: ${r.body.substring(0, 200)}\n`;
+                }
+            }
+
+            // Store as system message
+            const msg = database.addCodingMessage({
+                session_id: (session as any).id,
+                role: 'system',
+                content: autoPrompt,
+            });
+
+            // Update ticket processing status
+            database.updateTicket(codingTicket.id, {
+                processing_status: 'processing',
+                processing_agent: 'coding',
+            } as any);
+
+            eventBus.emit('coding:session_created', 'webapp', {
+                sessionId: (session as any).id,
+                ticketId: codingTicket.id,
+                autoGenerated: true,
+            });
+
+            json(res, {
+                ticket: codingTicket,
+                session: session,
+                prompt_message: msg,
+                auto_generated: true,
+            }, 201);
+            return true;
+        }
+
+        // ==================== CODING STATUS (v5.0) ====================
+        // Returns the current coding workstation state
+        if (route === 'coding/status' && method === 'GET') {
+            const allTickets = database.getTicketsByStatus('open');
+            const inReviewTickets = database.getTicketsByStatus('in_review' as any);
+            const allCandidates = [...allTickets, ...inReviewTickets];
+
+            const codingQueue = allCandidates.filter(t =>
+                t.processing_agent === 'coding' || t.operation_type === 'code_generation' ||
+                (t.title || '').toLowerCase().startsWith('coding:')
+            );
+            const pendingCoding = codingQueue.filter(t => t.processing_status === 'queued' || !t.processing_status);
+            const activeCoding = codingQueue.filter(t => t.processing_status === 'processing');
+
+            // Get active session
+            const sessions = database.getAllCodingSessions() as unknown as Record<string, unknown>[];
+            const activeSession = sessions.find((s: any) => s.status === 'active');
+
+            // Get pending AI questions
+            const pendingQuestions = database.getAllPendingAIQuestions ? database.getAllPendingAIQuestions() : [];
+
+            json(res, {
+                coding_queue_count: codingQueue.length,
+                pending_count: pendingCoding.length,
+                active_count: activeCoding.length,
+                active_session: activeSession || null,
+                pending_questions: pendingQuestions.length,
+                next_ticket: pendingCoding[0] || activeCoding[0] || null,
+            });
+            return true;
+        }
+
         // ==================== DESIGN SPEC EXPORT ====================
         if (route === 'design/export' && method === 'POST') {
             const body = await parseBody(req);
@@ -2336,8 +2703,10 @@ Only return the JSON array, nothing else.`;
         const answerQuestionId = extractParam(route, 'ai/questions/:id/answer');
         if (answerQuestionId && method === 'POST') {
             const body = await parseBody(req);
-            if (!body.answer) { json(res, { error: 'answer required' }, 400); return true; }
-            const updated = database.answerAIQuestion(answerQuestionId, body.answer as string);
+            // v4.3: Accept answer from multiple field names for robustness
+            const answerValue = (body.answer || body.answer_text || body.text || body.response) as string;
+            if (!answerValue) { json(res, { error: 'answer required' }, 400); return true; }
+            const updated = database.answerAIQuestion(answerQuestionId, answerValue);
             if (!updated) { json(res, { error: 'Question not found' }, 404); return true; }
             eventBus.emit('ai:question_answered', 'webapp', { questionId: answerQuestionId });
 
@@ -2350,7 +2719,7 @@ Only return the JSON array, nothing else.`;
                         processing_status: 'queued',
                     });
                     database.addTicketReply(linkedTicket.id, 'system',
-                        `User answered AI feedback question — ticket unblocked. Answer: ${(body.answer as string).substring(0, 200)}`);
+                        `User answered AI feedback question — ticket unblocked. Answer: ${answerValue.substring(0, 200)}`);
                     eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
                 }
             }
@@ -3844,10 +4213,12 @@ Only return the JSON array.`;
         // ==================== QUESTION QUEUE (E2) ====================
 
         // GET /api/questions/queue — pending questions sorted by priority
+        // v5.0: plan_id is now optional — if missing, returns ALL pending questions
         if (route === 'questions/queue' && method === 'GET') {
             const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
-            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
-            const questions = database.getAIQuestionsByPlan(planId, 'pending');
+            const questions = planId
+                ? database.getAIQuestionsByPlan(planId, 'pending')
+                : database.getAllPendingAIQuestions();
             // Sort by queue_priority (P1 first) then created_at
             questions.sort((a: any, b: any) => {
                 const pa = a.queue_priority ?? 2;
@@ -3860,9 +4231,21 @@ Only return the JSON array.`;
         }
 
         // GET /api/questions/queue/count — badge counts
+        // v5.0: plan_id is now optional — if missing, counts ALL pending questions
         if (route === 'questions/queue/count' && method === 'GET') {
             const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
-            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            if (!planId) {
+                const questions = database.getAllPendingAIQuestions();
+                const counts = { total: questions.length, p1: 0, p2: 0, p3: 0 };
+                for (const q of questions) {
+                    const p = (q as any).queue_priority ?? 2;
+                    if (p === 1) counts.p1++;
+                    else if (p === 2) counts.p2++;
+                    else counts.p3++;
+                }
+                json(res, counts);
+                return true;
+            }
             const questions = database.getAIQuestionsByPlan(planId, 'pending');
             const counts = { total: questions.length, p1: 0, p2: 0, p3: 0 };
             for (const q of questions) {
@@ -3919,8 +4302,9 @@ Only return the JSON array.`;
             const fallbackAnswerId = extractParam(route, 'questions/:id/answer');
             if (fallbackAnswerId && method === 'POST') {
                 const body = await parseBody(req);
-                if (!body.answer) { json(res, { error: 'answer required' }, 400); return true; }
-                const updated = database.answerAIQuestion(fallbackAnswerId, body.answer as string);
+                const fallbackAnswer = (body.answer || body.answer_text || body.text || body.response) as string;
+                if (!fallbackAnswer) { json(res, { error: 'answer required' }, 400); return true; }
+                const updated = database.answerAIQuestion(fallbackAnswerId, fallbackAnswer);
                 if (!updated) { json(res, { error: 'Question not found' }, 404); return true; }
                 eventBus.emit('ai:question_answered', 'webapp', { questionId: fallbackAnswerId });
 
@@ -3974,6 +4358,36 @@ Only return the JSON array.`;
             const response = await orchestrator.callAgent('boss', 'Run a health check on the system. Check for stale tickets, blocked tasks, pending questions, and agent status.', ctx);
             eventBus.emit('boss:health_check_completed', 'webapp', { assessment: response.content.substring(0, 200) });
             json(res, { success: true, assessment: response.content, actions: response.actions });
+            return true;
+        }
+
+        // ==================== LLM MODELS ====================
+
+        // GET /api/llm/models — fetch available models from the configured LLM endpoint
+        if (route === 'llm/models' && method === 'GET') {
+            const cfg = config.getConfig();
+            const endpoint = cfg.llm?.endpoint;
+            if (!endpoint) {
+                json(res, { models: [], error: 'No LLM endpoint configured' });
+                return true;
+            }
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 10000);
+                const modelsRes = await fetch(`${endpoint}/models`, {
+                    signal: controller.signal,
+                });
+                clearTimeout(timeout);
+                if (!modelsRes.ok) {
+                    json(res, { models: [], error: `LLM server returned HTTP ${modelsRes.status}` });
+                    return true;
+                }
+                const data = await modelsRes.json() as { data?: Array<{ id: string; object?: string }> };
+                const models = (data.data || []).map(m => m.id).sort();
+                json(res, { models, current: cfg.llm?.model || '' });
+            } catch (err) {
+                json(res, { models: [], error: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` });
+            }
             return true;
         }
 

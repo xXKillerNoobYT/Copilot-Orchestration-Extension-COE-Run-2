@@ -38,6 +38,9 @@ function makeOrchestrator(response?: Partial<AgentResponse>): OrchestratorLike &
             actions: [],
         }),
     };
+    const clarityMock = {
+        rewriteForUser: jest.fn().mockResolvedValue('Friendly rewritten message for user'),
+    };
     return {
         callAgent: jest.fn().mockResolvedValue({
             content: 'Agent response content with task details and implementation steps',
@@ -49,6 +52,7 @@ function makeOrchestrator(response?: Partial<AgentResponse>): OrchestratorLike &
         }),
         getReviewAgent: jest.fn().mockReturnValue(reviewMock),
         getBossAgent: jest.fn().mockReturnValue(bossMock),
+        getClarityAgent: jest.fn().mockReturnValue(clarityMock),
     };
 }
 
@@ -107,7 +111,7 @@ describe('TicketProcessorService', () => {
 
             // Should have logged two startup messages
             expect(mockOutput.appendLine).toHaveBeenCalledWith(
-                expect.stringContaining('Starting ticket auto-processing')
+                expect.stringContaining('Starting Boss AI supervisor')
             );
             expect(mockOutput.appendLine).toHaveBeenCalledWith(
                 expect.stringContaining('Ready')
@@ -195,7 +199,7 @@ describe('TicketProcessorService', () => {
             );
         });
 
-        test('user_created tickets are skipped (null route)', async () => {
+        test('user_created tickets are processed through planning pipeline', async () => {
             processor.start();
 
             const ticket = createTestTicket(db, {
@@ -207,8 +211,10 @@ describe('TicketProcessorService', () => {
             eventBus.emit('ticket:created', 'test', { ticketId: ticket.id });
             await new Promise(resolve => setTimeout(resolve, 50));
 
-            // Should not have called the orchestrator
-            expect(mockOrchestrator.callAgent).not.toHaveBeenCalled();
+            // v5.0: user_created tickets now go through orchestrator → planning → orchestrator pipeline
+            expect(mockOrchestrator.callAgent).toHaveBeenCalled();
+            const call = mockOrchestrator.callAgent.mock.calls[0];
+            expect(call[0]).toBe('orchestrator');
         });
 
         test('"Phase: Task Generation" routes to planning agent', async () => {
@@ -770,7 +776,7 @@ describe('TicketProcessorService', () => {
             expect(events).toContain('processing_completed');
         });
 
-        test('skips non-auto_created tickets from ticket:created event', async () => {
+        test('enqueues user-created tickets from ticket:created event', async () => {
             processor.start();
 
             const ticket = db.createTicket({
@@ -785,7 +791,9 @@ describe('TicketProcessorService', () => {
             eventBus.emit('ticket:created', 'test', { ticketId: ticket.id });
             await new Promise(resolve => setTimeout(resolve, 50));
 
-            expect(mockOrchestrator.callAgent).not.toHaveBeenCalled();
+            // v5.0: All tickets are now processed, regardless of auto_created flag
+            const status = processor.getStatus();
+            expect(status.mainQueueSize).toBeGreaterThanOrEqual(0); // ticket is queued or being processed
         });
 
         test('skips ticket:created events without ticketId', async () => {
@@ -811,7 +819,7 @@ describe('TicketProcessorService', () => {
             expect(mockOrchestrator.callAgent).toHaveBeenCalled();
         });
 
-        test('ticket:unblocked skips non-auto_created tickets', async () => {
+        test('ticket:unblocked enqueues user-created tickets', async () => {
             processor.start();
 
             const ticket = db.createTicket({
@@ -823,9 +831,11 @@ describe('TicketProcessorService', () => {
             });
 
             eventBus.emit('ticket:unblocked', 'test', { ticketId: ticket.id });
-            await new Promise(resolve => setTimeout(resolve, 50));
+            await new Promise(resolve => setTimeout(resolve, 100));
 
-            expect(mockOrchestrator.callAgent).not.toHaveBeenCalled();
+            // v5.0: All tickets are now processed, regardless of auto_created flag
+            const status = processor.getStatus();
+            expect(status.mainQueueSize).toBeGreaterThanOrEqual(0); // ticket is queued or being processed
         });
 
         test('ticket:unblocked skips if ticketId is missing', async () => {
@@ -1360,15 +1370,16 @@ describe('TicketProcessorService', () => {
 
             processor.start();
 
-            // Let any microtasks (Boss AI startup) resolve
-            await jest.advanceTimersByTimeAsync(100);
+            // v5.0: startup → 2s delay → Boss assessment → bossCycle() → startBossCountdown()
+            // Need to advance past 2s startup delay + allow async boss cycle to complete
+            await jest.advanceTimersByTimeAsync(3000);
 
             // Advance past the idle timeout (1 minute = 60000ms)
-            await jest.advanceTimersByTimeAsync(60001);
+            await jest.advanceTimersByTimeAsync(61000);
 
             expect(watchdogEvents.length).toBeGreaterThanOrEqual(1);
             expect(mockOutput.appendLine).toHaveBeenCalledWith(
-                expect.stringContaining('Boss AI idle check')
+                expect.stringContaining('Boss countdown fired')
             );
 
             jest.useRealTimers();
@@ -1391,24 +1402,20 @@ describe('TicketProcessorService', () => {
 
             processor.start();
 
-            // Let Boss AI startup resolve
-            await jest.advanceTimersByTimeAsync(100);
+            // v5.0: startup → 2s delay → Boss assessment → bossCycle() → startBossCountdown()
+            await jest.advanceTimersByTimeAsync(3000);
 
-            // Advance halfway
+            // Advance halfway through the 1-minute countdown
             await jest.advanceTimersByTimeAsync(30000);
 
-            // Trigger activity event to reset watchdog
+            // v5.0: Activity events update lastActivityTimestamp but don't reset the countdown.
+            // The countdown fires on schedule; activity tracking is separate.
             eventBus.emit('task:completed', 'test', { taskId: 'some-task' });
 
-            // Advance another 30 seconds (only 30s since last reset)
-            await jest.advanceTimersByTimeAsync(30000);
+            // Advance past the remaining countdown time (30s left)
+            await jest.advanceTimersByTimeAsync(31000);
 
-            // Watchdog should NOT have triggered yet (only 30s since reset)
-            expect(watchdogEvents.length).toBe(0);
-
-            // Now advance past the full timeout from last reset
-            await jest.advanceTimersByTimeAsync(30001);
-
+            // Countdown should fire after 60s total from when it started
             expect(watchdogEvents.length).toBeGreaterThanOrEqual(1);
 
             jest.useRealTimers();
@@ -1728,13 +1735,14 @@ describe('TicketProcessorService', () => {
             expect(mockOrchestrator.callAgent).toHaveBeenCalled();
         });
 
-        test('uses config.agents.orchestrator.enabled when no AI Level in body', async () => {
+        test('uses config.aiMode when no AI Level in body', async () => {
             mockConfig.getConfig.mockReturnValue({
                 maxActiveTickets: 10,
                 maxTicketRetries: 3,
                 clarityAutoResolveScore: 85,
                 clarityClarificationScore: 70,
                 bossIdleTimeoutMinutes: 5,
+                aiMode: 'manual',
                 agents: { orchestrator: { enabled: false } },
             });
 

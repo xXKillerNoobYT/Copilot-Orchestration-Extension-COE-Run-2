@@ -113,6 +113,8 @@ tr:last-child td { border-bottom: none; }
 .badge-yellow { background: rgba(249,226,175,0.15); color: var(--yellow); }
 .badge-mauve { background: rgba(203,166,247,0.15); color: var(--mauve); }
 .badge-gray { background: rgba(108,112,134,0.15); color: var(--overlay); }
+.badge-pulse { animation: badgePulse 1.5s ease-in-out infinite; }
+@keyframes badgePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* BUTTONS */
 button, .btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em; transition: all 0.15s; }
@@ -166,6 +168,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .thread-reply { padding: 12px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); }
 .thread-reply.user { border-left: 3px solid var(--blue); }
 .thread-reply.agent { border-left: 3px solid var(--mauve); }
+.thread-reply.system { border-left: 3px solid var(--blue); }
 .thread-reply .author { font-weight: 600; font-size: 0.85em; }
 .thread-reply .body { margin-top: 4px; white-space: pre-wrap; }
 .thread-reply .meta { color: var(--overlay); font-size: 0.8em; margin-top: 4px; }
@@ -279,7 +282,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .settings-section h3 { font-size: 1em; color: var(--blue); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(69,71,90,0.3); }
 .setting-row:last-child { border-bottom: none; }
-.setting-label { flex: 1; }
+.setting-label { flex: 1; display: block; }
 .setting-label strong { display: block; font-size: 0.9em; }
 .setting-label span { font-size: 0.8em; color: var(--subtext); }
 .setting-control { flex-shrink: 0; width: 240px; }
@@ -767,11 +770,12 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </button>
     </div>
     <div class="status">
+        <span id="navBossCountdown" style="font-size:0.8em;color:var(--yellow);display:none"></span>
         <span class="ai-level-label">AI:</span>
         <div class="ai-level-toggle" id="aiLevelToggle">
             <button data-ai="manual" onclick="setGlobalAiLevel('manual')" title="Full human control">Manual</button>
-            <button data-ai="suggestions" onclick="setGlobalAiLevel('suggestions')" class="active" title="AI recommends, you decide">Suggest</button>
-            <button data-ai="smart" onclick="setGlobalAiLevel('smart')" title="AI fills, you review">Smart</button>
+            <button data-ai="suggest" onclick="setGlobalAiLevel('suggest')" title="AI recommends, you decide">Suggest</button>
+            <button data-ai="smart" onclick="setGlobalAiLevel('smart')" class="active" title="AI fills, you review">Smart</button>
             <button data-ai="hybrid" onclick="setGlobalAiLevel('hybrid')" title="AI auto-handles routine">Hybrid</button>
         </div>
         <span class="dot online" id="statusDot"></span>
@@ -845,7 +849,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </label>
     </div>
     <table>
-        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Priority</th><th>Type</th><th>Actions</th></tr></thead>
+        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Type</th><th>Actions</th></tr></thead>
         <tbody id="ticketTableBody"></tbody>
     </table>
     <div id="ticketDetail"></div>
@@ -897,8 +901,25 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                         <button class="btn btn-secondary" onclick="wizQuick()">Quick Generate</button>
                     </div>
                 </div>
-                <!-- Step 1: Scale -->
+                <!-- Step 1: Plan Files (v5.0) -->
                 <div class="wizard-step" id="wstep1">
+                    <label>Reference Documents</label>
+                    <p class="step-desc">Upload .md, .txt, or .doc files with your project requirements, design specs, or feature lists. These become the source of truth that all agents reference.</p>
+                    <div id="planFilesUploadArea" style="border:2px dashed var(--surface2);border-radius:8px;padding:20px;text-align:center;margin-bottom:12px;cursor:pointer;transition:border-color 0.2s" ondragover="event.preventDefault();this.style.borderColor='var(--blue)'" ondragleave="this.style.borderColor='var(--surface2)'" ondrop="handlePlanFileDrop(event)" onclick="document.getElementById('planFileInput').click()">
+                        <div style="font-size:1.5em;margin-bottom:8px">&#x1F4C4;</div>
+                        <div style="font-weight:600;color:var(--text)">Drop files here or click to browse</div>
+                        <div style="font-size:0.82em;color:var(--overlay);margin-top:4px">Supports .md, .txt, .doc — Multiple files allowed</div>
+                        <input type="file" id="planFileInput" multiple accept=".md,.txt,.doc,.docx,.markdown" style="display:none" onchange="handlePlanFileSelect(this.files)">
+                    </div>
+                    <div id="planFilesPreview" style="max-height:200px;overflow-y:auto"></div>
+                    <div class="btn-row">
+                        <button class="btn btn-secondary" onclick="wizPrev()">Back</button>
+                        <button class="btn btn-primary" onclick="wizNext()">Next</button>
+                        <span style="font-size:0.8em;color:var(--overlay);margin-left:8px">(You can add more files later)</span>
+                    </div>
+                </div>
+                <!-- Step 2: Scale (was Step 1) -->
+                <div class="wizard-step" id="wstep2">
                     <label>Project Scale</label>
                     <p class="step-desc">How big is this project?</p>
                     <div class="option-grid" id="scaleOptions">
@@ -910,8 +931,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 2: Focus -->
-                <div class="wizard-step" id="wstep2">
+                <!-- Step 3: Focus (was Step 2) -->
+                <div class="wizard-step" id="wstep3">
                     <label>Primary Focus</label>
                     <p class="step-desc">What's your main focus?</p>
                     <div class="option-grid" id="focusOptions">
@@ -921,8 +942,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 3: Priorities -->
-                <div class="wizard-step" id="wstep3">
+                <!-- Step 4: Priorities (was Step 3) -->
+                <div class="wizard-step" id="wstep4">
                     <label>Key Priorities (click to select)</label>
                     <p class="step-desc">Which parts matter most right now?</p>
                     <div class="option-grid" id="priorityOptions">
@@ -936,8 +957,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 4: Page Layout -->
-                <div class="wizard-step" id="wstep4">
+                <!-- Step 5: Page Layout (was Step 4) -->
+                <div class="wizard-step" id="wstep5">
                     <label>Page Layout</label>
                     <p class="step-desc">How should the plan dashboard be organized?</p>
                     <div class="design-grid" data-field="layout">
@@ -948,8 +969,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 5: Color Theme -->
-                <div class="wizard-step" id="wstep5">
+                <!-- Step 6: Color Theme (was Step 5) -->
+                <div class="wizard-step" id="wstep6">
                     <label>Color Theme</label>
                     <p class="step-desc">Choose a visual theme for the interface</p>
                     <div class="design-grid" data-field="theme">
@@ -995,8 +1016,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 6: Key Pages / Screens -->
-                <div class="wizard-step" id="wstep6">
+                <!-- Step 7: Key Pages / Screens (was Step 6) -->
+                <div class="wizard-step" id="wstep7">
                     <label>Key Pages / Screens</label>
                     <p class="step-desc">Select the pages your app needs (click to toggle, add custom below)</p>
                     <div class="multi-select-grid" id="pagesOptions">
@@ -1017,8 +1038,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 7: User Types / Roles -->
-                <div class="wizard-step" id="wstep7">
+                <!-- Step 8: User Types / Roles (was Step 7) -->
+                <div class="wizard-step" id="wstep8">
                     <label>User Types / Roles</label>
                     <p class="step-desc">Who will use this app? (select all that apply)</p>
                     <div class="multi-select-grid" id="rolesOptions">
@@ -1030,8 +1051,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 8: Core Features -->
-                <div class="wizard-step" id="wstep8">
+                <!-- Step 9: Core Features (was Step 8) -->
+                <div class="wizard-step" id="wstep9">
                     <label>Core Features</label>
                     <p class="step-desc">What features does your app need? (select all that apply)</p>
                     <div class="multi-select-grid" id="featuresOptions">
@@ -1048,8 +1069,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 9: Tech Stack -->
-                <div class="wizard-step" id="wstep9">
+                <!-- Step 10: Tech Stack (was Step 9) -->
+                <div class="wizard-step" id="wstep10">
                     <label>Tech Stack</label>
                     <p class="step-desc">What technology stack will this app use?</p>
                     <div class="design-grid" data-field="techStack">
@@ -1060,8 +1081,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     </div>
                     <div class="btn-row"><button class="btn btn-secondary" onclick="wizPrev()">Back</button><button class="btn btn-primary" onclick="wizNext()">Next</button></div>
                 </div>
-                <!-- Step 10: AI Level -->
-                <div class="wizard-step" id="wstep10">
+                <!-- Step 11: AI Level (was Step 10) -->
+                <div class="wizard-step" id="wstep11">
                     <label>AI Assistance Level</label>
                     <p class="step-desc">How much should AI help with your workflow?</p>
                     <div class="design-grid" data-field="aiLevel">
@@ -1397,18 +1418,43 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <div class="card-grid" id="agentCards"></div>
 </div>
 
-<!-- ==================== CODING CONVERSATION ==================== -->
+<!-- ==================== CODING WORKSTATION (v5.0) ==================== -->
 <div class="page" id="page-coding">
-    <h1>Coding Conversation</h1>
-    <p class="subtitle">Interact with coding agents — generate prompts, track responses, manage MCP tool calls</p>
+    <!-- Agent Mode Banner -->
+    <div id="codingModeBanner" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--surface0);border:1px solid var(--surface2);border-radius:8px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+            <span style="font-size:1.1em;font-weight:700;color:var(--blue)">Coding Workstation</span>
+            <span id="codingModeLabel" class="badge badge-blue">Planning</span>
+            <span id="codingTicketLabel" style="font-size:0.85em;color:var(--subtext)">No ticket loaded</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+            <span id="codingQueueCount" style="font-size:0.8em;color:var(--overlay)">Queue: 0</span>
+            <span id="codingQuestionCount" style="font-size:0.8em;color:var(--overlay)">Questions: 0</span>
+        </div>
+    </div>
+
     <div class="coding-layout">
+        <!-- Left sidebar: Sessions + Ticket Info -->
         <div class="coding-sidebar">
-            <h3>Sessions</h3>
-            <div style="padding:8px"><button class="btn btn-sm btn-primary" onclick="newCodingSession()" style="width:100%">+ New Session</button></div>
+            <h3 style="display:flex;align-items:center;justify-content:space-between">Sessions <span id="codingSessionCount" style="font-size:0.7em;color:var(--overlay);font-weight:400"></span></h3>
             <div class="session-list" id="sessionList"></div>
+
+            <!-- Current Ticket Context Panel -->
+            <h3>Current Ticket</h3>
+            <div id="codingTicketInfo" style="padding:8px;font-size:0.82em;color:var(--subtext)">
+                <div style="text-align:center;padding:12px;color:var(--overlay)">No ticket selected</div>
+            </div>
+
+            <!-- Pending Questions -->
+            <h3 style="display:flex;align-items:center;justify-content:space-between">Pending Actions <span id="codingPendingBadge" class="badge badge-red" style="display:none;font-size:0.7em">0</span></h3>
+            <div id="codingPendingActions" style="padding:8px;font-size:0.82em;color:var(--subtext)">
+                <div style="text-align:center;padding:8px;color:var(--overlay)">All clear</div>
+            </div>
+
+            <!-- MCP Tools Reference -->
             <h3>MCP Tools</h3>
             <div style="padding:8px;font-size:0.8em;color:var(--subtext)">
-                <div class="mcp-tools-list" style="flex-direction:column;padding:8px">
+                <div class="mcp-tools-list" style="flex-direction:column;padding:4px">
                     <div class="mcp-tool-chip">getNextTask</div>
                     <div class="mcp-tool-chip">reportTaskDone</div>
                     <div class="mcp-tool-chip">askQuestion</div>
@@ -1418,23 +1464,59 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 </div>
             </div>
         </div>
+
+        <!-- Main coding area -->
         <div class="coding-main">
-            <div class="coding-header">
-                <span id="codingSessionName" style="font-weight:600">No session selected</span>
-                <div style="display:flex;gap:8px">
-                    <select id="codingTaskSelect" name="codingTaskSelect" style="width:180px;margin-top:0;font-size:0.85em"><option value="">Link to task...</option></select>
-                    <button class="btn btn-sm btn-secondary" onclick="generatePromptFromTask()">Generate Prompt</button>
-                    <button class="btn btn-sm btn-secondary" onclick="copyCodingToClipboard()">Copy All</button>
+            <!-- Header with 3 key action buttons -->
+            <div class="coding-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                <span id="codingSessionName" style="font-weight:600;font-size:0.95em">Coding Workstation</span>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-sm btn-primary" id="codingAutoPickBtn" onclick="codingAutoPick()" title="Auto-select next ticket and generate coding prompt">Generate Prompt</button>
+                    <button class="btn btn-sm btn-secondary" id="codingNewChatBtn" onclick="codingNewChat()" title="Start a fresh coding chat (use when changing areas or after errors)">New Coding Chat</button>
+                    <button class="btn btn-sm btn-secondary" id="codingAgentReplyBtn" onclick="addAgentResponse()" title="Paste the coding agent reply here">Agent Reply</button>
                 </div>
             </div>
-            <div class="coding-messages" id="codingMessages">
-                <div class="empty">Start a session to begin the coding conversation.</div>
+
+            <!-- Infinite scroll coding messages -->
+            <div class="coding-messages" id="codingMessages" style="overflow-y:auto;scroll-behavior:smooth">
+                <div id="codingWelcome" style="text-align:center;padding:40px 20px;color:var(--subtext)">
+                    <div style="font-size:2em;margin-bottom:12px">&#x1F6E0;</div>
+                    <h3 style="color:var(--text);margin-bottom:8px">Autonomous Coding Workstation</h3>
+                    <p style="max-width:500px;margin:0 auto 16px">This is a continuous coding window. The system auto-picks tickets that need coding and generates prompts.</p>
+                    <p style="font-size:0.85em;color:var(--overlay)">Click <strong>Generate Prompt</strong> to start, or the system will auto-select work.</p>
+                    <div style="margin-top:20px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+                        <div style="background:var(--surface0);padding:10px 14px;border-radius:8px;font-size:0.82em;text-align:left;max-width:180px">
+                            <div style="font-weight:600;color:var(--blue);margin-bottom:4px">Stage 1: Planning</div>
+                            <div style="color:var(--subtext)">Agent analyzes ticket, builds execution plan</div>
+                        </div>
+                        <div style="background:var(--surface0);padding:10px 14px;border-radius:8px;font-size:0.82em;text-align:left;max-width:180px">
+                            <div style="font-weight:600;color:var(--green);margin-bottom:4px">Stage 2: Ask &amp; Agent</div>
+                            <div style="color:var(--subtext)">Clarifications, design decisions, context gathering</div>
+                        </div>
+                        <div style="background:var(--surface0);padding:10px 14px;border-radius:8px;font-size:0.82em;text-align:left;max-width:180px">
+                            <div style="font-weight:600;color:var(--mauve);margin-bottom:4px">Stage 3: Coding</div>
+                            <div style="color:var(--subtext)">Implementation, testing, verification</div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="coding-input">
-                <textarea id="codingInput" name="codingInput" placeholder="Type a message or paste agent response..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCodingMsg()}"></textarea>
+
+            <!-- Input area with reply field -->
+            <div class="coding-input" style="border-top:1px solid var(--surface2);padding-top:8px">
+                <textarea id="codingInput" name="codingInput" placeholder="Paste agent response or type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCodingMsg()}" style="min-height:60px"></textarea>
                 <div style="display:flex;flex-direction:column;gap:4px">
-                    <button class="btn btn-primary btn-sm" id="codingSendBtn" onclick="sendCodingMsg()">User Send</button>
-                    <button class="btn btn-secondary btn-sm" id="codingAgentBtn" onclick="addAgentResponse()">Agent Response</button>
+                    <button class="btn btn-primary btn-sm" id="codingSendBtn" onclick="sendCodingMsg()">Send</button>
+                </div>
+            </div>
+
+            <!-- Area transition controls (shown when switching to new work area) -->
+            <div id="codingAreaControls" style="display:none;padding:8px 12px;background:var(--surface0);border-top:1px solid var(--surface2);gap:8px;align-items:center;justify-content:space-between">
+                <span id="codingAreaLabel" style="font-size:0.85em;color:var(--subtext)"></span>
+                <div style="display:flex;gap:6px">
+                    <button class="btn btn-sm btn-primary" onclick="codingAreaDone()">Done</button>
+                    <button class="btn btn-sm btn-secondary" onclick="codingAreaNext()">Next Step</button>
+                    <button class="btn btn-sm btn-secondary" onclick="codingNewChat()">New Chat</button>
+                    <button class="btn btn-sm btn-secondary" onclick="codingChangeMode()">Change Mode</button>
                 </div>
             </div>
         </div>
@@ -1515,6 +1597,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <div class="form-group"><label for="newTicketTitle">Title</label><input type="text" id="newTicketTitle" placeholder="Question or issue..."></div>
         <div class="form-group"><label for="newTicketBody">Description</label><textarea id="newTicketBody" placeholder="Details..."></textarea></div>
         <div class="form-group"><label for="newTicketPrio">Priority</label><select id="newTicketPrio"><option value="P1">P1</option><option value="P2" selected>P2</option><option value="P3">P3</option></select></div>
+        <div class="form-group"><label for="newTicketOpType">Operation Type</label><select id="newTicketOpType"><option value="" selected>Auto-detect</option><option value="planning">Planning</option><option value="design">Design</option><option value="code_generation">Code Generation</option><option value="verification">Verification</option><option value="research">Research</option><option value="bugfix">Bug Fix</option><option value="refactor">Refactor</option><option value="documentation">Documentation</option></select></div>
+        <div class="form-group"><label for="newTicketAC">Acceptance Criteria</label><textarea id="newTicketAC" placeholder="What must be true when this ticket is done? (optional)" rows="2"></textarea></div>
         <div class="btn-row"><button class="btn btn-primary" onclick="createTicket()">Create Ticket</button></div>
     </div>
 </div>
@@ -1704,6 +1788,26 @@ function prioBadge(p) {
     const map = { P1: 'red', P2: 'yellow', P3: 'gray' };
     return '<span class="badge badge-' + (map[p] || 'gray') + '">' + esc(p) + '</span>';
 }
+// v5.0: Processing status badges — shows pipeline stage with coding-specific tags
+function processingBadge(t) {
+    var ps = t.processing_status;
+    var agent = (t.processing_agent || '').toLowerCase();
+    var isCoding = agent === 'coding' || (t.operation_type || '') === 'code_generation';
+    if (!ps && t.status === 'open') return '<span style="color:var(--overlay);font-size:0.8em">—</span>';
+    if (!ps) return '';
+    if (ps === 'queued') {
+        if (isCoding) return '<span class="badge badge-mauve" title="Waiting for coding agent">Coding Pending</span>';
+        return '<span class="badge badge-gray">Queued</span>';
+    }
+    if (ps === 'processing') {
+        if (isCoding) return '<span class="badge badge-blue badge-pulse" title="Coding agent is working">Coding Processing</span>';
+        return '<span class="badge badge-blue badge-pulse" title="Agent: ' + esc(t.processing_agent || 'unknown') + '">AI Processing</span>';
+    }
+    if (ps === 'verifying') return '<span class="badge badge-yellow">Verifying</span>';
+    if (ps === 'holding') return '<span class="badge badge-yellow">Held for Review</span>';
+    if (ps === 'awaiting_user') return '<span class="badge badge-red">Awaiting User</span>';
+    return '<span class="badge badge-gray">' + esc(ps.replace(/_/g, ' ')) + '</span>';
+}
 
 // ==================== LOAD PAGES ====================
 function loadPage(page) {
@@ -1890,6 +1994,7 @@ function ticketRow(t, depth, hasChildren, isExpanded, childCount) {
         '<td style="' + indent + '">' + expandBtn + 'TK-' + String(t.ticket_number).padStart(3, '0') + childBadge + '</td>' +
         '<td class="clickable" onclick="showTicketDetail(\\'' + t.id + '\\')">' + esc(t.title) + (depth > 0 ? ' <span style="color:var(--overlay);font-size:0.8em">(sub)</span>' : '') + '</td>' +
         '<td>' + statusBadge(t.status) + '</td>' +
+        '<td>' + processingBadge(t) + '</td>' +
         '<td>' + prioBadge(t.priority) + '</td>' +
         '<td style="font-size:0.8em;text-transform:capitalize">' + esc((t.operation_type || 'user created').replace(/_/g, ' ')) + (t.auto_created ? '<span style="font-size:0.7em;color:var(--overlay);margin-left:4px">(auto)</span>' : '') + '</td>' +
         '<td>' + ticketActions(t) + '</td>' +
@@ -1956,6 +2061,12 @@ async function showTicketDetail(id) {
             (data.processing_status ? '<span style="margin-left:8px;color:var(--subtext);font-size:0.8em">' + esc(data.processing_status) + '</span>' : '') +
             '</span></div>';
     }
+    // v5.0: Processing status badge row
+    var processingRow = '';
+    var pBadge = processingBadge(data);
+    if (pBadge && data.processing_status) {
+        processingRow = '<div class="detail-row"><span>Processing</span><span>' + pBadge + '</span></div>';
+    }
     // Stage badge
     var stageBadge = '';
     if (data.stage_label) {
@@ -1990,31 +2101,35 @@ async function showTicketDetail(id) {
             '</div></div>';
     }
 
-    // v4.1 (WS4F): Run history section — fetch run logs
+    // v5.0 (WS4F): Modular run history — dynamic agent steps per run
     var runHistoryHtml = '';
     try {
         var runs = await api('tickets/' + id + '/runs');
         if (runs && runs.length > 0) {
             runHistoryHtml = '<div style="margin-top:16px"><h3>Run History (' + runs.length + ')</h3>';
+            // Status dots row
             runHistoryHtml += '<div style="display:flex;gap:6px;margin-bottom:8px">';
             runs.forEach(function(r) {
                 var color = r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : r.status === 'review_flagged' ? 'var(--yellow)' : 'var(--blue)';
                 runHistoryHtml += '<span style="width:10px;height:10px;border-radius:50%;background:' + color + ';display:inline-block" title="Run #' + r.run_number + ': ' + r.status + '"></span>';
             });
             runHistoryHtml += '</div>';
+            // Each run as a collapsible section with a steps placeholder
             runs.forEach(function(r) {
                 var color = r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : r.status === 'review_flagged' ? '#f59e0b' : 'var(--blue)';
                 var badgeLabel = r.status.replace('_', ' ');
-                runHistoryHtml += '<details style="margin-bottom:6px;background:var(--bg);border-radius:6px;padding:8px 12px;border-left:3px solid ' + color + '">';
+                runHistoryHtml += '<details class="run-detail" data-run-id="' + r.id + '" data-ticket-id="' + id + '" style="margin-bottom:6px;background:var(--bg);border-radius:6px;padding:8px 12px;border-left:3px solid ' + color + '">';
                 runHistoryHtml += '<summary style="cursor:pointer;font-size:0.9em;display:flex;align-items:center;gap:8px">';
                 runHistoryHtml += '<strong>Run #' + r.run_number + '</strong>';
                 runHistoryHtml += '<span style="background:' + color + ';color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em">' + esc(badgeLabel) + '</span>';
-                runHistoryHtml += '<span style="color:var(--subtext);font-size:0.8em">' + esc(r.agent_name) + '</span>';
                 if (r.duration_ms) runHistoryHtml += '<span style="color:var(--overlay);font-size:0.8em">' + (r.duration_ms / 1000).toFixed(1) + 's</span>';
                 if (r.tokens_used) runHistoryHtml += '<span style="color:var(--overlay);font-size:0.8em">' + r.tokens_used + ' tokens</span>';
                 runHistoryHtml += '</summary>';
-                if (r.prompt_sent) runHistoryHtml += '<div style="margin-top:6px"><strong style="font-size:0.8em;color:var(--subtext)">Prompt Sent:</strong><pre style="max-height:150px;overflow:auto;font-size:0.8em;background:var(--bg2);padding:6px;border-radius:4px;white-space:pre-wrap">' + esc(r.prompt_sent.substring(0, 500)) + (r.prompt_sent.length > 500 ? '...' : '') + '</pre></div>';
-                if (r.response_received) runHistoryHtml += '<div style="margin-top:4px"><strong style="font-size:0.8em;color:var(--subtext)">Response:</strong><pre style="max-height:150px;overflow:auto;font-size:0.8em;background:var(--bg2);padding:6px;border-radius:4px;white-space:pre-wrap">' + esc(r.response_received.substring(0, 500)) + (r.response_received.length > 500 ? '...' : '') + '</pre></div>';
+                // Steps will be lazy-loaded on expand — placeholder div
+                runHistoryHtml += '<div class="run-steps" data-loaded="0" style="margin-top:8px">';
+                runHistoryHtml += '<div style="color:var(--subtext);font-size:0.85em">Loading steps...</div>';
+                runHistoryHtml += '</div>';
+                // Fallback: show run-level prompt/response if no steps loaded
                 if (r.error_message) runHistoryHtml += '<div style="margin-top:4px;color:var(--red);font-size:0.85em"><strong>Error:</strong> ' + esc(r.error_message) + '</div>';
                 if (r.error_stack) runHistoryHtml += '<details style="margin-top:4px"><summary style="font-size:0.8em;color:var(--overlay);cursor:pointer">Stack trace</summary><pre style="font-size:0.75em;color:var(--subtext);max-height:100px;overflow:auto">' + esc(r.error_stack.substring(0, 500)) + '</pre></details>';
                 runHistoryHtml += '</details>';
@@ -2028,13 +2143,13 @@ async function showTicketDetail(id) {
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
         '<div class="detail-row"><span>Priority</span>' + prioBadge(data.priority) + '</div>' +
         '<div class="detail-row"><span>Creator</span><span>' + esc(data.creator) + '</span></div>' +
-        agentBadge + stageBadge +
+        agentBadge + processingRow + stageBadge +
         parentInfo + childInfo +
         (data.body ? '<div style="margin-top:12px;white-space:pre-wrap;color:var(--subtext);padding:12px;background:var(--bg);border-radius:6px">' + esc(data.body) + '</div>' : '') +
         criteriaSection + verificationSection + errorSection + runHistoryHtml +
         '<h3 style="margin-top:16px">Thread (' + replies.length + ')</h3>' +
         replies.map(r =>
-            '<div class="thread-reply ' + (r.author === 'user' ? 'user' : 'agent') + '">' +
+            '<div class="thread-reply ' + (r.author === 'user' ? 'user' : r.author === 'system' ? 'system' : 'agent') + '">' +
             '<span class="author">' + esc(r.author) + '</span>' +
             (r.clarity_score != null ? '<span style="float:right;color:var(--overlay);font-size:0.8em">Clarity: ' + r.clarity_score + '/100</span>' : '') +
             '<div class="body">' + esc(r.body) + '</div>' +
@@ -2046,6 +2161,53 @@ async function showTicketDetail(id) {
             '<div class="btn-row"><button class="btn btn-primary" onclick="sendTicketReply(\\'' + id + '\\')">Send Reply</button></div></div>' : '') +
         '</div>';
 }
+
+// v5.0: Lazy-load run steps when a run detail is expanded
+document.addEventListener('toggle', async function(e) {
+    var det = e.target;
+    if (!det || !det.classList || !det.classList.contains('run-detail')) return;
+    if (!det.open) return;
+    var stepsDiv = det.querySelector('.run-steps');
+    if (!stepsDiv || stepsDiv.getAttribute('data-loaded') === '1') return;
+    stepsDiv.setAttribute('data-loaded', '1');
+    var runId = det.getAttribute('data-run-id');
+    var ticketId = det.getAttribute('data-ticket-id');
+    try {
+        var steps = await api('tickets/' + ticketId + '/runs/' + runId + '/steps');
+        if (!steps || steps.length === 0) {
+            stepsDiv.innerHTML = '<div style="color:var(--subtext);font-size:0.85em;font-style:italic">No individual steps recorded for this run.</div>';
+            return;
+        }
+        var html = '<div style="display:flex;flex-direction:column;gap:4px">';
+        // Step pipeline visualization: agent1 → agent2 → agent3
+        html += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;flex-wrap:wrap">';
+        steps.forEach(function(s, idx) {
+            var sColor = s.status === 'completed' ? 'var(--green)' : s.status === 'review_flagged' ? '#f59e0b' : s.status === 'failed' ? 'var(--red)' : 'var(--blue)';
+            html += '<span style="background:' + sColor + ';color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em;font-weight:600">' + esc(s.agent_name) + '</span>';
+            if (idx < steps.length - 1) html += '<span style="color:var(--overlay);font-size:0.75em">&rarr;</span>';
+        });
+        html += '</div>';
+        // Individual step details
+        steps.forEach(function(s) {
+            var sColor = s.status === 'completed' ? 'var(--green)' : s.status === 'review_flagged' ? '#f59e0b' : s.status === 'failed' ? 'var(--red)' : 'var(--blue)';
+            html += '<details style="background:var(--bg2);border-radius:4px;padding:6px 10px;border-left:2px solid ' + sColor + '">';
+            html += '<summary style="cursor:pointer;font-size:0.85em;display:flex;align-items:center;gap:6px">';
+            html += '<span style="font-weight:600">' + s.step_number + '. ' + esc(s.agent_name) + '</span>';
+            if (s.deliverable_type) html += '<span style="color:var(--subtext);font-size:0.8em">(' + esc(s.deliverable_type) + ')</span>';
+            html += '<span style="background:' + sColor + ';color:#fff;padding:0 5px;border-radius:3px;font-size:0.75em">' + esc(s.status) + '</span>';
+            if (s.duration_ms) html += '<span style="color:var(--overlay);font-size:0.8em;margin-left:auto">' + (s.duration_ms / 1000).toFixed(1) + 's</span>';
+            if (s.tokens_used) html += '<span style="color:var(--overlay);font-size:0.8em">' + s.tokens_used + ' tok</span>';
+            html += '</summary>';
+            if (s.response) html += '<pre style="margin-top:4px;max-height:150px;overflow:auto;font-size:0.8em;background:var(--bg);padding:6px;border-radius:4px;white-space:pre-wrap">' + esc(s.response.substring(0, 1000)) + (s.response.length > 1000 ? '...' : '') + '</pre>';
+            if (s.started_at) html += '<div style="color:var(--subtext);font-size:0.75em;margin-top:2px">Started: ' + esc(s.started_at) + (s.completed_at ? ' | Completed: ' + esc(s.completed_at) : '') + '</div>';
+            html += '</details>';
+        });
+        html += '</div>';
+        stepsDiv.innerHTML = html;
+    } catch(err) {
+        stepsDiv.innerHTML = '<div style="color:var(--red);font-size:0.85em">Failed to load steps</div>';
+    }
+}, true);
 
 async function updateTicketStatus(id, status) {
     await api('tickets/' + id, { method: 'PUT', body: { status } });
@@ -2060,16 +2222,23 @@ async function sendTicketReply(id) {
 }
 
 async function createTicket() {
-    const title = document.getElementById('newTicketTitle').value.trim();
+    var title = document.getElementById('newTicketTitle').value.trim();
     if (!title) return;
-    await api('tickets', { method: 'POST', body: {
-        title,
+    var opType = document.getElementById('newTicketOpType').value;
+    var ac = document.getElementById('newTicketAC').value.trim();
+    var body = {
+        title: title,
         body: document.getElementById('newTicketBody').value,
         priority: document.getElementById('newTicketPrio').value,
-    }});
+    };
+    if (opType) body.operation_type = opType;
+    if (ac) body.acceptance_criteria = ac;
+    await api('tickets', { method: 'POST', body: body });
     closeModal('ticketModal');
     document.getElementById('newTicketTitle').value = '';
     document.getElementById('newTicketBody').value = '';
+    document.getElementById('newTicketAC').value = '';
+    document.getElementById('newTicketOpType').value = '';
     loadTickets();
 }
 
@@ -2090,12 +2259,13 @@ let wizConfig = {
 var wizEditPlanId = null; // Set when editing an existing plan (null = creating new)
 
 // Adaptive step logic: which steps to show based on scale + focus
+// v5.0: Step 1 is now Plan Files (always shown). All old steps shifted +1.
 function getActiveSteps() {
     const s = wizConfig.scale, f = wizConfig.focus;
-    if (s === 'MVP' && f === 'Backend') return [0,1,2,3,8,9,10]; // skip layout/theme/pages, keep features/tech
-    if (s === 'MVP') return [0,1,2,3,4,5,6,8,9,10]; // skip roles, keep pages/features + tech
-    if (s === 'Small') return [0,1,2,3,4,5,6,7,8,9,10]; // all steps including tech
-    return [0,1,2,3,4,5,6,7,8,9,10]; // Full Stack / Large+ = all steps
+    if (s === 'MVP' && f === 'Backend') return [0,1,2,3,4,9,10,11]; // skip layout/theme/pages, keep features/tech
+    if (s === 'MVP') return [0,1,2,3,4,5,6,7,9,10,11]; // skip roles, keep pages/features + tech
+    if (s === 'Small') return [0,1,2,3,4,5,6,7,8,9,10,11]; // all steps including tech
+    return [0,1,2,3,4,5,6,7,8,9,10,11]; // Full Stack / Large+ = all steps
 }
 
 function renderWizardDots() {
@@ -2315,6 +2485,401 @@ document.querySelectorAll('#priorityOptions .option-btn').forEach(btn => {
 document.querySelectorAll('#pagesOptions .option-btn, #rolesOptions .option-btn, #featuresOptions .option-btn').forEach(btn => {
     btn.addEventListener('click', () => { btn.classList.toggle('selected'); syncWizConfig(); updateImpact(); });
 });
+// ==================== PLAN FILES (v5.0) ====================
+var pendingPlanFiles = []; // Files staged before plan creation
+
+function handlePlanFileDrop(e) {
+    e.preventDefault();
+    e.currentTarget.style.borderColor = 'var(--surface2)';
+    var files = e.dataTransfer.files;
+    if (files && files.length > 0) handlePlanFileSelect(files);
+}
+
+function handlePlanFileSelect(files) {
+    if (!files || files.length === 0) return;
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (['md', 'txt', 'doc', 'docx', 'markdown'].indexOf(ext) < 0) {
+            showNotification('Unsupported file type: ' + file.name + '. Use .md, .txt, or .doc files.', 'warning');
+            continue;
+        }
+        (function(f) {
+            var reader = new FileReader();
+            reader.onload = function(ev) {
+                var content = ev.target.result;
+                pendingPlanFiles.push({ filename: f.name, content: content, category: 'general', size: f.size });
+                renderPlanFilesPreview();
+            };
+            reader.readAsText(f);
+        })(file);
+    }
+}
+
+function renderPlanFilesPreview() {
+    var el = document.getElementById('planFilesPreview');
+    if (!el) return;
+    if (pendingPlanFiles.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+    el.innerHTML = pendingPlanFiles.map(function(f, i) {
+        var sizeStr = f.size < 1024 ? f.size + ' B' : (f.size / 1024).toFixed(1) + ' KB';
+        var ext = (f.filename.split('.').pop() || '').toLowerCase();
+        var icon = ext === 'md' ? '&#x1F4DD;' : '&#x1F4C4;';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface0);border-radius:6px;margin-bottom:4px">' +
+            '<span>' + icon + '</span>' +
+            '<div style="flex:1">' +
+            '<div style="font-weight:500;font-size:0.9em;color:var(--text)">' + esc(f.filename) + '</div>' +
+            '<div style="font-size:0.75em;color:var(--overlay)">' + sizeStr + ' — ' + esc(f.content.substring(0, 80).replace(/\\n/g, ' ')) + '...</div>' +
+            '</div>' +
+            '<select style="font-size:0.8em;padding:2px 6px;background:var(--bg);color:var(--text);border:1px solid var(--surface2);border-radius:4px" onchange="pendingPlanFiles[' + i + '].category=this.value">' +
+            '<option value="general">General</option>' +
+            '<option value="requirements">Requirements</option>' +
+            '<option value="design">Design Spec</option>' +
+            '<option value="architecture">Architecture</option>' +
+            '<option value="features">Feature List</option>' +
+            '<option value="constraints">Constraints</option>' +
+            '</select>' +
+            '<button class="btn btn-sm" style="color:var(--red);background:none;padding:2px 6px" onclick="pendingPlanFiles.splice(' + i + ',1);renderPlanFilesPreview()">&#x2715;</button>' +
+            '</div>';
+    }).join('');
+}
+
+// Upload pending files after plan is created
+async function uploadPendingPlanFiles(planId) {
+    if (!planId || pendingPlanFiles.length === 0) return;
+    for (var i = 0; i < pendingPlanFiles.length; i++) {
+        var f = pendingPlanFiles[i];
+        try {
+            await api('plan-files', { method: 'POST', body: {
+                plan_id: planId,
+                filename: f.filename,
+                content: f.content,
+                category: f.category || 'general'
+            }});
+        } catch (e) {
+            showNotification('Failed to upload ' + f.filename + ': ' + String(e), 'error');
+        }
+    }
+    if (pendingPlanFiles.length > 0) {
+        showNotification(pendingPlanFiles.length + ' plan file(s) uploaded successfully!', 'success');
+    }
+    pendingPlanFiles = [];
+}
+
+// Render plan files panel for active plan (always visible)
+async function renderPlanFilesPanel(planId) {
+    var container = document.getElementById('planFilesPanel');
+    if (!container) return;
+    try {
+        var filesReq = api('plan-files?plan_id=' + encodeURIComponent(planId));
+        var foldersReq = api('plan-files/folders?plan_id=' + encodeURIComponent(planId));
+        var files = await filesReq;
+        var folders = [];
+        try { folders = await foldersReq; } catch(e) { /* ignore if endpoint not ready */ }
+        var fileList = Array.isArray(files) ? files : [];
+        var folderList = Array.isArray(folders) ? folders : [];
+        var linkedCount = fileList.filter(function(f) { return f.is_linked; }).length;
+
+        container.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+            '<h4 style="margin:0;color:var(--text)">&#x1F4C1; Plan Files <span class="badge badge-blue" style="font-size:0.7em">' + fileList.length + '</span>' +
+            (linkedCount > 0 ? ' <span class="badge" style="font-size:0.6em;background:rgba(166,227,161,0.15);color:var(--green)">' + linkedCount + ' linked</span>' : '') +
+            '</h4>' +
+            '<div style="display:flex;gap:4px">' +
+            '<button class="btn btn-sm btn-secondary" onclick="showAddPlanFileModal(\\'' + planId + '\\')" style="font-size:0.75em" title="Upload files">+ File</button>' +
+            '<button class="btn btn-sm btn-secondary" onclick="showLinkFolderModal(\\'' + planId + '\\')" style="font-size:0.75em" title="Link a local folder">&#x1F517; Folder</button>' +
+            (linkedCount > 0 ? '<button class="btn btn-sm btn-primary" onclick="syncAllLinkedFiles(\\'' + planId + '\\')" style="font-size:0.75em" title="Sync all linked files from disk">&#x1F504; Sync</button>' : '') +
+            '<button class="btn btn-sm" onclick="showPlanFileChanges(\\'' + planId + '\\')" style="font-size:0.75em;background:none;color:var(--overlay)" title="View change history">&#x1F4CB;</button>' +
+            '</div></div>';
+
+        // Show linked folders
+        if (folderList.length > 0) {
+            container.innerHTML += '<div style="margin-bottom:6px;padding:4px 8px;background:rgba(166,227,161,0.08);border-radius:4px;border-left:3px solid var(--green)">' +
+                folderList.map(function(fdr) {
+                    return '<div style="display:flex;align-items:center;gap:4px;font-size:0.78em;padding:2px 0">' +
+                        '<span>&#x1F4C2;</span>' +
+                        '<span style="flex:1;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(fdr.folder_path) + '">' + esc(fdr.folder_path) + '</span>' +
+                        '<span style="color:var(--overlay);font-size:0.85em">' + esc(fdr.file_patterns || '*.md,*.txt') + '</span>' +
+                        '<button class="btn btn-sm" style="color:var(--red);background:none;padding:0 3px;font-size:0.8em" onclick="unlinkFolder(\\'' + fdr.id + '\\',\\'' + planId + '\\')">&#x2715;</button>' +
+                        '</div>';
+                }).join('') +
+                '</div>';
+        }
+
+        if (fileList.length === 0) {
+            container.innerHTML += '<div style="text-align:center;padding:12px;color:var(--overlay);font-size:0.85em">No reference documents yet.<br>Upload files or link a folder to guide the AI agents.</div>';
+            return;
+        }
+
+        container.innerHTML += fileList.map(function(f) {
+            var ext = ((f.filename || '').split('.').pop() || '').toLowerCase();
+            var icon = ext === 'md' ? '&#x1F4DD;' : '&#x1F4C4;';
+            var catBadge = f.category !== 'general' ? '<span class="badge" style="font-size:0.65em;padding:1px 4px;background:var(--surface2);color:var(--subtext)">' + esc(f.category) + '</span>' : '';
+            var versionBadge = (f.version || 1) > 1 ? '<span class="badge" style="font-size:0.6em;padding:1px 3px;background:rgba(203,166,247,0.15);color:var(--mauve)">v' + f.version + '</span>' : '';
+            var linkedIcon = f.is_linked ? '<span title="Linked to local file" style="font-size:0.7em">&#x1F517;</span>' : '';
+            return '<div class="plan-file-item" style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--surface0);border-radius:6px;margin-bottom:4px;cursor:pointer" onclick="viewPlanFile(\\'' + f.id + '\\')">' +
+                '<span>' + icon + '</span>' +
+                '<div style="flex:1;min-width:0">' +
+                '<div style="font-weight:500;font-size:0.85em;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.filename) + ' ' + linkedIcon + '</div>' +
+                '<div style="display:flex;gap:3px;font-size:0.72em;color:var(--overlay)">' + catBadge + versionBadge + '</div>' +
+                '</div>' +
+                (f.is_linked ? '<button class="btn btn-sm" style="background:none;padding:1px 4px;font-size:0.75em;color:var(--blue)" onclick="event.stopPropagation();syncLinkedFile(\\'' + f.id + '\\',\\'' + planId + '\\')" title="Sync from disk">&#x1F504;</button>' : '') +
+                '<button class="btn btn-sm" style="color:var(--red);background:none;padding:1px 4px;font-size:0.75em" onclick="event.stopPropagation();deletePlanFileConfirm(\\'' + f.id + '\\',\\'' + esc(f.filename) + '\\')">&#x2715;</button>' +
+                '</div>';
+        }).join('');
+    } catch (e) {
+        container.innerHTML = '<div style="color:var(--red);font-size:0.85em">Failed to load plan files</div>';
+    }
+}
+
+function showAddPlanFileModal(planId) {
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.multiple = true;
+    fileInput.accept = '.md,.txt,.doc,.docx,.markdown';
+    fileInput.onchange = function() {
+        if (!fileInput.files || fileInput.files.length === 0) return;
+        var uploaded = 0;
+        var total = fileInput.files.length;
+        for (var i = 0; i < total; i++) {
+            (function(file) {
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    api('plan-files', { method: 'POST', body: {
+                        plan_id: planId,
+                        filename: file.name,
+                        content: ev.target.result,
+                        category: 'general'
+                    }}).then(function() {
+                        uploaded++;
+                        if (uploaded >= total) {
+                            showNotification(uploaded + ' file(s) added!', 'success');
+                            renderPlanFilesPanel(planId);
+                        }
+                    }).catch(function(e) {
+                        showNotification('Upload failed: ' + String(e), 'error');
+                    });
+                };
+                reader.readAsText(file);
+            })(fileInput.files[i]);
+        }
+    };
+    fileInput.click();
+}
+
+// Link a local folder to the plan
+function showLinkFolderModal(planId) {
+    var modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = '<div class="modal-content" style="max-width:500px">' +
+        '<h3>&#x1F517; Link Local Folder</h3>' +
+        '<p style="font-size:0.85em;color:var(--subtext);margin-bottom:12px">Link a folder on your computer. Files matching the patterns will be automatically imported and synced. You can edit them with your own tools — use the Sync button to pull changes.</p>' +
+        '<label style="font-size:0.85em;color:var(--text);margin-bottom:4px;display:block">Folder Path:</label>' +
+        '<input id="linkFolderPath" type="text" style="width:100%;padding:8px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px;font-size:0.9em;margin-bottom:8px" placeholder="C:\\\\path\\\\to\\\\your\\\\plan-docs or /home/user/plan-docs">' +
+        '<label style="font-size:0.85em;color:var(--text);margin-bottom:4px;display:block">File Patterns (comma-separated):</label>' +
+        '<input id="linkFolderPatterns" type="text" value="*.md,*.txt,*.doc,*.docx" style="width:100%;padding:8px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px;font-size:0.9em;margin-bottom:12px">' +
+        '<div class="btn-row">' +
+        '<button class="btn btn-primary" onclick="linkFolderSubmit(\\'' + planId + '\\')">Link Folder</button>' +
+        '<button class="btn btn-secondary" onclick="this.closest(\\'.modal\\').remove()">Cancel</button>' +
+        '</div></div>';
+    document.body.appendChild(modal);
+    setTimeout(function() { document.getElementById('linkFolderPath').focus(); }, 100);
+}
+
+async function linkFolderSubmit(planId) {
+    var folderPath = document.getElementById('linkFolderPath').value.trim();
+    var patterns = document.getElementById('linkFolderPatterns').value.trim();
+    if (!folderPath) { showNotification('Please enter a folder path', 'warning'); return; }
+    try {
+        await api('plan-files/folders', { method: 'POST', body: { plan_id: planId, folder_path: folderPath, file_patterns: patterns } });
+        document.querySelector('.modal').remove();
+        showNotification('Folder linked! Scanning for files...', 'info');
+        // Immediately scan the folder
+        var result = await api('plan-files/folders/scan', { method: 'POST', body: { plan_id: planId } });
+        var msg = (result.files_added || 0) + ' file(s) imported';
+        if (result.files_updated > 0) msg += ', ' + result.files_updated + ' updated';
+        showNotification(msg, 'success');
+        renderPlanFilesPanel(planId);
+    } catch (e) {
+        showNotification('Failed to link folder: ' + String(e), 'error');
+    }
+}
+
+// Sync a single linked file from disk
+async function syncLinkedFile(fileId, planId) {
+    try {
+        var result = await api('plan-files/sync/' + fileId, { method: 'POST' });
+        if (result.synced) {
+            showNotification('File synced (v' + (result.version || '?') + ')', 'success');
+            renderPlanFilesPanel(planId);
+        } else {
+            showNotification('No changes detected', 'info');
+        }
+    } catch (e) {
+        showNotification('Sync failed: ' + String(e), 'error');
+    }
+}
+
+// Sync all linked files (scan all folders)
+async function syncAllLinkedFiles(planId) {
+    try {
+        showNotification('Scanning linked folders...', 'info');
+        var result = await api('plan-files/folders/scan', { method: 'POST', body: { plan_id: planId } });
+        var msg = '';
+        if (result.files_added > 0) msg += result.files_added + ' new file(s)';
+        if (result.files_updated > 0) msg += (msg ? ', ' : '') + result.files_updated + ' file(s) updated';
+        if (!msg) msg = 'All files up to date';
+        showNotification(msg, result.files_updated > 0 || result.files_added > 0 ? 'success' : 'info');
+        renderPlanFilesPanel(planId);
+    } catch (e) {
+        showNotification('Sync failed: ' + String(e), 'error');
+    }
+}
+
+// Unlink a folder
+async function unlinkFolder(folderId, planId) {
+    if (!confirm('Unlink this folder? Existing files from this folder will remain but won\\'t auto-sync.')) return;
+    try {
+        await api('plan-files/folders/' + folderId, { method: 'DELETE' });
+        showNotification('Folder unlinked.', 'info');
+        renderPlanFilesPanel(planId);
+    } catch (e) {
+        showNotification('Failed to unlink: ' + String(e), 'error');
+    }
+}
+
+// View/Edit a plan file
+function viewPlanFile(fileId) {
+    api('plan-files/' + fileId).then(function(file) {
+        var content = file.content || '';
+        var isLinked = file.is_linked ? true : false;
+        var vLabel = 'v' + (file.version || 1);
+        var sourceInfo = file.source_path ? '<div style="font-size:0.75em;color:var(--overlay);margin-top:4px;word-break:break-all">&#x1F517; ' + esc(file.source_path) + '</div>' : '';
+        var modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'flex';
+        modal.innerHTML = '<div class="modal-content" style="max-width:750px;max-height:85vh;overflow-y:auto">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+            '<h3 style="margin:0;flex:1">' + esc(file.filename) + '</h3>' +
+            '<span class="badge badge-blue" style="font-size:0.7em">' + esc(file.category || 'general') + '</span>' +
+            '<span class="badge" style="font-size:0.65em;background:rgba(203,166,247,0.15);color:var(--mauve)">' + vLabel + '</span>' +
+            (isLinked ? '<span class="badge" style="font-size:0.65em;background:rgba(166,227,161,0.15);color:var(--green)">linked</span>' : '') +
+            '</div>' +
+            sourceInfo +
+            '<div id="pfViewContent" style="white-space:pre-wrap;font-family:monospace;font-size:0.85em;padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--surface2);max-height:45vh;overflow-y:auto;color:var(--text)">' + esc(content) + '</div>' +
+            '<textarea id="pfEditContent" style="display:none;width:100%;min-height:250px;padding:12px;background:var(--bg);color:var(--text);border:1px solid var(--surface2);border-radius:6px;font-family:monospace;font-size:0.85em;resize:vertical"></textarea>' +
+            '<div class="btn-row" style="margin-top:12px;flex-wrap:wrap">' +
+            '<select id="pfCategorySelect" style="font-size:0.85em;padding:4px 8px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:4px">' +
+            '<option value="general"' + (file.category === 'general' ? ' selected' : '') + '>General</option>' +
+            '<option value="requirements"' + (file.category === 'requirements' ? ' selected' : '') + '>Requirements</option>' +
+            '<option value="design"' + (file.category === 'design' ? ' selected' : '') + '>Design Spec</option>' +
+            '<option value="architecture"' + (file.category === 'architecture' ? ' selected' : '') + '>Architecture</option>' +
+            '<option value="features"' + (file.category === 'features' ? ' selected' : '') + '>Feature List</option>' +
+            '<option value="constraints"' + (file.category === 'constraints' ? ' selected' : '') + '>Constraints</option>' +
+            '</select>' +
+            '<button class="btn btn-sm btn-primary" onclick="updatePlanFileCategory(\\'' + fileId + '\\',document.getElementById(\\'pfCategorySelect\\').value);this.closest(\\'.modal\\').remove()">Save Category</button>' +
+            '<button id="pfEditBtn" class="btn btn-sm btn-secondary" onclick="togglePlanFileEdit(\\'' + fileId + '\\')">&#x270F; Edit</button>' +
+            '<button id="pfSaveBtn" class="btn btn-sm btn-primary" style="display:none" onclick="savePlanFileContent(\\'' + fileId + '\\')">&#x1F4BE; Save Content</button>' +
+            (isLinked ? '<button class="btn btn-sm btn-secondary" onclick="syncLinkedFile(\\'' + fileId + '\\',\\'' + (file.plan_id || '') + '\\');this.closest(\\'.modal\\').remove()">&#x1F504; Sync from Disk</button>' : '') +
+            '<button class="btn btn-sm btn-secondary" onclick="this.closest(\\'.modal\\').remove()">Close</button>' +
+            '</div></div>';
+        document.body.appendChild(modal);
+    }).catch(function(e) { showNotification('Could not load file: ' + String(e), 'error'); });
+}
+
+function togglePlanFileEdit(fileId) {
+    var viewEl = document.getElementById('pfViewContent');
+    var editEl = document.getElementById('pfEditContent');
+    var editBtn = document.getElementById('pfEditBtn');
+    var saveBtn = document.getElementById('pfSaveBtn');
+    if (editEl.style.display === 'none') {
+        editEl.value = viewEl.textContent;
+        editEl.style.display = '';
+        viewEl.style.display = 'none';
+        editBtn.textContent = 'Cancel Edit';
+        saveBtn.style.display = '';
+    } else {
+        editEl.style.display = 'none';
+        viewEl.style.display = '';
+        editBtn.innerHTML = '&#x270F; Edit';
+        saveBtn.style.display = 'none';
+    }
+}
+
+async function savePlanFileContent(fileId) {
+    var editEl = document.getElementById('pfEditContent');
+    var newContent = editEl.value;
+    try {
+        var updated = await api('plan-files/' + fileId, { method: 'PUT', body: { content: newContent } });
+        showNotification('Content saved! ' + (updated.version > 1 ? '(v' + updated.version + ')' : ''), 'success');
+        if (activePlanId) renderPlanFilesPanel(activePlanId);
+        // Close the modal
+        var modal = editEl.closest('.modal');
+        if (modal) modal.remove();
+    } catch (e) {
+        showNotification('Save failed: ' + String(e), 'error');
+    }
+}
+
+function updatePlanFileCategory(fileId, category) {
+    api('plan-files/' + fileId, { method: 'PUT', body: { category: category } }).then(function() {
+        showNotification('Category updated!', 'success');
+        if (activePlanId) renderPlanFilesPanel(activePlanId);
+    });
+}
+
+function deletePlanFileConfirm(fileId, filename) {
+    if (confirm('Delete plan file "' + filename + '"? This cannot be undone.')) {
+        api('plan-files/' + fileId, { method: 'DELETE' }).then(function() {
+            showNotification('File deleted.', 'info');
+            if (activePlanId) renderPlanFilesPanel(activePlanId);
+        });
+    }
+}
+
+// Show change history for plan files
+async function showPlanFileChanges(planId) {
+    try {
+        var changes = await api('plan-files/changes?plan_id=' + encodeURIComponent(planId));
+        var changeList = Array.isArray(changes) ? changes : [];
+        var modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'flex';
+        if (changeList.length === 0) {
+            modal.innerHTML = '<div class="modal-content" style="max-width:500px">' +
+                '<h3>&#x1F4CB; Plan File Changes</h3>' +
+                '<div style="text-align:center;padding:20px;color:var(--overlay)">No changes recorded yet.</div>' +
+                '<div class="btn-row"><button class="btn btn-secondary" onclick="this.closest(\\'.modal\\').remove()">Close</button></div>' +
+                '</div>';
+        } else {
+            modal.innerHTML = '<div class="modal-content" style="max-width:600px;max-height:70vh;overflow-y:auto">' +
+                '<h3>&#x1F4CB; Plan File Changes <span class="badge badge-blue" style="font-size:0.7em">' + changeList.length + '</span></h3>' +
+                '<div style="display:flex;flex-direction:column;gap:6px">' +
+                changeList.map(function(c) {
+                    var affected = [];
+                    try { affected = JSON.parse(c.affected_ticket_ids || '[]'); } catch(e) {}
+                    return '<div style="padding:8px;background:var(--surface0);border-radius:6px;border-left:3px solid ' + (c.change_type === 'update' ? 'var(--blue)' : 'var(--green)') + '">' +
+                        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                        '<span style="font-weight:500;font-size:0.85em;color:var(--text)">' + esc(c.filename || 'Unknown file') + '</span>' +
+                        '<span class="badge" style="font-size:0.65em;background:rgba(203,166,247,0.15);color:var(--mauve)">v' + c.version + '</span>' +
+                        '</div>' +
+                        '<div style="font-size:0.78em;color:var(--subtext);margin-top:2px">' + esc(c.change_type) + ' &bull; ' + esc(c.created_at || '') + '</div>' +
+                        (c.diff_summary ? '<div style="font-size:0.78em;color:var(--overlay);margin-top:2px">' + esc(c.diff_summary) + '</div>' : '') +
+                        (affected.length > 0 ? '<div style="font-size:0.72em;color:var(--yellow);margin-top:2px">' + affected.length + ' ticket(s) may be affected</div>' : '') +
+                        '</div>';
+                }).join('') +
+                '</div>' +
+                '<div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="this.closest(\\'.modal\\').remove()">Close</button></div>' +
+                '</div>';
+        }
+        document.body.appendChild(modal);
+    } catch (e) {
+        showNotification('Failed to load change history: ' + String(e), 'error');
+    }
+}
+
 // Add custom page to pages list
 function addCustomPage() {
     var input = document.getElementById('wizCustomPage');
@@ -2536,9 +3101,14 @@ async function wizGenerate() {
         customColors: wizConfig.customColors || null
     };
     try {
+        // Include plan file contents in the generation request so the LLM can reference them
+        var planFileContents = pendingPlanFiles.map(function(pf) {
+            return '--- ' + pf.filename + ' (' + (pf.category || 'general') + ') ---\\n' + pf.content;
+        }).join('\\n\\n');
         const data = await api('plans/generate', { method: 'POST', body: {
             name, description: desc, scale: wizConfig.scale, focus: wizConfig.focus,
-            priorities: wizConfig.priorities, design
+            priorities: wizConfig.priorities, design,
+            plan_file_context: planFileContents || ''
         }});
         if (data.plan) {
             if (data.taskCount > 0) {
@@ -2558,6 +3128,10 @@ async function wizGenerate() {
                     '</div>' +
                     (data.raw_response ? '<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--subtext);font-size:0.85em">Show AI Response</summary><pre style="white-space:pre-wrap;color:var(--subtext);margin-top:4px;font-size:0.85em;max-height:200px;overflow:auto">' + esc(data.raw_response) + '</pre></details>' : '') +
                     '</div>';
+            }
+            // Upload any pending plan files before opening designer
+            if (pendingPlanFiles.length > 0) {
+                await uploadPendingPlanFiles(data.plan.id);
             }
             await openPlanDesigner(data.plan.id, data.plan.name, design);
             await loadPlans();
@@ -2670,15 +3244,23 @@ async function wizQuick() {
             aiLevel: wizConfig.aiLevel,
             customColors: wizConfig.customColors || null
         };
+        var qPlanFileContents = pendingPlanFiles.map(function(pf) {
+            return '--- ' + pf.filename + ' (' + (pf.category || 'general') + ') ---\\n' + pf.content;
+        }).join('\\n\\n');
         const data = await api('plans/generate', { method: 'POST', body: {
             name, description: desc, scale: wizConfig.scale, focus: wizConfig.focus,
-            priorities: wizConfig.priorities, design
+            priorities: wizConfig.priorities, design,
+            plan_file_context: qPlanFileContents || ''
         }});
         if (data.plan) {
             if (data.taskCount > 0) {
                 out.innerHTML = '<div class="detail-panel" style="color:var(--green)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created with ' + data.taskCount + ' tasks.</div>';
             } else {
                 out.innerHTML = '<div class="detail-panel" style="color:var(--yellow)">Plan \\u201c' + esc(data.plan.name) + '\\u201d created. Add tasks manually in the designer.</div>';
+            }
+            // Upload any pending plan files before opening designer
+            if (pendingPlanFiles.length > 0) {
+                await uploadPendingPlanFiles(data.plan.id);
             }
             await openPlanDesigner(data.plan.id, data.plan.name, design);
             await loadPlans();
@@ -3079,7 +3661,11 @@ async function loadPlans() {
             '</div></div>' +
             '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">' +
             statusBadge(active.status) + ' ' + taskBadge + ' ' + designBadge + ' ' + scaleBadge + ' ' + focusBadge +
-            '</div></div>';
+            '</div></div>' +
+            '<div id="planFilesPanel" class="card" style="padding:12px;margin-top:8px"></div>';
+
+        // Render plan files panel for the active plan
+        renderPlanFilesPanel(active.id);
 
         // Show "all plans" and "new plan" buttons
         if (showAllBtn) showAllBtn.style.display = plans.length > 1 ? '' : 'none';
@@ -3268,16 +3854,55 @@ async function loadAgents() {
 }
 
 // ==================== SYSTEM ====================
-async function loadAudit() {
+var auditPage = 1;
+var auditAgent = '';
+async function loadAudit(page, agent) {
+    if (page !== undefined) auditPage = page;
+    if (agent !== undefined) auditAgent = agent;
     try {
-        const result = await api('audit');
-        const log = Array.isArray(result) ? result : [];
-        document.getElementById('sysAudit').innerHTML = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">' +
-            log.map(e =>
-                '<div class="audit-entry"><span class="audit-agent">' + esc(e.agent) + '</span>: ' + esc(e.action) + ' — ' + esc(e.detail) +
-                '<div class="audit-time">' + esc(e.created_at) + '</div></div>'
-            ).join('') + (log.length === 0 ? '<div class="empty">No audit entries</div>' : '') +
+        var qs = 'audit?page=' + auditPage + '&limit=25';
+        if (auditAgent) qs += '&agent=' + encodeURIComponent(auditAgent);
+        var result = await api(qs);
+        var log = result.data || (Array.isArray(result) ? result : []);
+        var total = result.total || log.length;
+        var totalPages = result.totalPages || 1;
+        var currentPage = result.page || auditPage;
+
+        var filterHtml = '<div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)">' +
+            '<select onchange="loadAudit(1, this.value)" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85em">' +
+            '<option value="">All agents</option>' +
+            '<option value="boss-ai"' + (auditAgent === 'boss-ai' ? ' selected' : '') + '>Boss AI</option>' +
+            '<option value="ticket-processor"' + (auditAgent === 'ticket-processor' ? ' selected' : '') + '>Ticket Processor</option>' +
+            '<option value="orchestrator"' + (auditAgent === 'orchestrator' ? ' selected' : '') + '>Orchestrator</option>' +
+            '<option value="review-agent"' + (auditAgent === 'review-agent' ? ' selected' : '') + '>Review Agent</option>' +
+            '</select>' +
+            '<span style="color:var(--overlay);font-size:0.85em">' + total + ' entries</span>' +
             '</div>';
+
+        var entriesHtml = log.map(function(e) {
+            return '<div class="audit-entry"><span class="audit-agent">' + esc(e.agent) + '</span>: ' +
+                esc(e.action) + ' — ' + esc(e.detail || '(empty)') +
+                '<div class="audit-time">' + esc(e.created_at) + '</div></div>';
+        }).join('');
+
+        var paginationHtml = '';
+        if (totalPages > 1) {
+            paginationHtml = '<div style="display:flex;gap:8px;align-items:center;justify-content:center;padding:10px;border-top:1px solid var(--border)">';
+            if (currentPage > 1) {
+                paginationHtml += '<button class="btn btn-sm btn-secondary" onclick="loadAudit(' + (currentPage - 1) + ')">Prev</button>';
+            }
+            paginationHtml += '<span style="color:var(--overlay);font-size:0.85em">Page ' + currentPage + ' of ' + totalPages + '</span>';
+            if (currentPage < totalPages) {
+                paginationHtml += '<button class="btn btn-sm btn-secondary" onclick="loadAudit(' + (currentPage + 1) + ')">Next</button>';
+            }
+            paginationHtml += '</div>';
+        }
+
+        document.getElementById('sysAudit').innerHTML =
+            '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">' +
+            filterHtml + entriesHtml +
+            (log.length === 0 ? '<div class="empty">No audit entries</div>' : '') +
+            paginationHtml + '</div>';
     } catch (err) {
         document.getElementById('sysAudit').innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
     }
@@ -4312,50 +4937,210 @@ function onCanvasResizeEnd() {
     }
 }
 
-// ==================== CODING CONVERSATION ====================
-let codingSessions = [];
-let currentSessionId = null;
-let codingMessages = [];
+// ==================== CODING WORKSTATION (v5.0) ====================
+var codingSessions = [];
+var currentSessionId = null;
+var codingMessages = [];
+var currentCodingTicket = null;
+var codingAgentMode = 'planning'; // planning | ask_agent | coding
 
+// v5.0: Load coding workstation — called when user clicks Coding tab
 async function loadCodingSessions() {
-    const result = await api('coding/sessions');
+    // Load sessions
+    var result = await api('coding/sessions');
     codingSessions = Array.isArray(result) ? result : [];
-    const list = document.getElementById('sessionList');
-    list.innerHTML = codingSessions.map(s =>
-        '<div class="session-item' + (s.id === currentSessionId ? ' active' : '') + '" onclick="openCodingSession(\\'' + s.id + '\\')">' +
-        '<div class="session-name">' + esc(s.name) + '</div>' +
-        '<div class="session-meta">' + esc(s.status) + ' — ' + esc(s.updated_at || '') + '</div></div>'
-    ).join('') || '<div style="padding:8px;font-size:0.8em;color:var(--subtext)">No sessions yet</div>';
+    var list = document.getElementById('sessionList');
+    var sessionCount = document.getElementById('codingSessionCount');
+    if (sessionCount) sessionCount.textContent = '(' + codingSessions.length + ')';
+    list.innerHTML = codingSessions.map(function(s) {
+        return '<div class="session-item' + (s.id === currentSessionId ? ' active' : '') + '" onclick="openCodingSession(\\'' + s.id + '\\')">' +
+            '<div class="session-name">' + esc(s.name) + '</div>' +
+            '<div class="session-meta">' + esc(s.status) + ' — ' + formatTime(s.updated_at || s.created_at || '') + '</div></div>';
+    }).join('') || '<div style="padding:12px;font-size:0.82em;color:var(--overlay);text-align:center">No sessions yet.<br>Click <strong>Generate Prompt</strong> to start.</div>';
+
+    // Load coding workstation status
+    await loadCodingStatus();
 }
 
-async function newCodingSession() {
-    const name = prompt('Session name:', 'Coding Session');
-    if (!name) return;
-    const planId = document.getElementById('designerPlanSelect')?.value || null;
-    const session = await api('coding/sessions', { method: 'POST', body: { name, plan_id: planId } });
-    currentSessionId = session.id;
-    await loadCodingSessions();
-    await loadCodingMessages();
+// v5.0: Load the coding workstation status (queue count, active ticket, questions)
+async function loadCodingStatus() {
+    try {
+        var status = await api('coding/status');
+        var queueEl = document.getElementById('codingQueueCount');
+        var questEl = document.getElementById('codingQuestionCount');
+        if (queueEl) queueEl.textContent = 'Queue: ' + (status.coding_queue_count || 0);
+        if (questEl) {
+            questEl.textContent = 'Questions: ' + (status.pending_questions || 0);
+            questEl.style.color = status.pending_questions > 0 ? 'var(--red)' : 'var(--overlay)';
+        }
+        // Show pending badge
+        var pendingBadge = document.getElementById('codingPendingBadge');
+        if (pendingBadge) {
+            var pCount = status.pending_questions || 0;
+            if (pCount > 0) {
+                pendingBadge.style.display = '';
+                pendingBadge.textContent = pCount;
+            } else {
+                pendingBadge.style.display = 'none';
+            }
+        }
+        // If a ticket is already active, load its info
+        if (status.next_ticket && !currentCodingTicket) {
+            currentCodingTicket = status.next_ticket;
+            updateCodingTicketInfo(status.next_ticket);
+        }
+    } catch (e) { /* ignore status errors */ }
 }
 
-async function openCodingSession(id) {
-    currentSessionId = id;
-    const session = codingSessions.find(s => s.id === id);
-    document.getElementById('codingSessionName').textContent = session ? session.name : 'Session';
-    await loadCodingSessions();
-    await loadCodingMessages();
-}
-
-async function loadCodingMessages() {
-    if (!currentSessionId) return;
-    const data = await api('coding/sessions/' + currentSessionId);
-    codingMessages = data.messages || [];
-    const container = document.getElementById('codingMessages');
-    if (codingMessages.length === 0) {
-        container.innerHTML = '<div class="empty">No messages yet. Type below or generate a prompt from a task.</div>';
+// v5.0: Update the ticket info panel in sidebar
+function updateCodingTicketInfo(ticket) {
+    var el = document.getElementById('codingTicketInfo');
+    var label = document.getElementById('codingTicketLabel');
+    if (!ticket) {
+        if (el) el.innerHTML = '<div style="text-align:center;padding:12px;color:var(--overlay)">No ticket selected</div>';
+        if (label) label.textContent = 'No ticket loaded';
         return;
     }
-    container.innerHTML = codingMessages.map(m => {
+    var tkNum = 'TK-' + String(ticket.ticket_number).padStart(3, '0');
+    if (label) label.textContent = tkNum + ': ' + (ticket.title || '').substring(0, 40);
+    if (el) {
+        el.innerHTML = '<div style="background:var(--surface0);padding:8px;border-radius:6px;border-left:3px solid var(--blue)">' +
+            '<div style="font-weight:600;color:var(--text);margin-bottom:4px">' + esc(tkNum) + '</div>' +
+            '<div style="font-weight:500;color:var(--text);margin-bottom:6px">' + esc(ticket.title) + '</div>' +
+            '<div style="display:flex;gap:6px;margin-bottom:6px">' + statusBadge(ticket.status) + ' ' + prioBadge(ticket.priority) + '</div>' +
+            (ticket.operation_type ? '<div style="margin-bottom:4px"><span style="color:var(--overlay)">Type:</span> ' + esc(ticket.operation_type.replace(/_/g, ' ')) + '</div>' : '') +
+            (ticket.processing_agent ? '<div style="margin-bottom:4px"><span style="color:var(--overlay)">Agent:</span> ' + esc(ticket.processing_agent) + '</div>' : '') +
+            (ticket.acceptance_criteria ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2)"><div style="color:var(--overlay);font-size:0.9em;margin-bottom:2px">Acceptance Criteria:</div><div style="color:var(--subtext);white-space:pre-wrap;font-size:0.9em">' + esc(ticket.acceptance_criteria.substring(0, 300)) + '</div></div>' : '') +
+            '</div>';
+    }
+}
+
+// v5.0: Load pending actions (questions, held tickets)
+async function loadCodingPendingActions() {
+    var el = document.getElementById('codingPendingActions');
+    if (!el) return;
+    try {
+        var questions = await api('questions/queue');
+        var qList = Array.isArray(questions) ? questions : [];
+        if (qList.length === 0) {
+            el.innerHTML = '<div style="text-align:center;padding:8px;color:var(--overlay)">All clear</div>';
+            return;
+        }
+        el.innerHTML = qList.slice(0, 5).map(function(q) {
+            return '<div style="background:var(--surface0);padding:6px 8px;border-radius:4px;margin-bottom:4px;border-left:2px solid var(--yellow)">' +
+                '<div style="font-size:0.85em;color:var(--text)">' + esc((q.question || '').substring(0, 100)) + '</div>' +
+                '<div style="font-size:0.75em;color:var(--overlay);margin-top:2px">' + esc(q.agent || 'system') + '</div></div>';
+        }).join('');
+    } catch (e) {
+        el.innerHTML = '<div style="text-align:center;padding:8px;color:var(--overlay)">Could not load</div>';
+    }
+}
+
+// v5.0: Auto-pick next ticket and generate prompt
+async function codingAutoPick() {
+    var btn = document.getElementById('codingAutoPickBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Picking...'; }
+
+    try {
+        var result = await api('coding/auto-pick', { method: 'POST' });
+        if (result.error && !result.ticket) {
+            showNotification('No tickets need coding work right now.', 'info');
+            return;
+        }
+
+        // Update current session and ticket
+        currentSessionId = result.session.id;
+        currentCodingTicket = result.ticket;
+        updateCodingTicketInfo(result.ticket);
+
+        // Update session name
+        var nameEl = document.getElementById('codingSessionName');
+        if (nameEl) nameEl.textContent = result.session.name || 'Coding Session';
+
+        // Update agent mode
+        codingAgentMode = 'planning';
+        updateCodingModeBadge();
+
+        // Refresh everything
+        await loadCodingSessions();
+        await loadCodingMessages();
+        await loadCodingPendingActions();
+
+        // Hide welcome, show area controls
+        var welcome = document.getElementById('codingWelcome');
+        if (welcome) welcome.style.display = 'none';
+        showCodingAreaControls('Planning phase — review the generated prompt, then paste into your coding agent.');
+
+        showNotification('Auto-picked TK-' + String(result.ticket.ticket_number).padStart(3, '0') + ' — prompt generated!', 'success');
+    } catch (e) {
+        showNotification('Auto-pick failed: ' + String(e), 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Generate Prompt'; }
+    }
+}
+
+// v5.0: New coding chat (clear current session, start fresh)
+async function codingNewChat() {
+    var tkLabel = currentCodingTicket ? 'TK-' + String(currentCodingTicket.ticket_number).padStart(3, '0') + ': ' : '';
+    var name = tkLabel + 'Coding Chat ' + new Date().toLocaleTimeString();
+    try {
+        var session = await api('coding/sessions', { method: 'POST', body: { name: name } });
+        currentSessionId = session.id;
+
+        var nameEl = document.getElementById('codingSessionName');
+        if (nameEl) nameEl.textContent = name;
+
+        // If we have a current ticket, add context message
+        if (currentCodingTicket) {
+            var contextMsg = '## New Coding Chat\\n\\nContinuing work on **' + tkLabel.replace(': ', '') + '**: ' + (currentCodingTicket.title || '') + '\\n\\n';
+            contextMsg += 'Previous chat encountered an issue or completed a phase. Starting fresh context.\\n\\n';
+            contextMsg += '**Instructions:** Start a new conversation in your coding agent. Copy the prompt below and paste it to begin.';
+            await api('coding/messages', { method: 'POST', body: {
+                session_id: session.id, role: 'system', content: contextMsg
+            }});
+        }
+
+        await loadCodingSessions();
+        await loadCodingMessages();
+        showNotification('New coding chat started.', 'success');
+    } catch (e) {
+        showNotification('Failed to create new chat: ' + String(e), 'error');
+    }
+}
+
+// v5.0: Open existing session
+async function openCodingSession(id) {
+    currentSessionId = id;
+    var session = codingSessions.find(function(s) { return s.id === id; });
+    var nameEl = document.getElementById('codingSessionName');
+    if (nameEl) nameEl.textContent = session ? session.name : 'Session';
+
+    // Hide welcome
+    var welcome = document.getElementById('codingWelcome');
+    if (welcome) welcome.style.display = 'none';
+
+    await loadCodingSessions();
+    await loadCodingMessages();
+}
+
+// v5.0: Load and render coding messages with infinite scroll
+async function loadCodingMessages() {
+    if (!currentSessionId) return;
+    var data = await api('coding/sessions/' + currentSessionId);
+    codingMessages = data.messages || [];
+    var container = document.getElementById('codingMessages');
+
+    // Hide welcome if we have messages
+    var welcome = document.getElementById('codingWelcome');
+    if (welcome && codingMessages.length > 0) welcome.style.display = 'none';
+
+    if (codingMessages.length === 0) {
+        if (!welcome || welcome.style.display === 'none') {
+            container.innerHTML = '<div class="empty" style="padding:40px;text-align:center;color:var(--subtext)">No messages yet. Click <strong>Generate Prompt</strong> to start.</div>';
+        }
+        return;
+    }
+    container.innerHTML = codingMessages.map(function(m) {
         var toolsHtml = '';
         var confidenceBadge = '';
         if (m.role === 'agent' && m.tool_calls && m.tool_calls !== '[]') {
@@ -4382,8 +5167,9 @@ async function loadCodingMessages() {
         }
         var contentHtml = renderMarkdown(m.content || '');
         var roleLabel = m.role === 'user' ? 'You' : m.role === 'agent' ? 'Coding Agent' : 'System';
-        var roleIcon = m.role === 'user' ? '' : m.role === 'agent' ? '' : '';
-        return '<div class="coding-msg ' + esc(m.role) + '">' +
+        var roleClass = m.role === 'system' ? 'system' : m.role === 'agent' ? 'agent' : 'user';
+        var roleIcon = m.role === 'system' ? '&#x2699;' : m.role === 'agent' ? '&#x1F916;' : '&#x1F464;';
+        return '<div class="coding-msg ' + roleClass + '">' +
             '<div class="msg-role">' + roleIcon + ' ' + roleLabel + '</div>' +
             '<div class="msg-bubble">' + contentHtml + '</div>' + toolsHtml +
             '<div class="msg-meta">' + formatTime(m.created_at) + confidenceBadge + '</div></div>';
@@ -4391,28 +5177,34 @@ async function loadCodingMessages() {
     container.scrollTop = container.scrollHeight;
 }
 
+// v5.0: Send user message to coding agent
 async function sendCodingMsg() {
-    if (!currentSessionId) return alert('Start or select a session first');
-    const input = document.getElementById('codingInput');
-    const text = input.value.trim();
+    if (!currentSessionId) {
+        // Auto-create a session
+        await codingNewChat();
+        if (!currentSessionId) return;
+    }
+    var input = document.getElementById('codingInput');
+    var text = input.value.trim();
     if (!text) return;
-    const taskId = document.getElementById('codingTaskSelect')?.value || null;
 
     // Clear input and show loading state
     input.value = '';
     input.disabled = true;
-    const sendBtn = document.getElementById('codingSendBtn');
+    var sendBtn = document.getElementById('codingSendBtn');
     if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Thinking...'; }
 
     // Show user message + loading bubble immediately
-    const container = document.getElementById('codingMessages');
-    container.insertAdjacentHTML('beforeend', '<div class="coding-msg user"><div class="msg-role"> You</div><div class="msg-bubble">' + renderMarkdown(text) + '</div><div class="msg-meta">just now</div></div>');
-    container.insertAdjacentHTML('beforeend', '<div class="coding-msg agent loading" id="loadingMsg"><div class="msg-role"> Coding Agent</div><div class="msg-bubble">Thinking...</div></div>');
+    var container = document.getElementById('codingMessages');
+    var welcome = document.getElementById('codingWelcome');
+    if (welcome) welcome.style.display = 'none';
+    container.insertAdjacentHTML('beforeend', '<div class="coding-msg user"><div class="msg-role">&#x1F464; You</div><div class="msg-bubble">' + renderMarkdown(text) + '</div><div class="msg-meta">just now</div></div>');
+    container.insertAdjacentHTML('beforeend', '<div class="coding-msg agent loading" id="loadingMsg"><div class="msg-role">&#x1F916; Coding Agent</div><div class="msg-bubble"><span class="badge-pulse" style="display:inline-block">Thinking...</span></div></div>');
     container.scrollTop = container.scrollHeight;
 
     try {
         await api('coding/process', { method: 'POST', body: {
-            session_id: currentSessionId, content: text, task_id: taskId
+            session_id: currentSessionId, content: text
         }});
         var loading = document.getElementById('loadingMsg');
         if (loading) loading.remove();
@@ -4420,36 +5212,56 @@ async function sendCodingMsg() {
     } catch (e) {
         var ld = document.getElementById('loadingMsg');
         if (ld) ld.remove();
-        container.innerHTML += '<div class="coding-msg system"><div class="msg-bubble">Error: ' + esc(String(e)) + '</div></div>';
+        container.insertAdjacentHTML('beforeend', '<div class="coding-msg system"><div class="msg-role">&#x2699; System</div><div class="msg-bubble" style="border-left:3px solid var(--red)">Error: ' + esc(String(e)) + '</div></div>');
         container.scrollTop = container.scrollHeight;
     } finally {
         input.disabled = false;
         input.focus();
-        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'User Send'; }
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
     }
 }
 
+// v5.0: Add agent response (paste coding agent reply)
 async function addAgentResponse() {
-    if (!currentSessionId) return alert('Start or select a session first');
-    const text = document.getElementById('codingInput').value.trim();
-    if (!text) return;
+    if (!currentSessionId) {
+        await codingNewChat();
+        if (!currentSessionId) return;
+    }
+    var text = document.getElementById('codingInput').value.trim();
+    if (!text) {
+        showNotification('Paste the coding agent reply first, then click Agent Reply.', 'warning');
+        return;
+    }
     await api('coding/messages', { method: 'POST', body: {
         session_id: currentSessionId, role: 'agent', content: text
     }});
     document.getElementById('codingInput').value = '';
     await loadCodingMessages();
+
+    // Check if agent indicated completion
+    var lowerText = text.toLowerCase();
+    if (lowerText.includes('completed') || lowerText.includes('done') || lowerText.includes('finished') || lowerText.includes('all tasks complete')) {
+        showCodingAreaControls('Agent reports completion — verify results, then click Done or proceed to next step.');
+        codingAgentMode = 'coding';
+        updateCodingModeBadge();
+    }
 }
 
+// v5.0: Generate prompt from a linked task (legacy support)
 async function generatePromptFromTask() {
-    if (!currentSessionId) return alert('Start or select a session first');
-    const taskId = document.getElementById('codingTaskSelect')?.value;
-    if (!taskId) return alert('Select a task first');
-
-    // Show loading state
-    var btn = document.querySelector('#page-coding .btn-secondary');
+    if (!currentSessionId) {
+        await codingNewChat();
+    }
+    var taskId = document.getElementById('codingTaskSelect')?.value;
+    if (!taskId) {
+        // Fall back to auto-pick
+        await codingAutoPick();
+        return;
+    }
+    var btn = document.getElementById('codingAutoPickBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
-    const container = document.getElementById('codingMessages');
-    container.innerHTML += '<div class="coding-msg system loading" id="promptLoading"><div class="msg-bubble">Generating prompt with local LLM...</div></div>';
+    var container = document.getElementById('codingMessages');
+    container.insertAdjacentHTML('beforeend', '<div class="coding-msg system loading" id="promptLoading"><div class="msg-role">&#x2699; System</div><div class="msg-bubble"><span class="badge-pulse" style="display:inline-block">Generating prompt with local LLM...</span></div></div>');
     container.scrollTop = container.scrollHeight;
 
     try {
@@ -4463,18 +5275,88 @@ async function generatePromptFromTask() {
     } catch (e) {
         var ld = document.getElementById('promptLoading');
         if (ld) ld.remove();
-        alert('Prompt generation failed: ' + String(e));
+        showNotification('Prompt generation failed: ' + String(e), 'error');
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = 'Generate Prompt'; }
     }
 }
 
-function copyCodingToClipboard() {
-    const text = codingMessages.map(m => '[' + m.role.toUpperCase() + ']\\n' + m.content).join('\\n\\n---\\n\\n');
-    navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('#page-coding .btn-secondary:last-child');
-        if (btn) { const old = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = old, 1500); }
-    });
+// v5.0: Update the agent mode badge
+function updateCodingModeBadge() {
+    var label = document.getElementById('codingModeLabel');
+    if (!label) return;
+    var modes = {
+        planning: { text: 'Planning', cls: 'badge-blue' },
+        ask_agent: { text: 'Ask & Agent', cls: 'badge-green' },
+        coding: { text: 'Coding', cls: 'badge-mauve' }
+    };
+    var m = modes[codingAgentMode] || modes.planning;
+    label.textContent = m.text;
+    label.className = 'badge ' + m.cls;
+}
+
+// v5.0: Show/hide area transition controls
+function showCodingAreaControls(message) {
+    var el = document.getElementById('codingAreaControls');
+    var labelEl = document.getElementById('codingAreaLabel');
+    if (el) el.style.display = 'flex';
+    if (labelEl) labelEl.textContent = message || '';
+}
+
+function hideCodingAreaControls() {
+    var el = document.getElementById('codingAreaControls');
+    if (el) el.style.display = 'none';
+}
+
+// v5.0: Area control handlers
+function codingAreaDone() {
+    // Mark current ticket as completed if we have one
+    if (currentCodingTicket) {
+        api('tickets/' + currentCodingTicket.id, {
+            method: 'PUT',
+            body: { status: 'resolved', processing_status: null, processing_agent: null }
+        }).then(function() {
+            showNotification('Ticket marked as resolved!', 'success');
+            currentCodingTicket = null;
+            updateCodingTicketInfo(null);
+            loadCodingStatus();
+            updateTabBadges();
+        }).catch(function(e) {
+            showNotification('Failed to resolve ticket: ' + String(e), 'error');
+        });
+    }
+    hideCodingAreaControls();
+    // Add completion message to chat
+    if (currentSessionId) {
+        api('coding/messages', { method: 'POST', body: {
+            session_id: currentSessionId, role: 'system',
+            content: '## Work Complete\\n\\nThis coding session is done. Click **Generate Prompt** to pick up the next ticket, or **New Coding Chat** to start fresh.'
+        }}).then(function() { loadCodingMessages(); });
+    }
+}
+
+function codingAreaNext() {
+    // Move to next step of the current ticket
+    codingAgentMode = codingAgentMode === 'planning' ? 'ask_agent' : 'coding';
+    updateCodingModeBadge();
+    hideCodingAreaControls();
+    // Add transition message
+    if (currentSessionId) {
+        var modeLabel = codingAgentMode === 'ask_agent' ? 'Ask & Agent' : 'Coding';
+        api('coding/messages', { method: 'POST', body: {
+            session_id: currentSessionId, role: 'system',
+            content: '## Moving to Stage: ' + modeLabel + '\\n\\nTransitioning to the next phase. Start a new conversation in your coding agent with the updated context.'
+        }}).then(function() { loadCodingMessages(); });
+    }
+}
+
+function codingChangeMode() {
+    // Cycle through modes
+    var modes = ['planning', 'ask_agent', 'coding'];
+    var idx = modes.indexOf(codingAgentMode);
+    codingAgentMode = modes[(idx + 1) % modes.length];
+    updateCodingModeBadge();
+    showNotification('Mode changed to: ' + codingAgentMode.replace(/_/g, ' '), 'info');
 }
 
 // ==================== SETTINGS ====================
@@ -4493,7 +5375,7 @@ function showSettingsSection(section) {
     const sections = {
         llm: () => '<div class="settings-section"><h3>LLM Configuration</h3>' +
             settingRow('API Endpoint', 'URL of the LLM server (LM Studio, Ollama, OpenAI)', '<input id="setting-llm-endpoint" value="' + esc(settingsConfig.llm?.endpoint || '') + '" onchange="updateSetting(\\'llm.endpoint\\', this.value)">', 'setting-llm-endpoint') +
-            settingRow('Model', 'Model identifier', '<input id="setting-llm-model" value="' + esc(settingsConfig.llm?.model || '') + '" onchange="updateSetting(\\'llm.model\\', this.value)">', 'setting-llm-model') +
+            settingRow('Model', 'Select which model to use', '<div style="display:flex;gap:8px;align-items:center;width:100%"><select id="setting-llm-model" style="flex:1;min-width:200px;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateSetting(\\'llm.model\\', this.value)"><option value="' + esc(settingsConfig.llm?.model || '') + '">' + esc(settingsConfig.llm?.model || 'Loading models...') + '</option></select><button class="btn btn-secondary btn-sm" onclick="refreshModelList()" title="Refresh model list" style="white-space:nowrap;padding:6px 10px">&#x21bb; Refresh</button></div>', 'setting-llm-model') +
             settingRow('Max Output Tokens', 'Maximum output response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 30000) + '" min="100" max="100000" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
             settingRow('Max Input Tokens', 'Maximum prompt input length (LM Studio limit)', '<input id="setting-llm-maxInputTokens" type="number" value="' + (settingsConfig.llm?.maxInputTokens || 4000) + '" min="500" max="32000" onchange="updateSetting(\\'llm.maxInputTokens\\', +this.value)">', 'setting-llm-maxInputTokens') +
             settingRow('Timeout (seconds)', 'Max total request time', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
@@ -4540,37 +5422,36 @@ function showSettingsSection(section) {
             '</div>',
 
         'design-quality': () => {
-            var dq = settingsConfig.designQuality || {};
             return '<div class="settings-section"><h3>Design Quality</h3>' +
-                settingRow('QA Score Threshold', 'Minimum QA score to pass (50-100)', '<input id="setting-dq-threshold" type="range" min="50" max="100" value="' + (dq.qaScoreThreshold || 80) + '" oninput="document.getElementById(\\'dq-threshold-val\\').textContent=this.value" onchange="updateSetting(\\'designQuality.qaScoreThreshold\\', +this.value)"> <span id="dq-threshold-val">' + (dq.qaScoreThreshold || 80) + '</span>', 'setting-dq-threshold') +
-                settingRow('Auto-run QA', 'Automatically run QA after design changes', '<div class="toggle-switch' + (dq.autoRunQA ? ' on' : '') + '" onclick="this.classList.toggle(\\'on\\');updateSetting(\\'designQuality.autoRunQA\\', this.classList.contains(\\'on\\'))"></div>') +
+                settingRow('QA Score Threshold', 'Minimum QA score to pass (50-100)', '<input id="setting-dq-threshold" type="range" min="50" max="100" value="' + (settingsConfig.designQaScoreThreshold ?? 80) + '" oninput="document.getElementById(\\'dq-threshold-val\\').textContent=this.value" onchange="updateSetting(\\'designQaScoreThreshold\\', +this.value)"> <span id="dq-threshold-val">' + (settingsConfig.designQaScoreThreshold ?? 80) + '</span>', 'setting-dq-threshold') +
             '</div>';
         },
 
         'ticket-processing': () => {
-            var tp = settingsConfig.ticketProcessing || {};
             return '<div class="settings-section"><h3>Ticket Processing</h3>' +
-                settingRow('Max Active Tickets', 'Maximum tickets processed simultaneously', '<input id="setting-tp-maxActive" type="number" value="' + (tp.maxActive || 5) + '" min="1" max="20" onchange="updateSetting(\\'ticketProcessing.maxActive\\', +this.value)">', 'setting-tp-maxActive') +
-                settingRow('Max Retries', 'Retry failed ticket processing', '<input id="setting-tp-maxRetries" type="number" value="' + (tp.maxRetries || 3) + '" min="0" max="10" onchange="updateSetting(\\'ticketProcessing.maxRetries\\', +this.value)">', 'setting-tp-maxRetries') +
-                settingRow('Max Clarifications', 'Max clarification rounds per ticket', '<input id="setting-tp-maxClarifications" type="number" value="' + (tp.maxClarifications || 3) + '" min="1" max="10" onchange="updateSetting(\\'ticketProcessing.maxClarifications\\', +this.value)">', 'setting-tp-maxClarifications') +
+                settingRow('Max Active Tickets', 'Maximum tickets processed simultaneously', '<input id="setting-tp-maxActive" type="number" value="' + (settingsConfig.maxActiveTickets ?? 10) + '" min="1" max="20" onchange="updateSetting(\\'maxActiveTickets\\', +this.value)">', 'setting-tp-maxActive') +
+                settingRow('Max Retries', 'Retry failed ticket processing', '<input id="setting-tp-maxRetries" type="number" value="' + (settingsConfig.maxTicketRetries ?? 3) + '" min="0" max="10" onchange="updateSetting(\\'maxTicketRetries\\', +this.value)">', 'setting-tp-maxRetries') +
+                settingRow('Max Clarification Rounds', 'Max clarification rounds per ticket', '<input id="setting-tp-maxClarifications" type="number" value="' + (settingsConfig.maxClarificationRounds ?? 5) + '" min="1" max="10" onchange="updateSetting(\\'maxClarificationRounds\\', +this.value)">', 'setting-tp-maxClarifications') +
             '</div>';
         },
 
         'boss-ai': () => {
-            var boss = settingsConfig.bossAgent || {};
+            var currentMode = settingsConfig.aiMode || 'smart';
+            var autoRunOn = settingsConfig.bossAutoRunEnabled !== false;
             return '<div class="settings-section"><h3>Boss AI Configuration</h3>' +
-                settingRow('Idle Timeout (minutes)', 'Time before boss triggers idle check', '<input id="setting-boss-idle" type="number" value="' + (boss.idleTimeout || 10) + '" min="1" max="60" onchange="updateSetting(\\'bossAgent.idleTimeout\\', +this.value)">', 'setting-boss-idle') +
-                settingRow('Stuck Phase Timeout (minutes)', 'Time before escalating stuck phases', '<input id="setting-boss-stuck" type="number" value="' + (boss.stuckPhaseTimeout || 30) + '" min="5" max="120" onchange="updateSetting(\\'bossAgent.stuckPhaseTimeout\\', +this.value)">', 'setting-boss-stuck') +
-                settingRow('Task Overload Threshold', 'Max concurrent tasks before warning', '<input id="setting-boss-overload" type="number" value="' + (boss.taskOverloadThreshold || 10) + '" min="3" max="50" onchange="updateSetting(\\'bossAgent.taskOverloadThreshold\\', +this.value)">', 'setting-boss-overload') +
-                settingRow('Escalation Threshold', 'Failures before escalating to user', '<input id="setting-boss-escalation" type="number" value="' + (boss.escalationThreshold || 3) + '" min="1" max="10" onchange="updateSetting(\\'bossAgent.escalationThreshold\\', +this.value)">', 'setting-boss-escalation') +
+                settingRow('AI Processing Mode', 'Controls how the Boss AI handles ticket processing', '<select id="setting-boss-aiMode" onchange="updateSetting(\\'aiMode\\', this.value)"><option value="manual"' + (currentMode === 'manual' ? ' selected' : '') + '>Manual — AI paused, no auto-processing</option><option value="suggest"' + (currentMode === 'suggest' ? ' selected' : '') + '>Suggest — Ask before every ticket</option><option value="hybrid"' + (currentMode === 'hybrid' ? ' selected' : '') + '>Hybrid — Auto backend, ask for frontend</option><option value="smart"' + (currentMode === 'smart' ? ' selected' : '') + '>Smart — Full auto-processing</option></select>', 'setting-boss-aiMode') +
+                settingRow('Auto-run Countdown', 'Enable Boss AI idle countdown timer between cycles', '<div class="toggle-switch' + (autoRunOn ? ' on' : '') + '" onclick="this.classList.toggle(\\'on\\');updateSetting(\\'bossAutoRunEnabled\\', this.classList.contains(\\'on\\'))"></div>') +
+                settingRow('Check Interval (minutes)', 'Time between Boss AI idle checks (countdown timer)', '<input id="setting-boss-idle" type="number" value="' + (settingsConfig.bossIdleTimeoutMinutes ?? 5) + '" min="1" max="60" onchange="updateSetting(\\'bossIdleTimeoutMinutes\\', +this.value)">', 'setting-boss-idle') +
+                settingRow('Stuck Phase Timeout (minutes)', 'Time before escalating stuck phases', '<input id="setting-boss-stuck" type="number" value="' + (settingsConfig.bossStuckPhaseMinutes ?? 30) + '" min="5" max="120" onchange="updateSetting(\\'bossStuckPhaseMinutes\\', +this.value)">', 'setting-boss-stuck') +
+                settingRow('Task Overload Threshold', 'Max pending tasks before Boss warns', '<input id="setting-boss-overload" type="number" value="' + (settingsConfig.bossTaskOverloadThreshold ?? 20) + '" min="3" max="50" onchange="updateSetting(\\'bossTaskOverloadThreshold\\', +this.value)">', 'setting-boss-overload') +
+                settingRow('Escalation Threshold', 'Escalated tickets before alerting user', '<input id="setting-boss-escalation" type="number" value="' + (settingsConfig.bossEscalationThreshold ?? 5) + '" min="1" max="10" onchange="updateSetting(\\'bossEscalationThreshold\\', +this.value)">', 'setting-boss-escalation') +
             '</div>';
         },
 
         'clarity-agent': () => {
-            var clarity = settingsConfig.clarityAgent || {};
             return '<div class="settings-section"><h3>Clarity Agent</h3>' +
-                settingRow('Auto-resolve Score', 'Minimum clarity score for automatic resolution (0-100)', '<input id="setting-clarity-autoResolve" type="number" value="' + (clarity.autoResolveScore || 85) + '" min="50" max="100" onchange="updateSetting(\\'clarityAgent.autoResolveScore\\', +this.value)">', 'setting-clarity-autoResolve') +
-                settingRow('Clarification Score', 'Below this score, request user clarification (0-100)', '<input id="setting-clarity-clarification" type="number" value="' + (clarity.clarificationScore || 60) + '" min="20" max="100" onchange="updateSetting(\\'clarityAgent.clarificationScore\\', +this.value)">', 'setting-clarity-clarification') +
+                settingRow('Auto-resolve Score', 'Minimum clarity score for automatic resolution (0-100)', '<input id="setting-clarity-autoResolve" type="number" value="' + (settingsConfig.clarityAutoResolveScore ?? 85) + '" min="50" max="100" onchange="updateSetting(\\'clarityAutoResolveScore\\', +this.value)">', 'setting-clarity-autoResolve') +
+                settingRow('Clarification Score', 'Below this score, request user clarification (0-100)', '<input id="setting-clarity-clarification" type="number" value="' + (settingsConfig.clarityClarificationScore ?? 70) + '" min="20" max="100" onchange="updateSetting(\\'clarityClarificationScore\\', +this.value)">', 'setting-clarity-clarification') +
             '</div>';
         },
 
@@ -4583,30 +5464,66 @@ function showSettingsSection(section) {
     };
 
     panel.innerHTML = (sections[section] || sections.llm)();
+
+    // v4.3: Auto-load model list when LLM section is shown
+    if (section === 'llm') {
+        setTimeout(function() { refreshModelList(); }, 100);
+    }
 }
 
 function settingRow(label, desc, control, forId) {
-    const labelTag = forId ? '<label for="' + forId + '"><strong>' + label + '</strong><span>' + desc + '</span></label>' : '<div class="setting-label"><strong>' + label + '</strong><span>' + desc + '</span></div>';
+    const labelTag = forId ? '<label for="' + forId + '" class="setting-label"><strong>' + label + '</strong><span>' + desc + '</span></label>' : '<div class="setting-label"><strong>' + label + '</strong><span>' + desc + '</span></div>';
     return '<div class="setting-row">' + labelTag + '<div class="setting-control">' + control + '</div></div>';
 }
 
 async function updateSetting(path, value) {
-    const parts = path.split('.');
-    const update = {};
-    let current = update;
-    for (let i = 0; i < parts.length - 1; i++) {
-        current[parts[i]] = { ...(settingsConfig[parts[i]] || {}) };
+    var parts = path.split('.');
+    var update = {};
+    var current = update;
+    for (var i = 0; i < parts.length - 1; i++) {
+        current[parts[i]] = Object.assign({}, settingsConfig[parts[i]] || {});
         current = current[parts[i]];
     }
     current[parts[parts.length - 1]] = value;
-    // Deep merge with existing
-    const merged = { ...settingsConfig };
-    for (const key of Object.keys(update)) {
-        merged[key] = { ...merged[key], ...update[key] };
+    // Merge with existing — handle both flat keys (primitives) and nested keys (objects)
+    var merged = Object.assign({}, settingsConfig);
+    for (var k = 0; k < Object.keys(update).length; k++) {
+        var key = Object.keys(update)[k];
+        var val = update[key];
+        if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+            merged[key] = Object.assign({}, merged[key] || {}, val);
+        } else {
+            merged[key] = val;
+        }
     }
     try {
         settingsConfig = await api('config', { method: 'PUT', body: merged });
-    } catch (e) { console.error('Settings save error:', e); }
+        // Show save confirmation toast
+        var toast = document.getElementById('settings-save-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'settings-save-toast';
+            toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#28a745;color:#fff;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;z-index:9999;opacity:0;transition:opacity 0.3s ease;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = 'Settings saved';
+        toast.style.opacity = '1';
+        setTimeout(function() { toast.style.opacity = '0'; }, 2000);
+    } catch (e) {
+        console.error('Settings save error:', e);
+        // Show error toast
+        var errToast = document.getElementById('settings-save-toast');
+        if (!errToast) {
+            errToast = document.createElement('div');
+            errToast.id = 'settings-save-toast';
+            errToast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#dc3545;color:#fff;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;z-index:9999;opacity:0;transition:opacity 0.3s ease;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+            document.body.appendChild(errToast);
+        }
+        errToast.textContent = 'Save failed — check console';
+        errToast.style.opacity = '1';
+        errToast.style.background = '#dc3545';
+        setTimeout(function() { errToast.style.opacity = '0'; }, 3000);
+    }
 }
 
 function updateAgentSetting(name, key, value) {
@@ -4627,6 +5544,75 @@ async function resetSettings() {
         settingsConfig = await api('config');
         showSettingsSection('llm');
     } catch(e) { alert('Reset failed: ' + e); }
+}
+
+// v4.3: Fetch and populate the model dropdown from LM Studio
+async function refreshModelList() {
+    var select = document.getElementById('setting-llm-model');
+    if (!select) return;
+    // Clear existing options safely using DOM methods
+    while (select.firstChild) select.removeChild(select.firstChild);
+    var loadingOpt = document.createElement('option');
+    loadingOpt.value = '';
+    loadingOpt.textContent = 'Fetching models...';
+    select.appendChild(loadingOpt);
+    select.disabled = true;
+    try {
+        var result = await api('llm/models');
+        var models = result.models || [];
+        var currentModel = (result.current || settingsConfig.llm?.model || '').trim();
+        while (select.firstChild) select.removeChild(select.firstChild);
+        if (models.length === 0) {
+            var emptyOpt = document.createElement('option');
+            emptyOpt.value = '';
+            emptyOpt.textContent = result.error || 'No models found';
+            select.appendChild(emptyOpt);
+            if (currentModel) {
+                var cfgOpt = document.createElement('option');
+                cfgOpt.value = currentModel;
+                cfgOpt.textContent = currentModel + ' (configured)';
+                cfgOpt.selected = true;
+                select.appendChild(cfgOpt);
+            }
+        } else {
+            var found = false;
+            for (var i = 0; i < models.length; i++) {
+                var opt = document.createElement('option');
+                opt.value = models[i];
+                opt.textContent = models[i];
+                if (models[i] === currentModel) {
+                    opt.selected = true;
+                    found = true;
+                }
+                select.appendChild(opt);
+            }
+            // If the currently configured model is not in the list, add it at top
+            if (currentModel && !found) {
+                var notLoadedOpt = document.createElement('option');
+                notLoadedOpt.value = currentModel;
+                notLoadedOpt.textContent = currentModel + ' (not loaded)';
+                notLoadedOpt.selected = true;
+                select.insertBefore(notLoadedOpt, select.firstChild);
+            }
+        }
+        showNotification('Found ' + models.length + ' model(s)', 'success');
+    } catch (e) {
+        while (select.firstChild) select.removeChild(select.firstChild);
+        var errOpt = document.createElement('option');
+        errOpt.value = '';
+        errOpt.textContent = 'Failed to load models';
+        select.appendChild(errOpt);
+        if (settingsConfig.llm?.model) {
+            var fallbackOpt = document.createElement('option');
+            fallbackOpt.value = settingsConfig.llm.model;
+            fallbackOpt.textContent = settingsConfig.llm.model + ' (configured)';
+            fallbackOpt.selected = true;
+            select.appendChild(fallbackOpt);
+        }
+        showNotification('Failed to fetch models: ' + String(e), 'error');
+    } finally {
+        select.disabled = false;
+    }
 }
 
 // ==================== NOTIFICATION BADGES ====================
@@ -5947,10 +6933,11 @@ var questionCurrentIndex = 0;
 
 async function renderQuestionPopup() {
     var planId = currentDesignerPlanId || activePlanId;
-    if (!planId) return;
+    // v5.0: Fetch ALL pending questions when no plan is active (Boss AI generates plan-less questions)
+    var url = planId ? 'questions/queue?plan_id=' + encodeURIComponent(planId) : 'questions/queue';
 
     try {
-        var result = await api('questions/queue?plan_id=' + encodeURIComponent(planId));
+        var result = await api(url);
         questionQueue = Array.isArray(result) ? result : (result.questions || result.data || []);
     } catch(e) {
         questionQueue = [];
@@ -5988,8 +6975,14 @@ function renderCurrentQuestion() {
     // Source badge
     body += '<div class="q-source-badge ' + esc(agentClass) + '">' + esc(q.source_agent || 'System') + '</div>';
 
-    // Question text
-    body += '<div class="q-text">' + esc(q.question || q.text || '') + '</div>';
+    // v4.3: Show friendly_message (noob-level breakdown) if available, with raw question in details
+    if (q.friendly_message) {
+        body += '<div class="q-text">' + renderMarkdown(q.friendly_message) + '</div>';
+        body += '<details class="q-raw-details" style="margin:6px 0;font-size:0.85em;color:#888"><summary style="cursor:pointer;user-select:none">Show technical details</summary>';
+        body += '<div style="margin-top:4px;padding:8px;background:rgba(0,0,0,0.05);border-radius:4px;white-space:pre-wrap">' + esc(q.question || q.text || '') + '</div></details>';
+    } else {
+        body += '<div class="q-text">' + esc(q.question || q.text || '') + '</div>';
+    }
 
     // AI suggested answer
     if (q.suggested_answer || q.ai_suggestion) {
@@ -6056,12 +7049,23 @@ async function submitCurrentQuestion(questionId, qType) {
         if (!answer) { showNotification('Please enter your answer', 'warning'); return; }
     }
 
-    await submitQuestionAnswer(questionId, answer);
+    // v4.3: Defensive — ensure answer is truly a non-empty string before sending
+    if (typeof answer !== 'string' || answer.length === 0) {
+        showNotification('Please enter your answer', 'warning');
+        return;
+    }
+
+    await submitQuestionAnswer(questionId, String(answer));
 }
 
 async function submitQuestionAnswer(questionId, answer) {
+    // v4.3: Defensive guard — ensure answer is a string before API call
+    if (!answer || typeof answer !== 'string') {
+        showNotification('Answer cannot be empty', 'warning');
+        return;
+    }
     try {
-        await api('ai/questions/' + questionId + '/answer', { method: 'POST', body: { answer: answer } });
+        await api('ai/questions/' + questionId + '/answer', { method: 'POST', body: { answer: String(answer) } });
         showNotification('Feedback submitted', 'success');
         questionQueue.splice(questionCurrentIndex, 1);
         updateQuestionBadge();
@@ -6176,6 +7180,7 @@ async function renderPhaseIndicator(planId) {
     var html = '<div class="phase-indicator">';
     html += '<div class="phase-header">';
     html += '<span class="phase-version">Version ' + esc(phaseData.version || '1.0') + '</span>';
+    html += '<span id="phaseCountdown" style="font-size:0.8em;color:var(--yellow);display:none"></span>';
     if (phaseData.time_in_phase) {
         html += '<span class="phase-time">In current phase: ' + esc(phaseData.time_in_phase) + '</span>';
     }
@@ -6500,6 +7505,36 @@ function initSSE() {
         showNotification('Tasks have been generated', 'success');
         pollProcessingStatus();
     });
+
+    // v5.0: Boss AI supervisor events
+    sseConnection.addEventListener('boss:dispatching_ticket', function(e) {
+        stopBossCountdownUI();
+        showProgressDashboard(true);
+        pollProcessingStatus();
+    });
+
+    sseConnection.addEventListener('boss:countdown_tick', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nextCheckAt) {
+                startBossCountdownUI(d.data.nextCheckAt);
+            }
+        } catch(err) { /* ignore parse errors */ }
+    });
+
+    sseConnection.addEventListener('boss:cycle_started', function(e) {
+        stopBossCountdownUI();
+        showProgressDashboard(true);
+    });
+
+    sseConnection.addEventListener('boss:cycle_completed', function(e) {
+        pollProcessingStatus();
+    });
+
+    sseConnection.addEventListener('boss:ticket_completed', function(e) {
+        pollProcessingStatus();
+        loadTickets();
+    });
 }
 
 // ==================== LIVE PROGRESS DASHBOARD ====================
@@ -6507,6 +7542,69 @@ var pdStartTime = null;
 var pdTimerInterval = null;
 var pdPollInterval = null;
 var pdIsActive = false;
+
+// v5.0: Boss AI live countdown — ticks every second, syncs on poll
+var bossCountdownInterval = null;
+var bossCountdownTargetMs = 0; // epoch ms when Boss next fires
+var bossIsActive = false; // true when Boss is processing
+
+function startBossCountdownUI(nextCheckAt) {
+    bossCountdownTargetMs = nextCheckAt;
+    bossIsActive = false;
+    if (!bossCountdownInterval) {
+        bossCountdownInterval = setInterval(updateBossCountdownDisplay, 1000);
+    }
+    updateBossCountdownDisplay();
+}
+
+function stopBossCountdownUI(activeLabel) {
+    bossIsActive = true;
+    if (bossCountdownInterval) { clearInterval(bossCountdownInterval); bossCountdownInterval = null; }
+    bossCountdownTargetMs = 0;
+    // Update all 4 locations with active label
+    var label = activeLabel || 'Boss AI \\u2022 Active';
+    var navEl = document.getElementById('navBossCountdown');
+    if (navEl) { navEl.style.display = 'none'; }
+    var phaseEl = document.getElementById('phaseCountdown');
+    if (phaseEl) { phaseEl.style.display = 'none'; }
+}
+
+function updateBossCountdownDisplay() {
+    var remainMs = bossCountdownTargetMs - Date.now();
+    if (remainMs < 0) remainMs = 0;
+    var mins = Math.floor(remainMs / 60000);
+    var secs = Math.floor((remainMs % 60000) / 1000);
+    var timeStr = mins + ':' + String(secs).padStart(2, '0');
+    var fullLabel = 'Boss \\u2022 ' + timeStr;
+
+    // Location 1: Topnav
+    var navEl = document.getElementById('navBossCountdown');
+    if (navEl) {
+        navEl.textContent = fullLabel;
+        navEl.style.display = '';
+    }
+    // Location 2: Phase indicator
+    var phaseEl = document.getElementById('phaseCountdown');
+    if (phaseEl) {
+        phaseEl.textContent = fullLabel;
+        phaseEl.style.display = '';
+    }
+    // Location 3: Progress dashboard current ticket
+    var pdCurrent = document.getElementById('pdCurrentTicket');
+    if (pdCurrent && !bossIsActive) {
+        pdCurrent.textContent = 'Boss AI \\u2022 next check in ' + timeStr;
+        pdCurrent.style.color = 'var(--yellow)';
+    }
+    // Location 4: Agent badge
+    var agentBadge = document.getElementById('pdAgentBadge');
+    var agentLabel = document.getElementById('pdAgentLabel');
+    if (agentBadge && agentLabel && !bossIsActive) {
+        agentBadge.style.display = '';
+        agentLabel.textContent = 'Boss AI \\u2022 ' + timeStr;
+        agentLabel.style.background = 'rgba(249,226,175,0.15)';
+        agentLabel.style.color = 'var(--yellow)';
+    }
+}
 
 function showProgressDashboard(show) {
     var dash = document.getElementById('progressDashboard');
@@ -6579,8 +7677,14 @@ function updateProgressDashboard(data) {
     var agentLabel = document.getElementById('pdAgentLabel');
     var spinner = document.getElementById('pdSpinner');
     var statusIcon = document.getElementById('pdStatusIcon');
-    var isActive = data.isProcessing || (data.mainQueueSize || 0) > 0 || (data.bossQueueSize || 0) > 0;
+    var isActive = data.isProcessing || (data.queueSize || data.mainQueueSize || 0) > 0;
     var bossMonitoring = data.bossState === 'waiting';
+    // v5.0: Sync live countdown from poll data
+    if (bossMonitoring && data.bossNextCheckMs > 0) {
+        startBossCountdownUI(Date.now() + data.bossNextCheckMs);
+    } else if (data.bossState === 'active' || isActive) {
+        stopBossCountdownUI();
+    }
     // Toggle spinner (active processing) vs pulse (boss monitoring) vs static dot (idle)
     if (spinner) spinner.style.display = isActive ? '' : 'none';
     if (statusIcon) {
@@ -6612,13 +7716,8 @@ function updateProgressDashboard(data) {
             current.title = current.textContent;
             current.style.color = 'var(--blue)';
         } else if (data.bossState === 'waiting' && data.bossNextCheckMs > 0) {
-            // Boss AI is in its 5-minute idle cycle — show countdown
-            var bossMs = data.bossNextCheckMs;
-            var bossMins = Math.floor(bossMs / 60000);
-            var bossSecs = Math.floor((bossMs % 60000) / 1000);
-            current.textContent = 'Boss AI \u2022 next check in ' + bossMins + ':' + String(bossSecs).padStart(2, '0');
+            // v5.0: Live countdown handles this via updateBossCountdownDisplay() — just set tooltip
             current.title = 'Boss AI is monitoring the system. Checks every 5 minutes when idle.';
-            current.style.color = 'var(--yellow)';
         } else if (data.isProcessing) {
             current.textContent = 'Waiting for next ticket...';
             current.title = '';
@@ -6629,7 +7728,7 @@ function updateProgressDashboard(data) {
             current.style.color = 'var(--overlay)';
         }
     }
-    var remaining = (data.mainQueueSize || 0) + (data.bossQueueSize || 0);
+    var remaining = data.queueSize != null ? data.queueSize : ((data.mainQueueSize || 0) + (data.bossQueueSize || 0));
     if (queue) queue.textContent = remaining + ' remaining';
     if (phase) {
         if (data.phase) {
@@ -6672,7 +7771,7 @@ async function pollProcessingStatus() {
     try {
         var data = await api(url);
         updateProgressDashboard(data);
-        if (data.isProcessing || data.mainQueueSize > 0 || data.bossQueueSize > 0) {
+        if (data.isProcessing || (data.queueSize || data.mainQueueSize || 0) > 0) {
             if (pdHideTimer) { clearTimeout(pdHideTimer); pdHideTimer = null; }
             if (!pdIsActive) showProgressDashboard(true);
         } else if (pdIsActive) {
@@ -6681,7 +7780,7 @@ async function pollProcessingStatus() {
                 pdHideTimer = setTimeout(function() {
                     pdHideTimer = null;
                     pollProcessingStatus().then(function() {
-                        if (pdIsActive && !data.isProcessing && data.mainQueueSize === 0 && data.bossQueueSize === 0) {
+                        if (pdIsActive && !data.isProcessing && (data.queueSize || data.mainQueueSize || 0) === 0) {
                             showProgressDashboard(false);
                         }
                     });
@@ -6835,7 +7934,7 @@ setInterval(() => {
 }, 5000);
 
 // ==================== GLOBAL AI LEVEL TOGGLE ====================
-var currentAiLevel = loadState('aiLevel', 'suggestions') || 'suggestions';
+var currentAiLevel = loadState('aiLevel', 'smart') || 'smart';
 
 function setGlobalAiLevel(level) {
     currentAiLevel = level;
@@ -6852,6 +7951,8 @@ function setGlobalAiLevel(level) {
             c.classList.toggle('selected', c.dataset.val === level);
         });
     }
+    // v5.0: Sync with backend config (aiMode) so Boss AI respects the header toggle
+    updateSetting('aiMode', level);
     // Update plan if we have one open
     if (pdPlanId || currentDesignerPlanId) {
         var planId = pdPlanId || currentDesignerPlanId;
@@ -6865,15 +7966,30 @@ function setGlobalAiLevel(level) {
     showNotification('AI level set to: ' + level, 'info');
 }
 
-// Restore AI level on page load
+// Restore AI level on page load — sync from backend config (source of truth)
 (function restoreAiLevel() {
-    var saved = loadState('aiLevel', 'suggestions');
+    // First set from localStorage as fast default
+    var saved = loadState('aiLevel', 'smart');
     if (saved) {
         currentAiLevel = saved;
         document.querySelectorAll('#aiLevelToggle button').forEach(function(b) {
             b.classList.toggle('active', b.dataset.ai === saved);
         });
     }
+    // Then sync from config API (authoritative source)
+    api('config').then(function(cfg) {
+        var configMode = cfg.aiMode || 'smart';
+        if (configMode !== currentAiLevel) {
+            currentAiLevel = configMode;
+            saveState('aiLevel', configMode);
+            document.querySelectorAll('#aiLevelToggle button').forEach(function(b) {
+                b.classList.toggle('active', b.dataset.ai === configMode);
+            });
+        }
+        // Also sync the Boss AI settings dropdown if visible
+        var bossDropdown = document.getElementById('setting-boss-aiMode');
+        if (bossDropdown) bossDropdown.value = configMode;
+    }).catch(function() { /* config API unavailable — use localStorage */ });
 })();
 
 // ==================== LIVE DESIGN PREVIEW ====================

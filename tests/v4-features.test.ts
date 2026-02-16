@@ -501,10 +501,9 @@ describe('v4 Features', () => {
             expect(data[1].question).toBe('Low priority Q');
         });
 
-        it('returns 400 if plan_id is missing', async () => {
-            const { res, data } = await callApi('GET', '/api/questions/queue');
-            expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
-            expect(data.error).toBe('plan_id required');
+        it('returns all pending questions when plan_id is missing', async () => {
+            const { data } = await callApi('GET', '/api/questions/queue');
+            expect(Array.isArray(data)).toBe(true);
         });
     });
 
@@ -532,10 +531,10 @@ describe('v4 Features', () => {
             expect(data.p3).toBe(1);
         });
 
-        it('returns 400 if plan_id is missing', async () => {
-            const { res, data } = await callApi('GET', '/api/questions/queue/count');
-            expect(res.writeHead).toHaveBeenCalledWith(400, expect.any(Object));
-            expect(data.error).toBe('plan_id required');
+        it('returns counts for all pending questions when plan_id is missing', async () => {
+            const { data } = await callApi('GET', '/api/questions/queue/count');
+            expect(data.total).toBeDefined();
+            expect(data.p1).toBeDefined();
         });
     });
 

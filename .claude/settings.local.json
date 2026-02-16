@@ -14,7 +14,10 @@
       "Bash(ls:*)",
       "Bash(findstr:*)",
       "Bash(npx playwright test)",
-      "Bash(design \")"
+      "Bash(design \")",
+      "Bash(grep:*)",
+      "Bash(curl:*)",
+      "Bash(python:*)"
     ]
   }
 }

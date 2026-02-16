@@ -91,10 +91,18 @@ export type COEEventType =
     | 'boss:inter_ticket_started' | 'boss:inter_ticket_completed'
     | 'boss:startup_assessment_started' | 'boss:startup_assessment_completed'
     | 'boss:picked_next_ticket'
+    // Boss AI supervisor cycle (v5.0)
+    | 'boss:cycle_started' | 'boss:cycle_completed'
+    | 'boss:dispatching_ticket' | 'boss:ticket_completed'
+    | 'boss:countdown_tick'
     // Phase management (v4.0)
     | 'phase:changed' | 'phase:gate_checked' | 'phase:gate_passed' | 'phase:gate_blocked'
     // Impact analysis (v4.0)
     | 'impact:analysis_started' | 'impact:analysis_completed'
+    // Plan files (v5.0)
+    | 'plan:file_uploaded' | 'plan:file_updated' | 'plan:file_deleted'
+    | 'plan:file_synced' | 'plan:folder_linked' | 'plan:folder_scanned'
+    | 'plan:file_change_detected'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

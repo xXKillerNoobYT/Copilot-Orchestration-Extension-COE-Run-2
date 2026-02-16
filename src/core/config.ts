@@ -62,6 +62,9 @@ const DEFAULT_CONFIG: COEConfig = {
     // Clarity Agent (v4.0)
     clarityAutoResolveScore: 85,
     clarityClarificationScore: 70,
+    // v5.0: AI mode and auto-run
+    aiMode: 'smart' as const,
+    bossAutoRunEnabled: true,
 };
 
 export class ConfigManager {
@@ -144,6 +147,9 @@ export class ConfigManager {
             bossEscalationThreshold: loaded.bossEscalationThreshold ?? DEFAULT_CONFIG.bossEscalationThreshold,
             clarityAutoResolveScore: loaded.clarityAutoResolveScore ?? DEFAULT_CONFIG.clarityAutoResolveScore,
             clarityClarificationScore: loaded.clarityClarificationScore ?? DEFAULT_CONFIG.clarityClarificationScore,
+            // v5.0: AI mode and auto-run
+            aiMode: loaded.aiMode ?? DEFAULT_CONFIG.aiMode,
+            bossAutoRunEnabled: loaded.bossAutoRunEnabled ?? DEFAULT_CONFIG.bossAutoRunEnabled,
         };
     }
 

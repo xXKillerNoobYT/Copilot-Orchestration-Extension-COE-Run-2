@@ -142,9 +142,28 @@ Respond with ONLY valid JSON:
                 const autoApproved = parsed.auto_approved ?? false;
                 const complexity = parsed.complexity ?? 'unknown';
 
-                const summary = autoApproved
-                    ? `Auto-approved (${complexity}, score: ${avgScore}/100): ${parsed.reason || 'Meets quality threshold'}`
-                    : `Flagged for user review (${complexity}, score: ${avgScore}/100): ${parsed.reason || 'Below threshold or complex'}`;
+                const issues: string[] = parsed.issues || [];
+                const suggestions: string[] = parsed.suggestions || [];
+                const scores = parsed.scores || {};
+
+                let summary: string;
+                if (autoApproved) {
+                    summary = `Auto-approved (${complexity}, score: ${avgScore}/100): ${parsed.reason || 'Meets quality threshold'}`;
+                } else {
+                    // Build detailed review summary for user consumption
+                    const parts: string[] = [];
+                    parts.push(`Flagged for user review (${complexity}, score: ${avgScore}/100): ${parsed.reason || 'Below threshold or complex'}`);
+                    if (scores.clarity !== undefined || scores.completeness !== undefined || scores.correctness !== undefined) {
+                        parts.push(`\nScores: clarity=${scores.clarity ?? '?'}, completeness=${scores.completeness ?? '?'}, correctness=${scores.correctness ?? '?'}`);
+                    }
+                    if (issues.length > 0) {
+                        parts.push(`\nIssues: ${issues.join('; ')}`);
+                    }
+                    if (suggestions.length > 0) {
+                        parts.push(`\nSuggestions: ${suggestions.join('; ')}`);
+                    }
+                    summary = parts.join('');
+                }
 
                 if (!autoApproved) {
                     actions.push({
@@ -152,8 +171,8 @@ Respond with ONLY valid JSON:
                         payload: {
                             reason: parsed.reason,
                             scores: parsed.scores,
-                            issues: parsed.issues || [],
-                            suggestions: parsed.suggestions || [],
+                            issues,
+                            suggestions,
                         },
                     });
                 }

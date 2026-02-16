@@ -462,6 +462,10 @@ export interface COEConfig {
     /** Clarity Agent thresholds (v4.0) */
     clarityAutoResolveScore?: number;      // default 85
     clarityClarificationScore?: number;    // default 70
+    /** v5.0: Global AI processing mode */
+    aiMode?: 'manual' | 'suggest' | 'smart' | 'hybrid';  // default 'smart'
+    /** v5.0: Auto-run Boss AI countdown (enables/disables idle timer) */
+    bossAutoRunEnabled?: boolean;          // default true
 }
 
 // --- Agent Framework Types ---

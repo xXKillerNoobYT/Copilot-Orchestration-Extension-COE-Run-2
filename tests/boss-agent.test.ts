@@ -20,7 +20,14 @@ describe('BossAgent', () => {
 
     const mockConfig = {
         getAgentContextLimit: jest.fn().mockReturnValue(4000),
-        getConfig: jest.fn(),
+        getConfig: jest.fn().mockReturnValue({
+            bossTaskOverloadThreshold: 20,
+            bossEscalationThreshold: 5,
+            bossStuckPhaseMinutes: 30,
+            bossIdleTimeoutMinutes: 5,
+            aiMode: 'smart',
+            bossAutoRunEnabled: true,
+        }),
     } as any;
 
     const mockOutput = {
@@ -355,12 +362,12 @@ describe('BossAgent', () => {
     // ===================== WARNING: STALE TICKETS (>48h) =====================
 
     describe('checkSystemHealth - WARNING: Stale tickets', () => {
-        test('triggers when open tickets are older than 48 hours', async () => {
+        test('triggers when open tickets are older than configured stuck-phase timeout', async () => {
             // Create open tickets and backdate them
             const ticket1 = db.createTicket({ title: 'Old Ticket 1' });
             const ticket2 = db.createTicket({ title: 'Old Ticket 2' });
 
-            // Backdate to 3 days ago (well over 48h)
+            // Backdate to 3 days ago (well over the configured 30 min)
             const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
             const rawDb = (db as any).db;
             rawDb.prepare('UPDATE tickets SET created_at = ? WHERE id IN (?, ?)').run(
@@ -373,11 +380,12 @@ describe('BossAgent', () => {
             const callArgs = mockLLM.chat.mock.calls[0][0];
             const userMessage = callArgs.find((m: any) => m.role === 'user');
             expect(userMessage.content).toContain('WARNING: Stale tickets');
-            expect(userMessage.content).toContain('2 ticket(s) open for >48 hours');
+            expect(userMessage.content).toContain('2 ticket(s) open for >');
+            expect(userMessage.content).toContain('minutes with no progress');
         });
 
-        test('does not trigger for tickets less than 48h old', async () => {
-            // Tickets created now are well within 48h
+        test('does not trigger for recent tickets within stuck-phase timeout', async () => {
+            // Tickets created now are well within the 30 min threshold
             db.createTicket({ title: 'Recent Ticket 1' });
             db.createTicket({ title: 'Recent Ticket 2' });
 

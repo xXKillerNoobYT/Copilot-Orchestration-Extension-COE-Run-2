@@ -653,6 +653,63 @@ export class Database {
             );
             CREATE INDEX IF NOT EXISTS idx_plan_versions_plan ON plan_versions(plan_id);
 
+            -- ==================== PLAN FILES (v5.0) ====================
+            -- User-uploaded reference documents (.md, .txt, .doc) that form the
+            -- "source of truth" for what the project should be. All agents reference
+            -- these files and flag conflicts when requests contradict the plan.
+            CREATE TABLE IF NOT EXISTS plan_files (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                file_type TEXT NOT NULL DEFAULT 'text',
+                content TEXT NOT NULL DEFAULT '',
+                summary TEXT,
+                category TEXT NOT NULL DEFAULT 'general',
+                upload_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                version INTEGER NOT NULL DEFAULT 1,
+                content_hash TEXT NOT NULL DEFAULT '',
+                source_path TEXT,
+                is_linked INTEGER NOT NULL DEFAULT 0,
+                last_synced_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_files_plan ON plan_files(plan_id);
+
+            -- Track changes to plan files for version history and ticket impact
+            CREATE TABLE IF NOT EXISTS plan_file_changes (
+                id TEXT PRIMARY KEY,
+                plan_file_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                change_type TEXT NOT NULL DEFAULT 'update',
+                previous_hash TEXT,
+                new_hash TEXT,
+                diff_summary TEXT,
+                affected_ticket_ids TEXT DEFAULT '[]',
+                reprocessing_triggered INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_file_id) REFERENCES plan_files(id),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_file_changes_file ON plan_file_changes(plan_file_id);
+            CREATE INDEX IF NOT EXISTS idx_plan_file_changes_plan ON plan_file_changes(plan_id);
+
+            -- Track linked folders for plan files (watch a local directory)
+            CREATE TABLE IF NOT EXISTS plan_file_folders (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                folder_path TEXT NOT NULL,
+                file_patterns TEXT NOT NULL DEFAULT '*.md,*.txt,*.doc,*.docx',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                last_scanned_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_file_folders_plan ON plan_file_folders(plan_id);
+
             -- ==================== DESIGN CHANGE LOG ====================
             CREATE TABLE IF NOT EXISTS design_change_log (
                 id TEXT PRIMARY KEY,
@@ -886,6 +943,25 @@ export class Database {
         `);
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_runs_ticket ON ticket_runs(ticket_id, started_at)'); } catch { /* already exists */ }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_runs_status ON ticket_runs(status)'); } catch { /* already exists */ }
+
+        // v5.0: Individual agent steps within a run — modular pipeline tracking
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS ticket_run_steps (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                step_number INTEGER NOT NULL,
+                agent_name TEXT NOT NULL,
+                deliverable_type TEXT,
+                status TEXT NOT NULL DEFAULT 'started',
+                response TEXT,
+                tokens_used INTEGER,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                FOREIGN KEY (run_id) REFERENCES ticket_runs(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_run_steps_run ON ticket_run_steps(run_id, step_number)'); } catch { /* already exists */ }
 
         // Migration v4.2: create element_status table for per-element/per-page status tracking
         this.db.exec(`
@@ -1330,6 +1406,59 @@ export class Database {
         };
     }
 
+    // ==================== TICKET RUN STEPS (v5.0) ====================
+
+    /**
+     * Create a step entry within a ticket run.
+     * Called as each agent in the pipeline starts working.
+     */
+    createRunStep(data: { run_id: string; step_number: number; agent_name: string; deliverable_type?: string }): { id: string; step_number: number } {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO ticket_run_steps (id, run_id, step_number, agent_name, deliverable_type, status, started_at)
+            VALUES (?, ?, ?, ?, ?, 'started', ?)
+        `).run(id, data.run_id, data.step_number, data.agent_name, data.deliverable_type ?? null, now);
+        return { id, step_number: data.step_number };
+    }
+
+    /**
+     * Complete a run step with response and timing data.
+     */
+    completeRunStep(id: string, updates: { status: string; response?: string; tokens_used?: number; duration_ms: number }): void {
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            UPDATE ticket_run_steps SET status = ?, response = ?, tokens_used = ?, duration_ms = ?, completed_at = ?
+            WHERE id = ?
+        `).run(updates.status, updates.response ?? null, updates.tokens_used ?? null, updates.duration_ms, now, id);
+    }
+
+    /**
+     * Get all steps for a run, ordered by step number.
+     */
+    getRunSteps(runId: string): Array<{
+        id: string; run_id: string; step_number: number; agent_name: string;
+        deliverable_type: string | null; status: string; response: string | null;
+        tokens_used: number | null; duration_ms: number; started_at: string; completed_at: string | null;
+    }> {
+        const rows = this.db.prepare(
+            'SELECT * FROM ticket_run_steps WHERE run_id = ? ORDER BY step_number ASC'
+        ).all(runId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            run_id: r.run_id as string,
+            step_number: r.step_number as number,
+            agent_name: r.agent_name as string,
+            deliverable_type: (r.deliverable_type as string) ?? null,
+            status: r.status as string,
+            response: (r.response as string) ?? null,
+            tokens_used: (r.tokens_used as number) ?? null,
+            duration_ms: (r.duration_ms as number) ?? 0,
+            started_at: r.started_at as string,
+            completed_at: (r.completed_at as string) ?? null,
+        }));
+    }
+
     // ==================== TRANSACTION HELPER ====================
 
     /**
@@ -1692,10 +1821,166 @@ export class Database {
     deletePlan(id: string): boolean {
         const existing = this.getPlan(id);
         if (!existing) return false;
-        // Remove tasks associated with this plan
+        // Remove tasks and plan files associated with this plan
         this.db.prepare('DELETE FROM tasks WHERE plan_id = ?').run(id);
+        this.db.prepare('DELETE FROM plan_file_changes WHERE plan_id = ?').run(id);
+        this.db.prepare('DELETE FROM plan_files WHERE plan_id = ?').run(id);
+        this.db.prepare('DELETE FROM plan_file_folders WHERE plan_id = ?').run(id);
         this.db.prepare('DELETE FROM plans WHERE id = ?').run(id);
         return true;
+    }
+
+    // ==================== PLAN FILES (v5.0) ====================
+
+    addPlanFile(data: {
+        plan_id: string; filename: string; file_type?: string; content: string;
+        summary?: string; category?: string; source_path?: string; is_linked?: boolean;
+    }): Record<string, unknown> {
+        const id = this.genId();
+        const maxOrder = this.db.prepare(
+            'SELECT COALESCE(MAX(upload_order), 0) as max_order FROM plan_files WHERE plan_id = ?'
+        ).get(data.plan_id) as Record<string, unknown> | undefined;
+        const order = ((maxOrder?.max_order as number) ?? 0) + 1;
+        const contentHash = crypto.createHash('sha256').update(data.content || '').digest('hex').substring(0, 16);
+        this.db.prepare(`
+            INSERT INTO plan_files (id, plan_id, filename, file_type, content, summary, category, upload_order, version, content_hash, source_path, is_linked, last_synced_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+        `).run(
+            id, data.plan_id, data.filename, data.file_type || 'text', data.content,
+            data.summary || null, data.category || 'general', order, contentHash,
+            data.source_path || null, data.is_linked ? 1 : 0
+        );
+        return this.getPlanFile(id)!;
+    }
+
+    getPlanFile(id: string): Record<string, unknown> | null {
+        return this.db.prepare('SELECT * FROM plan_files WHERE id = ?').get(id) as Record<string, unknown> | undefined || null;
+    }
+
+    getPlanFiles(planId: string): Record<string, unknown>[] {
+        return this.db.prepare(
+            'SELECT * FROM plan_files WHERE plan_id = ? AND is_active = 1 ORDER BY upload_order ASC'
+        ).all(planId) as Record<string, unknown>[];
+    }
+
+    getAllPlanFiles(planId: string): Record<string, unknown>[] {
+        return this.db.prepare(
+            'SELECT * FROM plan_files WHERE plan_id = ? ORDER BY upload_order ASC'
+        ).all(planId) as Record<string, unknown>[];
+    }
+
+    updatePlanFile(id: string, updates: Record<string, unknown>): Record<string, unknown> | null {
+        const allowed = ['filename', 'content', 'summary', 'category', 'is_active', 'source_path', 'is_linked'];
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        const existing = this.getPlanFile(id);
+
+        for (const key of allowed) {
+            if (updates[key] !== undefined) {
+                fields.push(`${key} = ?`);
+                values.push(updates[key]);
+            }
+        }
+
+        // If content changed, bump version and update hash
+        if (updates.content !== undefined && existing) {
+            const newHash = crypto.createHash('sha256').update(String(updates.content)).digest('hex').substring(0, 16);
+            const oldHash = String(existing.content_hash || '');
+            if (newHash !== oldHash) {
+                const newVersion = ((existing.version as number) ?? 1) + 1;
+                fields.push('version = ?');
+                values.push(newVersion);
+                fields.push('content_hash = ?');
+                values.push(newHash);
+                // Record the change for tracking
+                this.recordPlanFileChange(id, String(existing.plan_id), newVersion, 'update', oldHash, newHash);
+            }
+        }
+
+        if (fields.length > 0) {
+            fields.push("updated_at = datetime('now')");
+            values.push(id);
+            this.db.prepare(`UPDATE plan_files SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        }
+        return this.getPlanFile(id);
+    }
+
+    /**
+     * Record a change to a plan file for version history tracking.
+     * Also finds affected tickets and marks them for potential reprocessing.
+     */
+    recordPlanFileChange(planFileId: string, planId: string, version: number, changeType: string, previousHash: string, newHash: string, diffSummary?: string): void {
+        const changeId = this.genId();
+        // Find tickets that may be affected — tickets linked to tasks in this plan that aren't completed
+        const affectedTickets = this.db.prepare(
+            `SELECT t.id FROM tickets t INNER JOIN tasks tk ON t.task_id = tk.id WHERE tk.plan_id = ? AND t.status NOT IN ('completed', 'cancelled', 'archived', 'failed')`
+        ).all(planId) as Array<{ id: string }>;
+        const affectedIds = affectedTickets.map(t => t.id);
+
+        this.db.prepare(`
+            INSERT INTO plan_file_changes (id, plan_file_id, plan_id, version, change_type, previous_hash, new_hash, diff_summary, affected_ticket_ids, reprocessing_triggered, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))
+        `).run(changeId, planFileId, planId, version, changeType, previousHash, newHash, diffSummary || null, JSON.stringify(affectedIds));
+    }
+
+    /**
+     * Get recent plan file changes for a plan, optionally filtered by file.
+     */
+    getPlanFileChanges(planId: string, limit: number = 20): Record<string, unknown>[] {
+        return this.db.prepare(
+            'SELECT pfc.*, pf.filename FROM plan_file_changes pfc LEFT JOIN plan_files pf ON pfc.plan_file_id = pf.id WHERE pfc.plan_id = ? ORDER BY pfc.created_at DESC LIMIT ?'
+        ).all(planId, limit) as Record<string, unknown>[];
+    }
+
+    /**
+     * Mark a plan file change as having triggered reprocessing.
+     */
+    markChangeReprocessed(changeId: string): void {
+        this.db.prepare('UPDATE plan_file_changes SET reprocessing_triggered = 1 WHERE id = ?').run(changeId);
+    }
+
+    // ==================== PLAN FILE FOLDERS (v5.0) ====================
+
+    addPlanFileFolder(planId: string, folderPath: string, filePatterns?: string): Record<string, unknown> {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO plan_file_folders (id, plan_id, folder_path, file_patterns, is_active, created_at)
+            VALUES (?, ?, ?, ?, 1, datetime('now'))
+        `).run(id, planId, folderPath, filePatterns || '*.md,*.txt,*.doc,*.docx');
+        return this.db.prepare('SELECT * FROM plan_file_folders WHERE id = ?').get(id) as Record<string, unknown>;
+    }
+
+    getPlanFileFolders(planId: string): Record<string, unknown>[] {
+        return this.db.prepare(
+            'SELECT * FROM plan_file_folders WHERE plan_id = ? AND is_active = 1 ORDER BY created_at ASC'
+        ).all(planId) as Record<string, unknown>[];
+    }
+
+    removePlanFileFolder(folderId: string): boolean {
+        const result = this.db.prepare('UPDATE plan_file_folders SET is_active = 0 WHERE id = ?').run(folderId);
+        return (result as unknown as { changes: number }).changes > 0;
+    }
+
+    updateFolderScanTime(folderId: string): void {
+        this.db.prepare("UPDATE plan_file_folders SET last_scanned_at = datetime('now') WHERE id = ?").run(folderId);
+    }
+
+    deletePlanFile(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM plan_files WHERE id = ?').run(id);
+        return (result as unknown as { changes: number }).changes > 0;
+    }
+
+    /**
+     * v5.0: Get combined plan file content for agent context.
+     * Returns a formatted string with all active plan file contents,
+     * used by agents to check for conflicts and ensure alignment.
+     */
+    getPlanFileContext(planId: string): string {
+        const files = this.getPlanFiles(planId);
+        if (files.length === 0) return '';
+        return files.map((f, i) => {
+            return `--- Plan File ${i + 1}: ${f.filename} (${f.category}) ---\n${f.content}`;
+        }).join('\n\n');
     }
 
     // ==================== AGENTS ====================
@@ -3386,6 +3671,14 @@ export class Database {
         const rows = this.db.prepare(
             'SELECT * FROM ai_questions WHERE plan_id = ? ORDER BY created_at DESC'
         ).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToAIQuestion(r));
+    }
+
+    /** v5.0: Get ALL pending AI questions across all plans — for the global feedback button */
+    getAllPendingAIQuestions(): AIQuestion[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM ai_questions WHERE status = ? ORDER BY queue_priority ASC, created_at ASC'
+        ).all('pending') as Record<string, unknown>[];
         return rows.map(r => this.rowToAIQuestion(r));
     }
 
