@@ -54,7 +54,8 @@ export enum AgentType {
     DesignHardener = 'design_hardener',
     DecisionMemory = 'decision_memory',
     Review = 'review',
-    CodingDirector = 'coding_director'  // v7.0: Interface to external coding agent
+    CodingDirector = 'coding_director',  // v7.0: Interface to external coding agent
+    BackendArchitect = 'backend_architect'  // v8.0: Deep BE-specific QA and architecture generation
 }
 
 export enum AgentStatus {
@@ -621,6 +622,10 @@ export interface SupportDocument {
     is_verified: boolean;
     verified_by: string | null;
     relevance_score: number;
+    /** v8.0: Who created this document — determines editing rights */
+    source_type: 'user' | 'system';
+    /** v8.0: Lock status — user docs only editable by user, system docs only by system */
+    is_locked: boolean;
     created_at: string;
     updated_at: string;
 }
@@ -1978,3 +1983,317 @@ export interface EnhancedPageMeta {
     loading_strategy?: 'eager' | 'lazy' | 'ssr';
     [key: string]: unknown;
 }
+
+// ============================================================
+// v8.0: Back-End Designer Types
+// ============================================================
+
+// --- Backend Element Types ---
+
+export type BackendElementType =
+    | 'api_route'
+    | 'db_table'
+    | 'service'
+    | 'controller'
+    | 'middleware'
+    | 'auth_layer'
+    | 'background_job'
+    | 'cache_strategy'
+    | 'queue_definition';
+
+export type BackendElementLayer =
+    | 'routes'
+    | 'models'
+    | 'services'
+    | 'middleware'
+    | 'auth'
+    | 'jobs'
+    | 'caching'
+    | 'queues';
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
+
+export type AuthType = 'none' | 'jwt' | 'api_key' | 'oauth2' | 'session' | 'custom';
+
+/** A back-end architecture element displayed as a card on the BE designer canvas */
+export interface BackendElement {
+    id: string;
+    plan_id: string;
+    type: BackendElementType;
+    name: string;
+    /** Domain/feature group: 'auth', 'users', 'products', etc. */
+    domain: string;
+    /** Layer classification for layer-view grouping */
+    layer: BackendElementLayer;
+    /** Full detail JSON — schema varies by element type (ApiRouteConfig, DbTableConfig, etc.) */
+    config_json: string;
+    /** Visual position on BE canvas */
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    /** Whether collapsed on canvas (card summary vs expanded detail) */
+    is_collapsed: boolean;
+    /** Draft flag — same pattern as FE is_draft, pending user approval */
+    is_draft: boolean;
+    /** Sort order within its layer/domain */
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
+}
+
+/** API Route config — stored in BackendElement.config_json when type = 'api_route' */
+export interface ApiRouteConfig {
+    path: string;
+    method: HttpMethod;
+    description: string;
+    auth: AuthType;
+    request_body?: Record<string, unknown>;
+    response_body?: Record<string, unknown>;
+    query_params?: Array<{ name: string; type: string; required: boolean; description?: string }>;
+    path_params?: Array<{ name: string; type: string; description?: string }>;
+    /** References to middleware BackendElement IDs */
+    middleware_ids: string[];
+    rate_limit?: string;
+    cache_ttl?: number;
+    /** HTTP status codes this route can return */
+    status_codes?: Array<{ code: number; description: string }>;
+}
+
+/** Database Table config — stored in BackendElement.config_json when type = 'db_table' */
+export interface DbTableConfig {
+    table_name: string;
+    columns: Array<{
+        name: string;
+        type: string;           // 'TEXT' | 'INTEGER' | 'REAL' | 'BLOB' | 'BOOLEAN' | 'TIMESTAMP' | etc.
+        primary_key: boolean;
+        nullable: boolean;
+        unique: boolean;
+        default_value?: string;
+        foreign_key?: { table: string; column: string; on_delete?: string; on_update?: string };
+        description?: string;
+    }>;
+    indexes: Array<{ name: string; columns: string[]; unique: boolean }>;
+    /** Links to DataModel.id for shared core data model system */
+    data_model_id?: string;
+    /** Table-level constraints */
+    constraints?: string[];
+}
+
+/** Service/Controller config — stored in BackendElement.config_json when type = 'service' | 'controller' */
+export interface ServiceConfig {
+    description: string;
+    methods: Array<{
+        name: string;
+        params: Array<{ name: string; type: string; required?: boolean }>;
+        return_type: string;
+        description: string;
+        is_async?: boolean;
+    }>;
+    /** Service IDs or names this service depends on */
+    dependencies: string[];
+    is_singleton: boolean;
+}
+
+/** Middleware config — stored in BackendElement.config_json when type = 'middleware' */
+export interface MiddlewareConfig {
+    description: string;
+    /** Scope: global (all routes), route (specific routes), group (route groups) */
+    applies_to: 'global' | 'route' | 'group';
+    /** Execution order (lower = earlier) */
+    order: number;
+    /** Middleware-specific configuration parameters */
+    config_params: Record<string, unknown>;
+}
+
+/** Auth Layer config — stored in BackendElement.config_json when type = 'auth_layer' */
+export interface AuthLayerConfig {
+    auth_type: AuthType;
+    provider: string;
+    token_expiry?: string;
+    refresh_enabled: boolean;
+    scopes: string[];
+    /** Route element IDs protected by this auth layer */
+    protected_routes: string[];
+}
+
+/** Background Job config — stored in BackendElement.config_json when type = 'background_job' */
+export interface BackgroundJobConfig {
+    /** Cron expression or 'on_demand' */
+    schedule: string;
+    description: string;
+    max_retries: number;
+    timeout_seconds: number;
+    /** Service IDs this job depends on */
+    dependencies: string[];
+}
+
+/** Cache Strategy config — stored in BackendElement.config_json when type = 'cache_strategy' */
+export interface CacheStrategyConfig {
+    backend: 'memory' | 'redis' | 'memcached' | 'custom';
+    default_ttl_seconds: number;
+    max_size_mb: number;
+    eviction_policy: 'lru' | 'lfu' | 'ttl';
+    /** Route element IDs using this cache strategy */
+    cached_routes: string[];
+}
+
+/** Queue Definition config — stored in BackendElement.config_json when type = 'queue_definition' */
+export interface QueueDefinitionConfig {
+    backend: 'memory' | 'redis' | 'rabbitmq' | 'sqs' | 'custom';
+    max_concurrency: number;
+    retry_policy: { max_retries: number; backoff: 'linear' | 'exponential' };
+    dead_letter_queue: boolean;
+    /** Types of jobs this queue can process */
+    job_types: string[];
+}
+
+// --- v8.0: Element Link Types ---
+
+export type LinkType = 'fe_to_fe' | 'be_to_be' | 'fe_to_be' | 'be_to_fe';
+export type LinkGranularity = 'high' | 'component';
+export type LinkSource = 'manual' | 'auto_detected' | 'ai_suggested';
+
+/** A connection between two design elements (FE↔FE, BE↔BE, FE→BE, BE→FE) */
+export interface ElementLink {
+    id: string;
+    plan_id: string;
+    link_type: LinkType;
+    granularity: LinkGranularity;
+    source: LinkSource;
+    /** Source element reference */
+    from_element_type: 'page' | 'component' | 'backend_element' | 'data_model';
+    from_element_id: string;
+    /** Target element reference */
+    to_element_type: 'page' | 'component' | 'backend_element' | 'data_model';
+    to_element_id: string;
+    /** Human-readable label for the connection */
+    label: string;
+    /** Additional metadata (trigger, data flow direction, etc.) */
+    metadata_json: string;
+    /** If AI-suggested, confidence score 0-100 */
+    confidence: number | null;
+    /** If AI-suggested, whether the user has approved this link */
+    is_approved: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Relationship matrix data for the Link Matrix UI */
+export interface LinkMatrix {
+    rows: Array<{ id: string; name: string; type: string; element_type: string }>;
+    cols: Array<{ id: string; name: string; type: string; element_type: string }>;
+    cells: Array<{ row: number; col: number; link_type: LinkType; link_id: string; label: string }>;
+}
+
+/** Tree node for the Link Tree navigation UI */
+export interface LinkTreeNode {
+    id: string;
+    name: string;
+    type: string;
+    element_type: string;
+    children: LinkTreeNode[];
+    links: ElementLink[];
+}
+
+// --- v8.0: Tag System Types ---
+
+export type TagColor = 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray' | 'custom';
+
+/** A tag definition — pre-defined (builtin) or user-created */
+export interface TagDefinition {
+    id: string;
+    plan_id: string | null;  // null = global
+    name: string;
+    color: TagColor;
+    /** Custom hex color (only used when color = 'custom') */
+    custom_color: string | null;
+    /** Is this a built-in tag? Built-in tags cannot be deleted. */
+    is_builtin: boolean;
+    /** Description of what this tag means */
+    description: string;
+    created_at: string;
+}
+
+/** An assignment of a tag to an element (junction table) */
+export interface ElementTag {
+    id: string;
+    tag_id: string;
+    /** What type of element is tagged */
+    element_type: 'component' | 'page' | 'backend_element' | 'data_model' | 'document';
+    element_id: string;
+    created_at: string;
+}
+
+/** Pre-defined built-in tags seeded on initialization */
+export const BUILTIN_TAGS: ReadonlyArray<{ name: string; color: TagColor; description: string }> = [
+    { name: 'setting', color: 'blue', description: 'User-configurable setting or preference' },
+    { name: 'automatic', color: 'purple', description: 'Auto-managed by the system — no user config needed' },
+    { name: 'hardcoded', color: 'red', description: 'Contains hardcoded values that may need extraction' },
+    { name: 'env-variable', color: 'yellow', description: 'Uses environment variables for configuration' },
+    { name: 'feature-flag', color: 'orange', description: 'Behind a feature flag — can be toggled on/off' },
+] as const;
+
+// --- v8.0: Unified Review Queue Types ---
+
+export type ReviewItemType = 'fe_draft' | 'be_draft' | 'link_suggestion' | 'tag_suggestion';
+export type ReviewItemStatus = 'pending' | 'approved' | 'rejected';
+
+/** A review queue item — pending draft, suggestion, or change requiring user approval */
+export interface ReviewQueueItem {
+    id: string;
+    plan_id: string;
+    item_type: ReviewItemType;
+    /** Reference to the actual element (component ID, BE element ID, link ID) */
+    element_id: string;
+    element_type: string;
+    /** Display title for the review item */
+    title: string;
+    /** Description of what this review item proposes */
+    description: string;
+    /** Which agent or source created this item */
+    source_agent: string;
+    /** Current review status */
+    status: ReviewItemStatus;
+    /** Priority for ordering */
+    priority: TicketPriority;
+    /** When the item was reviewed */
+    reviewed_at: string | null;
+    /** Notes from the reviewer */
+    review_notes: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// --- v8.0: Backend Architect QA Scores ---
+
+/** Backend QA scoring result from the Backend Architect agent */
+export interface BackendQAScore {
+    plan_id: string;
+    overall_score: number;  // 0-100
+    category_scores: {
+        api_restfulness: number;      // 0-15
+        db_normalization: number;     // 0-15
+        service_separation: number;   // 0-15
+        auth_security: number;        // 0-15
+        error_handling: number;       // 0-10
+        caching_strategy: number;     // 0-10
+        scalability: number;          // 0-10
+        documentation: number;        // 0-10
+    };
+    findings: Array<{
+        category: string;
+        severity: 'critical' | 'major' | 'minor';
+        element_id?: string;
+        element_name?: string;
+        title: string;
+        description: string;
+        recommendation: string;
+    }>;
+    assessment: string;
+    recommendations: string[];
+    timestamp: string;
+}
+
+/** Backend Architect operating mode */
+export type BackendArchitectMode = 'auto_generate' | 'scaffold' | 'suggest';

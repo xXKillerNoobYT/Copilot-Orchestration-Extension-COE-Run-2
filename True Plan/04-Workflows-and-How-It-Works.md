@@ -1,10 +1,10 @@
 # 04 — Workflows & How It All Works
 
-**Version**: 7.0
+**Version**: 8.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [03-Agent-Teams-and-Roles](03-Agent-Teams-and-Roles.md)
-**Changelog**: v7.0 — Added 4-team queue workflow, round-robin slot allocation, support agent call patterns (sync/async), lead agent escalation-to-boss flow, cancelled ticket re-engagement, documentation system workflow, file cleanup workflow, Coding Director handoff workflow. v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
+**Changelog**: v8.0 — Added Back-End Design QA Pipeline (Workflow 24), Element Link Discovery workflow (Workflow 25), Unified Review Queue workflow (Workflow 26), Tag Classification workflow (Workflow 27), Document Source Control workflow (Workflow 28). v7.0 — Added 4-team queue workflow, round-robin slot allocation, support agent call patterns (sync/async), lead agent escalation-to-boss flow, cancelled ticket re-engagement, documentation system workflow, file cleanup workflow, Coding Director handoff workflow. v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
 
 ---
 
@@ -1397,6 +1397,229 @@ This is the end-to-end pipeline that every task flows through, from planning to 
 
 ---
 
+## Workflow 24: Back-End Design QA Pipeline (v8.0) — IMPLEMENTED
+
+A 3-step quality pipeline for back-end architecture, parallel to the front-end Design QA Pipeline (Workflow 11).
+
+```
+BE Architecture Generated
+        │
+        ▼
+   Step 1: Backend Architect Agent (Agent #17)
+   Score 8 categories (0-100 total):
+   ├── API RESTfulness (0-15)
+   ├── DB Normalization (0-15)
+   ├── Service Separation (0-15)
+   ├── Auth & Security (0-15)
+   ├── Error Handling (0-10)
+   ├── Caching Strategy (0-10)
+   ├── Scalability (0-10)
+   └── Documentation (0-10)
+        │
+        ▼ SSE: "BE Score: 78/100"
+   Step 2: Gap Hunter (extended)
+   15 FE deterministic checks
+   + BE-specific gap analysis:
+   ├── Routes without auth
+   ├── Tables without indexes
+   ├── Services without error handling
+   ├── Missing CRUD routes for tables
+   └── Unlinked middleware
+        │
+        ▼ SSE: "Found 3 BE gaps"
+   Step 3: Design Hardener (extended)
+   Creates BE draft elements (is_draft=1):
+   ├── Draft API routes
+   ├── Draft services
+   ├── Draft middleware
+   └── Draft DB indexes
+        │
+        ▼ SSE: "3 BE draft proposals ready"
+   Drafts enter Unified Review Queue
+```
+
+> **👤 User View**: After the BE architecture is created (manually or auto-generated), the same 3-step quality pipeline runs as for front-end designs. You get a score, a list of gaps, and draft suggestions that appear in the Review Queue for approval/rejection.
+
+> **🔧 Developer View**: `BackendArchitectAgent.processMessage()` handles scoring with `mode: 'review'`. `GapHunterAgent` extended with BE checks (`analyzeBackendGaps()`). `DesignHardenerAgent` extended with `generateBackendDrafts()`. Drafts are `BackendElement` rows with `is_draft=1`, added to `review_queue` table. API: `POST /api/design/qa/backend`.
+
+**3 Operating Modes** for Backend Architect:
+| Mode | Trigger | Output |
+|------|---------|--------|
+| `auto_generate` | Plan has BE requirements + FE design exists | Full BE architecture from plan requirements |
+| `scaffold` | User requests basic structure | Skeleton elements, user fills details |
+| `suggest` | During design iteration | Improvement suggestions as review items |
+
+---
+
+## Workflow 25: Element Link Discovery (v8.0) — IMPLEMENTED
+
+How cross-element relationships are discovered, created, and managed.
+
+```
+Link Discovery Sources
+        │
+        ├── Manual: User drags between elements in UI
+        │   → LinkManagerService.createLink(source: 'manual')
+        │   → Link immediately approved (is_approved=1)
+        │
+        ├── Auto-detect: Scans DataModel + component bindings
+        │   → LinkManagerService.autoDetectLinks(planId)
+        │   → Finds: component data bindings → BE tables
+        │   → Finds: page routes → API routes
+        │   → Finds: shared data models across FE/BE
+        │   → Links created with confidence score
+        │   → Low confidence (<80) → review queue
+        │
+        └── AI-suggested: BackendArchitectAgent proposes connections
+            → Links created with is_approved=0
+            → Always enter review queue for user approval
+        │
+        ▼
+   LinkManagerService stores in element_links table
+        │
+        ▼
+   4 Link Types:
+   ├── fe_to_fe: Page navigation, shared components
+   ├── be_to_be: Service dependencies, middleware chains
+   ├── fe_to_be: Component → API route, page → backend service
+   └── be_to_fe: Webhook → page handler, push events
+        │
+        ▼
+   2 Granularity Levels:
+   ├── high: Element-to-element (page ↔ API route)
+   └── component: Sub-element level (field ↔ column)
+        │
+        ▼
+   Link Tree + Link Matrix views available via API
+```
+
+> **👤 User View**: Links show how front-end and back-end pieces connect. You can create links by dragging between elements, or let the system discover them automatically. AI-suggested links go to the review queue for your approval. The Link Tree shows a hierarchical view; the Link Matrix shows all connections in a grid.
+
+> **🔧 Developer View**: `LinkManagerService` (`src/core/link-manager.ts`) manages all CRUD, auto-detection, and matrix/tree rendering. Stored in `element_links` table. Auto-detect scans component `data_bindings` and `bound_data_model_id` fields. API endpoints: `GET/POST /api/links`, `GET /api/links/tree/:planId`, `GET /api/links/matrix/:planId`. Events: `link:created`, `link:approved`, `link:deleted`.
+
+---
+
+## Workflow 26: Unified Review Queue (v8.0) — IMPLEMENTED
+
+All draft elements and suggestions across FE and BE funnel into a single review queue.
+
+```
+Sources that add to Review Queue:
+        │
+        ├── Design Hardener (FE drafts)
+        │   → item_type = 'fe_draft'
+        │   → element_type = 'component'
+        │
+        ├── Design Hardener (BE drafts)
+        │   → item_type = 'be_draft'
+        │   → element_type = 'backend_element'
+        │
+        ├── Auto-detect links (low confidence)
+        │   → item_type = 'link_suggestion'
+        │   → element_type = 'link'
+        │
+        └── AI-suggested links
+            → item_type = 'link_suggestion'
+            → element_type = 'link'
+        │
+        ▼
+   ReviewQueueManagerService stores in review_queue table
+        │
+        ▼
+   User reviews items (sorted by priority, then created_at)
+        │
+        ├── Approve
+        │   ├── fe_draft → component.is_draft = 0 (becomes real)
+        │   ├── be_draft → backend_element.is_draft = 0 (becomes real)
+        │   └── link_suggestion → element_link.is_approved = 1
+        │
+        ├── Reject
+        │   ├── fe_draft → component deleted
+        │   ├── be_draft → backend_element deleted
+        │   └── link_suggestion → element_link deleted
+        │
+        └── Approve All / Reject All (batch operations)
+        │
+        ▼
+   Events emitted: review:approved, review:rejected
+   Nav badge shows pending count
+```
+
+> **👤 User View**: The Review Queue is a single list showing everything that needs your approval — front-end drafts, back-end drafts, and link suggestions all in one place. You can approve/reject individually or batch-process them. The nav badge tells you how many items need attention.
+
+> **🔧 Developer View**: `ReviewQueueManagerService` (`src/core/review-queue-manager.ts`) manages the `review_queue` table. Approval dispatches by `item_type`: FE drafts update `design_components`, BE drafts update `backend_elements`, link suggestions update `element_links`. API: `GET /api/review-queue`, `POST /api/review-queue/:id/approve`, `POST /api/review-queue/:id/reject`, `POST /api/review-queue/approve-all`, `POST /api/review-queue/reject-all`. Badge count: `GET /api/review-queue/count`.
+
+---
+
+## Workflow 27: Tag Classification (v8.0) — IMPLEMENTED
+
+How elements are classified and filtered using color-coded tags.
+
+```
+Tag System
+        │
+        ├── 5 Built-in Tags (seeded on activation):
+        │   ├── setting (blue): Configuration values
+        │   ├── automatic (purple): Auto-managed values
+        │   ├── hardcoded (red): Hardcoded magic values
+        │   ├── env-variable (yellow): Environment-dependent
+        │   └── feature-flag (orange): Feature-toggle controlled
+        │
+        └── Custom Tags: User-created, any color
+        │
+        ▼
+   Tags assigned to any element type:
+   ├── Pages (design_pages)
+   ├── Components (design_components)
+   ├── Backend Elements (backend_elements)
+   └── Data Models (data_models)
+        │
+        ▼
+   Element-tag junction stored in element_tags table
+        │
+        ▼
+   UI displays color-coded tag pills on element cards
+   Filter-by-tag available in all views
+```
+
+> **👤 User View**: Tags help you classify and filter design elements. Five built-in tags cover common patterns (settings, environment variables, feature flags, etc.). You can create custom tags with any color. Tags appear as colored pills on element cards and can be used to filter views.
+
+> **🔧 Developer View**: `TagManagerService` (`src/core/tag-manager.ts`) manages `tag_definitions` and `element_tags` tables. Built-in tags seeded via `seedBuiltinTags()` on extension activation. API: `GET/POST /api/tags`, `POST /api/tags/:id/assign`, `DELETE /api/tags/:id/unassign`, `GET /api/elements/:type/:id/tags`. Events: `tag:created`, `tag:assigned`, `tag:unassigned`.
+
+---
+
+## Workflow 28: Document Source Control (v8.0) — IMPLEMENTED
+
+Enhanced document management with source tracking and ownership.
+
+```
+Document Created
+        │
+        ├── By user (via API or UI)
+        │   → source_type = 'user'
+        │   → is_locked = true (only user can edit/delete)
+        │
+        └── By system (agent research, file cleanup, etc.)
+            → source_type = 'system'
+            → is_locked = false (agents can update)
+        │
+        ▼
+   Ownership Rules:
+   ├── User documents: only editable/deletable by user actions
+   ├── System documents: editable by agents, deletable by user or Boss AI
+   └── Locked status prevents accidental modification
+        │
+        ▼
+   Existing DocumentManager workflows unchanged
+   (context injection, verification, search)
+```
+
+> **👤 User View**: Documents you create are now protected — agents can't modify them. System-generated documents (from research, file cleanup) remain agent-editable. This prevents the system from overwriting your notes.
+
+> **🔧 Developer View**: Two new columns on `support_documents`: `source_type TEXT DEFAULT 'system'` and `is_locked INTEGER DEFAULT 0`. `DocumentManagerService.saveDocument()` accepts `source_type` and `is_locked` params. User-created documents via `POST /api/documents` set `source_type='user', is_locked=1`.
+
+---
+
 ## Workflow Timing Summary
 
 Quick reference for how long each workflow takes.
@@ -1413,10 +1636,14 @@ Quick reference for how long each workflow takes.
 | Self-Improvement | 5 min (analysis) + 48 hours (monitoring) | Monitoring period |
 | Custom Agent Execution | 1–30 minutes | Goal count × LLM calls |
 | Prompt Generation | 3–5 seconds | Context gathering |
-| Design QA Pipeline | 30–90 seconds | 3 sequential agent calls |
+| Design QA Pipeline (FE) | 30–90 seconds | 3 sequential agent calls |
+| Design QA Pipeline (BE) | 30–90 seconds | 3 sequential agent calls |
 | Plan Change Sync | 5–10 seconds | Impact analysis |
 | Agent Failure Recovery | 5–60 seconds (auto), user-dependent (Level 4) | Retry backoff delays |
 | Drift Detection | 10–30 seconds | Plan-to-code comparison |
+| Element Link Discovery | 5–15 seconds | Auto-detect scan scope |
+| Review Queue Processing | User-dependent | User review speed |
+| Tag Classification | <1 second | Deterministic (instant) |
 
 ---
 

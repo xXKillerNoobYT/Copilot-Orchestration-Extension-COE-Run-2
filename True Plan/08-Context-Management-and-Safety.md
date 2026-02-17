@@ -1,10 +1,10 @@
 # 08 — Context Management & Safety Systems
 
-**Version**: 7.0
+**Version**: 8.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [07-Program-Lifecycle-and-Evolution](07-Program-Lifecycle-and-Evolution.md)
-**Changelog**: v7.0 — Added Documentation & Reference System (support documents, folder organization, context injection), Agent File Cleanup safety rules, support document context injection into pipeline, per-team queue safety considerations | v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
+**Changelog**: v8.0 — Added Document Source Control safety (user vs system ownership, locked documents), Unified Review Queue safety rules (approval dispatch, batch safety), Link Management safety (auto-detect confidence thresholds, approval gates), Tag System safety (built-in immutability), Backend Architect scoring safety (8-category independent scoring) | v7.0 — Added Documentation & Reference System (support documents, folder organization, context injection), Agent File Cleanup safety rules, support document context injection into pipeline, per-team queue safety considerations | v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
 
 ---
 
@@ -630,6 +630,11 @@ COE follows a structured data retention policy (all configurable):
 | Task assignments | 90 days | — | 365 days |
 | Boss notepad | No limit | — | Never (persistent state) |
 | RL dataset | No limit | — | Never (needed for training) |
+| Backend elements | No limit | — | With plan deletion |
+| Element links | No limit | — | With plan deletion |
+| Tag definitions | No limit | — | Never (built-in) / user-deletable (custom) |
+| Element tags | No limit | — | Cascade with tag or element deletion |
+| Review queue items | 90 days | — | 365 days |
 
 **Archival Process**: Runs daily via `BossAgent.runHousekeeping()`. Resolved tickets older than 90 days are moved to `tickets_archive`. Archived tickets older than 365 days are permanently deleted. All archival actions logged.
 
@@ -685,6 +690,9 @@ MVP is single-user local. Post-MVP roles (if team features added):
 | Denial of service (runaway agent) | Medium | Low | Runtime limits, loop detection, timeouts |
 | Poisoned support documents | Low | Medium | Verification flag, relevance scoring, Boss review of agent output |
 | Agent file injection | Low | Low | Pattern matching only, workspace root boundary, Boss review required |
+| Unauthorized document modification | Low | Medium | Source ownership (user/system), is_locked flag, permission checks |
+| Malicious link injection | Very Low | Low | Confidence gating, approval requirement, endpoint validation |
+| Review queue manipulation | Very Low | Low | Status checks prevent double-approval, stale item detection |
 
 ### Secrets Management Best Practices
 
@@ -904,6 +912,138 @@ The 4-team queue system introduces new safety considerations:
 
 ---
 
+## Document Source Control Safety (v8.0) — IMPLEMENTED
+
+The document management system now distinguishes between user-created and system-created documents with ownership-based access control.
+
+> **👤 User View**: Documents you create manually are now protected — the AI system cannot modify or delete them. System-generated documents (from agent research, file cleanup) remain editable by the system. This prevents your notes and references from being accidentally overwritten during automated processing.
+
+> **🔧 Developer View**: Two new columns on `support_documents`: `source_type TEXT DEFAULT 'system'` and `is_locked INTEGER DEFAULT 0`. The `DocumentManagerService` checks `source_type` and `is_locked` before allowing modifications. User documents created via `POST /api/documents` automatically set `source_type='user', is_locked=1`.
+
+### Document Ownership Rules
+
+| Source Type | Created By | Editable By | Deletable By |
+|------------|-----------|------------|-------------|
+| `user` | User via API/UI | User only | User only |
+| `system` | Agent (Research, Cleanup, etc.) | Agents and user | Boss AI and user |
+
+### Lock Safety
+
+- `is_locked=1` prevents all `UPDATE` operations on content fields
+- Lock status can only be changed by the user (not by agents)
+- System documents default to `is_locked=0` (agents can update their own findings)
+- User documents default to `is_locked=1` (protected immediately)
+
+---
+
+## Unified Review Queue Safety (v8.0) — IMPLEMENTED
+
+The unified review queue introduces new safety considerations for batch operations and cross-system approval dispatch.
+
+> **👤 User View**: When you approve or reject items in the Review Queue, the action is applied to the correct system (FE designer, BE designer, or link system) automatically. Batch "Approve All" and "Reject All" are available but clearly labeled — you won't accidentally approve everything without noticing.
+
+> **🔧 Developer View**: `ReviewQueueManagerService` dispatches approval by `item_type`. Each dispatch is wrapped in a try/catch — if the underlying element no longer exists (deleted between queue entry and review), the queue item is marked `rejected` with a note. Batch operations process sequentially to avoid race conditions.
+
+### Approval Dispatch Safety
+
+| Item Type | Approval Action | Safety Check |
+|-----------|----------------|-------------|
+| `fe_draft` | Set component `is_draft=0` | Verify component still exists |
+| `be_draft` | Set backend element `is_draft=0` | Verify element still exists |
+| `link_suggestion` | Set link `is_approved=1` | Verify both endpoints still exist |
+
+### Batch Operation Rules
+
+1. **Approve All / Reject All** operate only on items matching the current `plan_id` filter
+2. Each item in a batch is processed independently — one failure doesn't block others
+3. Failed items remain in `pending` status with an error note
+4. Batch operations emit individual events per item (not one aggregate event)
+5. Batch completion emits a summary event: `review:batch_completed`
+
+### Queue Integrity
+
+- Items reference elements by ID — if the referenced element is deleted, the queue item becomes stale
+- Stale items are detected on approval attempt and auto-rejected with `review_notes: "Element no longer exists"`
+- Queue items cannot be approved twice (status check before dispatch)
+
+---
+
+## Element Link Safety (v8.0) — IMPLEMENTED
+
+Cross-element links introduce connection integrity concerns.
+
+> **👤 User View**: Links between design elements are validated before creation. Auto-detected links with low confidence go to the review queue — you decide which ones to keep. Links to deleted elements are automatically cleaned up.
+
+> **🔧 Developer View**: `LinkManagerService` validates link creation: both endpoints must exist, no duplicate links between same pair. Auto-detect sets `confidence` score; links below 80 confidence enter review queue with `is_approved=0`. Cascade behavior: when an element is deleted, its links are NOT auto-deleted (orphan detection runs on access).
+
+### Link Safety Rules
+
+| Rule | Implementation |
+|------|---------------|
+| **No self-links** | `from_element_id !== to_element_id` enforced on creation |
+| **No duplicates** | Unique constraint on (from_element_type, from_element_id, to_element_type, to_element_id) |
+| **Endpoint validation** | Both endpoints must exist at creation time |
+| **Confidence gating** | Auto-detected links with confidence < 80 require user approval |
+| **AI suggestions always reviewed** | Links with `source='ai_suggested'` always enter review queue |
+| **Orphan tolerance** | Orphaned links (endpoint deleted) are soft-flagged, not hard-deleted |
+
+### Auto-Detect Confidence Scoring
+
+| Detection Method | Typical Confidence | Approval Required? |
+|-----------------|-------------------|-------------------|
+| DataModel foreign key match | 95–100 | No (auto-approved) |
+| Component `bound_data_model_id` match | 90–95 | No (auto-approved) |
+| Route path ↔ page route similarity | 70–85 | Yes (< 80) |
+| Service dependency inference | 60–80 | Yes (< 80) |
+| AI semantic suggestion | 50–90 | Always |
+
+---
+
+## Tag System Safety (v8.0) — IMPLEMENTED
+
+The tag classification system has built-in safety for tag immutability and assignment integrity.
+
+### Built-in Tag Protection
+
+- 5 built-in tags (`setting`, `automatic`, `hardcoded`, `env-variable`, `feature-flag`) are seeded on activation
+- Built-in tags have `is_builtin=1` and **cannot be deleted or renamed** by users
+- Built-in tags can be assigned/unassigned normally
+- Custom tags can be freely created, renamed, and deleted
+
+### Tag Assignment Safety
+
+| Rule | Implementation |
+|------|---------------|
+| **Element must exist** | Tag assignment validates element exists before creating junction |
+| **No duplicate assignments** | Unique constraint on (tag_id, element_type, element_id) |
+| **Cascade on tag delete** | Deleting a tag removes all its assignments (CASCADE) |
+| **Cross-plan isolation** | Tags with `plan_id` are scoped to that plan; NULL plan_id = global |
+
+---
+
+## Backend Architect Scoring Safety (v8.0) — IMPLEMENTED
+
+The Backend Architect Agent scores BE architecture quality with strict independence rules.
+
+### Scoring Independence Rules
+
+1. Each of 8 categories scored independently (no cross-influence)
+2. `overall_score` MUST equal the sum of all category scores (validated post-scoring)
+3. Categories with zero data (e.g., no cache defined) scored 0 with explicit finding
+4. Every finding must include a concrete recommendation (not just "consider improving")
+5. Scoring uses LLM — results are deterministic for the same input (temperature 0)
+
+### BE QA Pipeline Safety
+
+| Guard | Rule |
+|-------|------|
+| **Score validation** | `overall_score === sum(category_scores)` checked before storage |
+| **Draft isolation** | BE drafts created with `is_draft=1` — never become real without user approval |
+| **No auto-modification** | Backend Architect can score and propose but never modify existing elements directly |
+| **Review queue integration** | All AI-generated BE elements enter review queue automatically |
+
+---
+
 ## File Watchers & Performance
 
 ### Watcher Safety
@@ -931,6 +1071,10 @@ COE watches several directories for changes (source code, GitHub issues, plans):
 | Support agent sync timeout | 60 seconds | Prevent blocking on slow support calls |
 | Cancelled ticket review interval | 30 minutes | Balance re-engagement checks vs. overhead |
 | Max support calls per ticket | 3 | Prevent unbounded support agent chains |
+| Auto-detect link confidence threshold | 80 | Prevent low-quality links from auto-approving |
+| Max context docs per pipeline run | 5 | Prevent token budget overrun from document injection |
+| Review queue batch size | Unlimited (plan-scoped) | Process all items for active plan |
+| BE scoring category max | 8 categories, 100 total | Deterministic ceiling prevents score inflation |
 
 ---
 

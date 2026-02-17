@@ -1043,9 +1043,9 @@ describe('Orchestrator coverage gaps', () => {
     });
 
     // --- lines 381-390: getAllAgents ---
-    test('getAllAgents returns all 16 agents including orchestrator', () => {
+    test('getAllAgents returns all 17 agents including orchestrator', () => {
         const agents = orchestrator.getAllAgents();
-        expect(agents).toHaveLength(16);
+        expect(agents).toHaveLength(17);
         // First should be the orchestrator itself
         expect(agents[0]).toBe(orchestrator);
     });
@@ -1064,7 +1064,7 @@ describe('Orchestrator coverage gaps', () => {
         orchestrator.injectContextServices(mockBudgetTracker, mockContextFeeder);
 
         expect(mockOutput.appendLine).toHaveBeenCalledWith(
-            expect.stringContaining('Context services injected into 16 agents')
+            expect.stringContaining('Context services injected into 17 agents')
         );
     });
 

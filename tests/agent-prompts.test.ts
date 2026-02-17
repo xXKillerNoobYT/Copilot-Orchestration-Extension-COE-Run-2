@@ -27,18 +27,18 @@ describe('Agent Prompt Content Tests', () => {
     describe('Orchestrator', () => {
         const prompt = getPrompt(Orchestrator);
 
-        test('contains all 13 intent categories', () => {
+        test('contains all 15 intent categories', () => {
             for (const cat of [
                 'verification', 'ui_testing', 'observation', 'review',
-                'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
-                'planning', 'question', 'research', 'custom', 'general'
+                'design_architect', 'backend_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
+                'coding_director', 'planning', 'question', 'research', 'custom', 'general'
             ]) {
                 expect(prompt).toContain(cat);
             }
         });
 
         test('contains tie-breaking rules', () => {
-            expect(prompt).toContain('verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general');
+            expect(prompt).toContain('verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general');
         });
 
         test('specifies output format as single word', () => {

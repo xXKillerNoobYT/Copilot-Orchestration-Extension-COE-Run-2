@@ -42,11 +42,16 @@ export class DocumentManagerService {
             source_agent?: string | null;
             tags?: string[];
             relevance_score?: number;
+            source_type?: 'user' | 'system';
         }
     ): SupportDocument {
         // Auto-create folder event if this is the first document in it
         const existingFolders = this.database.listDocumentFolders();
         const isNewFolder = !existingFolders.includes(folderName);
+
+        // v8.0: source_type determines locking — user docs are locked to user-only, system docs to system-only
+        const sourceType = meta?.source_type ?? 'system';
+        const isLocked = true; // All docs are locked by default for full separation
 
         const record = this.database.createSupportDocument({
             folder_name: folderName,
@@ -59,6 +64,8 @@ export class DocumentManagerService {
             source_agent: meta?.source_agent ?? null,
             tags: meta?.tags ?? [],
             relevance_score: meta?.relevance_score ?? 50,
+            source_type: sourceType,
+            is_locked: isLocked ? 1 : 0,
         });
 
         if (isNewFolder) {
@@ -131,10 +138,27 @@ export class DocumentManagerService {
         return rows.map(r => this.rowToSupportDocument(r));
     }
 
+    // ==================== LOCKING (v8.0) ====================
+
+    /**
+     * Check if a document is editable by the given actor.
+     * Full separation: user docs = user-only edits, system docs = system-only edits.
+     */
+    isEditableBy(docId: string, actor: 'user' | 'system'): boolean {
+        const doc = this.getDocument(docId);
+        if (!doc) { return false; }
+        if (!doc.is_locked) { return true; } // Unlocked docs are editable by anyone
+        return doc.source_type === actor;
+    }
+
     // ==================== UPDATE ====================
 
     /**
      * Update a document's content or metadata.
+     * Enforces locking rules — user docs can only be edited by users,
+     * system docs can only be edited by the system.
+     *
+     * @param actor - 'user' or 'system' — who is performing the update
      */
     updateDocument(id: string, updates: {
         content?: string;
@@ -144,7 +168,18 @@ export class DocumentManagerService {
         relevance_score?: number;
         folder_name?: string;
         document_name?: string;
-    }): void {
+    }, actor?: 'user' | 'system'): void {
+        // v8.0: Enforce locking
+        if (actor) {
+            if (!this.isEditableBy(id, actor)) {
+                const doc = this.getDocument(id);
+                this.outputChannel.appendLine(
+                    `[DocumentManager] Edit blocked: ${actor} cannot edit ${doc?.source_type ?? 'unknown'}-created document ${id}`
+                );
+                throw new Error(`Document ${id} is locked to ${doc?.source_type ?? 'unknown'} edits only`);
+            }
+        }
+
         this.database.updateSupportDocument(id, updates);
         this.outputChannel.appendLine(`[DocumentManager] Document updated: ${id}`);
     }
@@ -172,8 +207,22 @@ export class DocumentManagerService {
 
     /**
      * Delete a document by ID.
+     * Enforces locking — user docs can only be deleted by users, system docs by system.
+     *
+     * @param actor - 'user' or 'system' — who is performing the delete
      */
-    deleteDocument(docId: string): boolean {
+    deleteDocument(docId: string, actor?: 'user' | 'system'): boolean {
+        // v8.0: Enforce locking
+        if (actor) {
+            if (!this.isEditableBy(docId, actor)) {
+                const doc = this.getDocument(docId);
+                this.outputChannel.appendLine(
+                    `[DocumentManager] Delete blocked: ${actor} cannot delete ${doc?.source_type ?? 'unknown'}-created document ${docId}`
+                );
+                return false;
+            }
+        }
+
         const deleted = this.database.deleteSupportDocument(docId);
         if (deleted) {
             this.outputChannel.appendLine(`[DocumentManager] Document deleted: ${docId}`);
@@ -320,6 +369,8 @@ export class DocumentManagerService {
             is_verified: Boolean(row.is_verified),
             verified_by: (row.verified_by as string) ?? null,
             relevance_score: (row.relevance_score as number) ?? 50,
+            source_type: (row.source_type as 'user' | 'system') ?? 'system',
+            is_locked: Boolean(row.is_locked),
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };

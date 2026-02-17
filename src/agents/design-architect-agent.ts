@@ -2,7 +2,10 @@ import { BaseAgent } from './base-agent';
 import { AgentType, AgentContext, AgentResponse } from '../types';
 
 /**
- * Design Architect Agent — Reviews overall design structure and scores quality.
+ * Frontend Architect Agent — Reviews overall front-end design structure and scores quality.
+ *
+ * Renamed from DesignArchitectAgent in v8.0 to distinguish from BackendArchitectAgent.
+ * The enum value AgentType.DesignArchitect is kept unchanged for backward compatibility.
  *
  * This agent evaluates a visual design specification across six categories:
  * - Page hierarchy and navigation flow
@@ -15,10 +18,10 @@ import { AgentType, AgentContext, AgentResponse } from '../types';
  * It produces a 0-100 quality score with per-category breakdowns,
  * detailed findings, and actionable recommendations.
  */
-export class DesignArchitectAgent extends BaseAgent {
-    readonly name = 'Design Architect';
-    readonly type = AgentType.DesignArchitect;
-    readonly systemPrompt = `You are the Design Architect agent for the Copilot Orchestration Extension (COE).
+export class FrontendArchitectAgent extends BaseAgent {
+    readonly name = 'Frontend Architect';
+    readonly type = AgentType.DesignArchitect;  // Keep enum value for backward compat
+    readonly systemPrompt = `You are the Frontend Architect agent for the Copilot Orchestration Extension (COE).
 
 ## YOUR ONE JOB
 Review the overall design structure and score its quality.

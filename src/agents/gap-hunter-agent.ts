@@ -1,5 +1,5 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse, DesignGap, DesignGapAnalysis, DesignGapFix } from '../types';
+import { AgentType, AgentContext, AgentResponse, DesignGap, DesignGapAnalysis, DesignGapFix, BackendElement } from '../types';
 
 /**
  * Gap Hunter Agent — Finds missing pages, components, flows, and UX gaps in a design.
@@ -729,6 +729,276 @@ REQUIRED JSON OUTPUT:
             summary: summary,
             pages_analyzed: pages.length,
             components_analyzed: allComponents.length,
+        };
+    }
+
+    // ==================== BACKEND GAP ANALYSIS (v8.0) ====================
+
+    /**
+     * Analyze a plan's backend architecture for gaps using 5 deterministic checks.
+     *
+     * BE Check #16: API route with no middleware → major gap
+     * BE Check #17: DB table with 3+ columns but no indexes → major gap
+     * BE Check #18: Orphaned service (no route consumers) → minor gap
+     * BE Check #19: Non-public API route with no auth → critical gap
+     * BE Check #20: Data model exists but no matching DB table → major gap
+     */
+    analyzeBackendGaps(planId: string): DesignGap[] {
+        const backendElements = this.database.getBackendElementsByPlan(planId);
+        const dataModels = this.database.getDataModelsByPlan(planId);
+        const deterministicGaps: DesignGap[] = [];
+
+        // Build type lookups
+        var routes: BackendElement[] = [];
+        var tables: BackendElement[] = [];
+        var services: BackendElement[] = [];
+        var middleware: BackendElement[] = [];
+        var authLayers: BackendElement[] = [];
+
+        for (var i = 0; i < backendElements.length; i++) {
+            var el = backendElements[i];
+            if (el.type === 'api_route') { routes.push(el); }
+            else if (el.type === 'db_table') { tables.push(el); }
+            else if (el.type === 'service') { services.push(el); }
+            else if (el.type === 'middleware') { middleware.push(el); }
+            else if (el.type === 'auth_layer') { authLayers.push(el); }
+        }
+
+        // BE Check #16: API route with no middleware
+        for (var ri = 0; ri < routes.length; ri++) {
+            var route = routes[ri];
+            var config: Record<string, unknown> = {};
+            try { config = JSON.parse(route.config_json || '{}'); } catch { /* ignore */ }
+
+            var middlewareIds = config.middleware_ids;
+            var hasMiddleware = Array.isArray(middlewareIds) && middlewareIds.length > 0;
+
+            if (!hasMiddleware) {
+                deterministicGaps.push({
+                    id: 'gap-be-16-' + route.id,
+                    category: 'missing_component',
+                    severity: 'major',
+                    title: 'API route without middleware: ' + route.name,
+                    description: 'API route "' + route.name + '" has no middleware attached. Routes should have at least logging, error handling, or validation middleware.',
+                    suggested_fix: {
+                        action: 'modify_component',
+                        component_type: 'middleware',
+                        component_name: route.name + ' Middleware',
+                        properties: { target_route_id: route.id },
+                        position: { x: 0, y: 0, width: 0, height: 0 },
+                    },
+                });
+            }
+        }
+
+        // BE Check #17: DB table with 3+ columns but no indexes
+        for (var ti = 0; ti < tables.length; ti++) {
+            var table = tables[ti];
+            var tableConfig: Record<string, unknown> = {};
+            try { tableConfig = JSON.parse(table.config_json || '{}'); } catch { /* ignore */ }
+
+            var columns = tableConfig.columns;
+            var indexes = tableConfig.indexes;
+            var columnCount = Array.isArray(columns) ? columns.length : 0;
+            var indexCount = Array.isArray(indexes) ? indexes.length : 0;
+
+            if (columnCount >= 3 && indexCount === 0) {
+                deterministicGaps.push({
+                    id: 'gap-be-17-' + table.id,
+                    category: 'missing_component',
+                    severity: 'major',
+                    title: 'DB table without indexes: ' + table.name,
+                    description: 'Database table "' + table.name + '" has ' + columnCount + ' columns but no indexes defined. Queries on this table will perform full table scans.',
+                    suggested_fix: {
+                        action: 'modify_component',
+                        component_type: 'db_table',
+                        component_name: table.name + ' Indexes',
+                        properties: { target_table_id: table.id },
+                        position: { x: 0, y: 0, width: 0, height: 0 },
+                    },
+                });
+            }
+        }
+
+        // BE Check #18: Orphaned service (no route references it)
+        for (var si = 0; si < services.length; si++) {
+            var service = services[si];
+            var serviceNameLower = service.name.toLowerCase();
+            var serviceId = service.id;
+
+            // Check if any route's config references this service
+            var isReferenced = routes.some(function (r) {
+                var rConfigStr = (r.config_json || '').toLowerCase();
+                return rConfigStr.indexOf(serviceNameLower) !== -1 || rConfigStr.indexOf(serviceId) !== -1;
+            });
+
+            // Also check if any other service references it (dependency)
+            if (!isReferenced) {
+                isReferenced = services.some(function (s) {
+                    if (s.id === serviceId) { return false; }
+                    var sConfigStr = (s.config_json || '').toLowerCase();
+                    return sConfigStr.indexOf(serviceNameLower) !== -1 || sConfigStr.indexOf(serviceId) !== -1;
+                });
+            }
+
+            if (!isReferenced) {
+                deterministicGaps.push({
+                    id: 'gap-be-18-' + service.id,
+                    category: 'user_story_gap',
+                    severity: 'minor',
+                    title: 'Orphaned service: ' + service.name,
+                    description: 'Service "' + service.name + '" is not referenced by any API route or other service. It may be unused or missing connections.',
+                    suggested_fix: {
+                        action: 'flag_review',
+                        component_type: 'service',
+                        component_name: service.name,
+                        properties: { note: 'Connect this service to consuming routes or remove if unnecessary' },
+                        position: { x: 0, y: 0, width: 0, height: 0 },
+                    },
+                });
+            }
+        }
+
+        // BE Check #19: Non-public API route with no auth
+        for (var ai = 0; ai < routes.length; ai++) {
+            var authRoute = routes[ai];
+            var authConfig: Record<string, unknown> = {};
+            try { authConfig = JSON.parse(authRoute.config_json || '{}'); } catch { /* ignore */ }
+
+            var routePath = (authConfig.path as string || authRoute.name || '').toLowerCase();
+            var isPublicRoute = routePath.indexOf('public') !== -1 ||
+                routePath.indexOf('health') !== -1 ||
+                routePath.indexOf('status') !== -1 ||
+                routePath.indexOf('login') !== -1 ||
+                routePath.indexOf('signup') !== -1 ||
+                routePath.indexOf('register') !== -1 ||
+                routePath.indexOf('webhook') !== -1;
+
+            if (!isPublicRoute) {
+                var routeAuth = authConfig.auth;
+                var hasAuth = routeAuth !== undefined && routeAuth !== null && routeAuth !== false && routeAuth !== 'none';
+
+                // Also check if any auth_layer covers this route
+                if (!hasAuth) {
+                    hasAuth = authLayers.some(function (al) {
+                        var alConfig: Record<string, unknown> = {};
+                        try { alConfig = JSON.parse(al.config_json || '{}'); } catch { /* ignore */ }
+                        var protectedRoutes = alConfig.protected_routes;
+                        if (Array.isArray(protectedRoutes)) {
+                            return protectedRoutes.some(function (pr: string) {
+                                return routePath.indexOf(pr.toLowerCase()) !== -1;
+                            });
+                        }
+                        var appliesTo = alConfig.applies_to;
+                        return appliesTo === 'global';
+                    });
+                }
+
+                if (!hasAuth) {
+                    deterministicGaps.push({
+                        id: 'gap-be-19-' + authRoute.id,
+                        category: 'missing_component',
+                        severity: 'critical',
+                        title: 'Non-public route without auth: ' + authRoute.name,
+                        description: 'API route "' + authRoute.name + '" (' + routePath + ') is not marked as public and has no authentication configured. Unauthenticated access to non-public endpoints is a security risk.',
+                        suggested_fix: {
+                            action: 'add_component',
+                            component_type: 'auth_layer',
+                            component_name: authRoute.name + ' Auth',
+                            properties: { target_route_id: authRoute.id, auth_type: 'jwt' },
+                            position: { x: 0, y: 0, width: 0, height: 0 },
+                        },
+                    });
+                }
+            }
+        }
+
+        // BE Check #20: Data model exists but no matching DB table
+        for (var di = 0; di < dataModels.length; di++) {
+            var model = dataModels[di];
+            var modelNameLower = model.name.toLowerCase();
+
+            var hasMatchingTable = tables.some(function (t) {
+                var tNameLower = t.name.toLowerCase();
+                var tConfig: Record<string, unknown> = {};
+                try { tConfig = JSON.parse(t.config_json || '{}'); } catch { /* ignore */ }
+                var tableName = ((tConfig.table_name as string) || '').toLowerCase();
+
+                // Check various naming conventions: exact, plural, snake_case
+                return tNameLower.indexOf(modelNameLower) !== -1 ||
+                    modelNameLower.indexOf(tNameLower) !== -1 ||
+                    tableName.indexOf(modelNameLower) !== -1 ||
+                    modelNameLower.indexOf(tableName) !== -1 ||
+                    tConfig.data_model_id === model.id;
+            });
+
+            if (!hasMatchingTable) {
+                deterministicGaps.push({
+                    id: 'gap-be-20-' + model.id,
+                    category: 'missing_component',
+                    severity: 'major',
+                    title: 'Data model without DB table: ' + model.name,
+                    description: 'Data model "' + model.name + '" exists but has no matching database table in the backend design. The data has no persistence layer.',
+                    suggested_fix: {
+                        action: 'add_component',
+                        component_type: 'db_table',
+                        component_name: model.name + ' Table',
+                        properties: { data_model_id: model.id },
+                        position: { x: 0, y: 0, width: 0, height: 0 },
+                    },
+                });
+            }
+        }
+
+        this.outputChannel.appendLine(
+            '[Gap Hunter] Backend deterministic analysis: ' + deterministicGaps.length + ' gaps found'
+        );
+
+        return deterministicGaps;
+    }
+
+    /**
+     * Combined analysis: Run both frontend (analyzeGaps) and backend (analyzeBackendGaps)
+     * gap analysis, merge the results into a single DesignGapAnalysis.
+     */
+    async analyzeAllGaps(planId: string): Promise<DesignGapAnalysis> {
+        // Run frontend analysis (includes LLM)
+        const feAnalysis = await this.analyzeGaps(planId);
+
+        // Run backend deterministic checks
+        const beGaps = this.analyzeBackendGaps(planId);
+
+        // Merge
+        const allGaps = feAnalysis.gaps.concat(beGaps);
+
+        var totalCritical = allGaps.filter(function (g) { return g.severity === 'critical'; }).length;
+        var totalMajor = allGaps.filter(function (g) { return g.severity === 'major'; }).length;
+        var totalMinor = allGaps.filter(function (g) { return g.severity === 'minor'; }).length;
+
+        // Recalculate score
+        var score = 100;
+        score -= totalCritical * 15;
+        score -= totalMajor * 5;
+        score -= totalMinor * 2;
+        if (score < 0) { score = 0; }
+
+        var summary = 'Combined gap analysis: ' + allGaps.length + ' total gaps (' +
+            totalCritical + ' critical, ' + totalMajor + ' major, ' + totalMinor + ' minor). ' +
+            'FE gaps: ' + feAnalysis.gaps.length + ', BE gaps: ' + beGaps.length + '. ' +
+            'Score: ' + score + '/100.';
+
+        this.database.addAuditLog(this.name, 'all_gaps_analysis',
+            'Plan ' + planId + ': score=' + score + ', total=' + allGaps.length +
+            ' (FE=' + feAnalysis.gaps.length + ', BE=' + beGaps.length + ')');
+
+        return {
+            plan_id: planId,
+            analysis_timestamp: new Date().toISOString(),
+            overall_score: score,
+            gaps: allGaps,
+            summary: summary,
+            pages_analyzed: feAnalysis.pages_analyzed,
+            components_analyzed: feAnalysis.components_analyzed,
         };
     }
 }

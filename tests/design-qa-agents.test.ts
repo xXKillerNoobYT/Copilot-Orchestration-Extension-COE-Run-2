@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { Database } from '../src/core/database';
-import { DesignArchitectAgent } from '../src/agents/design-architect-agent';
+import { FrontendArchitectAgent } from '../src/agents/design-architect-agent';
 import { GapHunterAgent } from '../src/agents/gap-hunter-agent';
 import { AgentType, AgentStatus, AgentContext } from '../src/types';
 
@@ -40,14 +40,14 @@ afterEach(() => {
 });
 
 // ============================================================
-// DesignArchitectAgent
+// FrontendArchitectAgent (renamed from DesignArchitectAgent in v8.0)
 // ============================================================
 
-describe('DesignArchitectAgent', () => {
-    let agent: DesignArchitectAgent;
+describe('FrontendArchitectAgent', () => {
+    let agent: FrontendArchitectAgent;
 
     beforeEach(async () => {
-        agent = new DesignArchitectAgent(db, mockLLM, mockConfig, mockOutput);
+        agent = new FrontendArchitectAgent(db, mockLLM, mockConfig, mockOutput);
         await agent.initialize();
     });
 
@@ -55,7 +55,7 @@ describe('DesignArchitectAgent', () => {
 
     describe('Agent basics', () => {
         test('has correct name', () => {
-            expect(agent.name).toBe('Design Architect');
+            expect(agent.name).toBe('Frontend Architect');
         });
 
         test('has correct type', () => {
@@ -63,13 +63,13 @@ describe('DesignArchitectAgent', () => {
         });
 
         test('systemPrompt contains scoring criteria', () => {
-            expect(agent.systemPrompt).toContain('Design Architect');
+            expect(agent.systemPrompt).toContain('Frontend Architect');
             expect(agent.systemPrompt).toContain('Page hierarchy');
             expect(agent.systemPrompt).toContain('design_score');
         });
 
         test('initialize registers agent in the database', () => {
-            const registered = db.getAgentByName('Design Architect');
+            const registered = db.getAgentByName('Frontend Architect');
             expect(registered).not.toBeNull();
             expect(registered!.type).toBe(AgentType.DesignArchitect);
             expect(registered!.status).toBe(AgentStatus.Idle);

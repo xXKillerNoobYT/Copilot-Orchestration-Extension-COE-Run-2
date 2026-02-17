@@ -1,10 +1,10 @@
 # 03 — AI Agent Teams & Roles
 
-**Version**: 7.0
+**Version**: 8.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [01-Vision-and-Goals](01-Vision-and-Goals.md), [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [10-AI-Operating-Principles](10-AI-Operating-Principles.md)
-**Changelog**: v7.0 — 16 agents (added Coding Director), 4 team queues (Orchestrator, Planning, Verification, CodingDirector), lead vs support agent distinction, escalation mechanisms, support agent calls (sync/async), dynamic slot allocation, documentation system, file cleanup service. v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
+**Changelog**: v8.0 — 17 agents (added Backend Architect #17), renamed Design Architect display to Frontend Architect, 15 intent routing categories (added `backend_architect`), Back-End Designer system (9 element types, 3 operating modes, 8 QA scoring categories), Link Tree/Matrix system (4 link types, auto-detect, AI suggestions), Tag system (5 built-in + custom), unified Review Queue (drafts + suggestions), Filing system with source_type locking, Gap Hunter extended with 5 BE checks (#16-#20), Design Hardener extended for BE draft creation. v7.0 — 16 agents (added Coding Director), 4 team queues (Orchestrator, Planning, Verification, CodingDirector), lead vs support agent distinction, escalation mechanisms, support agent calls (sync/async), dynamic slot allocation, documentation system, file cleanup service. v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
 
 ---
 
@@ -56,22 +56,34 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
 │(Supp) │ │(Supp)  │ │(Supp)   │ │   AGENTS    │ │ PROCESSOR      │
 └───────┘ └────────┘ └─────────┘ └─────────────┘ └────────────────┘
                                                          │
-                              ┌───────────────┬──────────┤
-                              │               │          │
-                     ┌────────▼──────┐ ┌──────▼───┐ ┌───▼──────────┐
-                     │DESIGN QA TEAM │ │DECISION  │ │ UI TESTING & │
-                     │Architect      │ │MEMORY    │ │ OBSERVATION  │
-                     │Gap Hunter     │ │(Supp)    │ │ (Supp)       │
-                     │Hardener       │ │          │ │              │
-                     └───────────────┘ └──────────┘ └──────────────┘
-                                                          │
-                                                   ┌──────▼──────┐
-                                                   │  REVIEW     │
-                                                   │  AGENT      │
-                                                   └─────────────┘
+                    ┌─────────────────┬──────────────────┤
+                    │                 │                   │
+           ┌────────▼──────┐ ┌───────▼────────┐  ┌──────▼───┐
+           │ FE QA TEAM    │ │ BE QA          │  │DECISION  │
+           │ FE Architect  │ │ BE Architect   │  │MEMORY    │
+           │ Gap Hunter    │ │ (Agent #17)    │  │(Supp)    │
+           │ Hardener      │ └────────────────┘  └──────────┘
+           └───────────────┘
+                    │                    ┌──────────────────┐
+                    │                    │ UI TESTING &     │
+                    │                    │ OBSERVATION      │
+                    │                    │ (Supp)           │
+                    │                    └──────────────────┘
+                    │                              │
+                    │                       ┌──────▼──────┐
+                    │                       │  REVIEW     │
+                    │                       │  AGENT      │
+                    │                       └─────────────┘
+                    │
+           ┌────────▼──────────┐
+           │  REVIEW QUEUE     │
+           │  (Unified)        │
+           │  FE + BE drafts,  │
+           │  link suggestions │
+           └───────────────────┘
 ```
 
-**16 total agents** (12 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
+**17 total agents** (13 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
 
 ### Lead Agents vs Support Agents (v7.0)
 
@@ -85,7 +97,8 @@ In v7.0, agents are classified as either **Lead Agents** or **Support Agents**:
 | **Lead** | Orchestrator, Planning Agent, Verification Agent, Coding Director | Own queue, process tickets |
 | **Support** | Answer, Research, Clarity, Decision Memory, Observation | Called by leads on demand |
 | **Supervisor** | Boss AI | Manages all 4 queues |
-| **QA Specialists** | Design Architect, Gap Hunter, Hardener | Called during design pipeline |
+| **FE QA Specialists** | Frontend Architect (renamed from Design Architect in v8.0), Gap Hunter, Hardener | Called during FE design pipeline |
+| **BE QA Specialist** | Backend Architect (v8.0, Agent #17) | Called during BE design pipeline |
 | **Quality Gate** | Review Agent | Called by Ticket Processor |
 
 ### 4 Team Queues (v7.0)
@@ -208,7 +221,9 @@ Stage 1 (Fast, No LLM): Count keyword matches per category. The category with th
 | `verification` | verify, check, test, validate, review, pass, fail, coverage, acceptance, confirm, ensure, assertion, correct, accuracy, regression, quality |
 | `ui_testing` | ui test, visual test, component test, screenshot, pixel, render, layout test, design test |
 | `observation` | observe, monitor, watch, track, detect, pattern, anomaly, behavior, trend, metric, signal |
-| `design_architect` | design review, architecture review, page hierarchy, design assessment, design score, structure review |
+| `review` | review code, review change, peer review, code review |
+| `design_architect` | design review, architecture review, page hierarchy, design assessment, design score, structure review, frontend architect, fe architect |
+| `backend_architect` | backend review, backend architecture, api review, db review, service review, backend score, backend design, be architect, backend QA |
 | `gap_hunter` | gap analysis, find gaps, missing components, missing pages, coverage analysis, design gaps, completeness check |
 | `design_hardener` | harden design, fix gaps, complete design, fill gaps, add missing, draft components |
 | `decision_memory` | previous decision, past answer, user preference, decision history, conflict check, what did user say |
@@ -219,7 +234,9 @@ Stage 1 (Fast, No LLM): Count keyword matches per category. The category with th
 | `custom` | custom agent, my agent, specialized, domain |
 | `general` | (fallback when no keywords match) |
 
-**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
+**15 routing categories** (v8.0: added `backend_architect`).
+
+**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
 
 Stage 2 (LLM Fallback): If zero keywords match, ask the LLM to classify. If the LLM is offline, default to `general`.
 
@@ -639,19 +656,21 @@ FEEDBACK: [If needs_clarification: numbered list of max 3 specific points that n
 
 ---
 
-## Team 8: Design QA Team (v3.0)
+## Team 8: Design QA Teams (v3.0, enhanced v8.0)
 
-Three specialized agents that work together to ensure design quality before coding begins.
+Specialized agents that work together to ensure design quality — both front-end and back-end — before coding begins.
 
-> **👤 User View**: Before any code is written, the Design QA Team reviews your project's design. The Architect scores your design quality (out of 100), the Gap Hunter finds anything missing (like a 404 page or a form without a submit button), and the Hardener creates draft fixes for you to approve. You'll see draft components appear with dashed outlines on the canvas — drag, resize, approve, or reject them.
+> **👤 User View**: Before any code is written, the Design QA Teams review your project's design. The **Frontend Architect** scores your FE design quality (out of 100), the **Backend Architect** (v8.0) scores your BE architecture across 8 categories, the **Gap Hunter** finds anything missing (including BE gaps like unprotected API routes), and the **Hardener** creates draft fixes for both FE and BE. You'll see draft items appear with dashed outlines — approve or reject them via the unified Review Queue.
 
-> **🔧 Developer View**: All three agents extend `BaseAgent`. The Design Architect uses a 6-category scoring prompt (hierarchy, components, layout, tokens, data binding, user flow). The Gap Hunter runs 15 deterministic checks as pure functions BEFORE any LLM call — this saves token cost for obvious issues. The Hardener produces `is_draft = 1` components that block phase advancement via the `GateService`. Score threshold is configurable via `DesignScoreThreshold` setting (default 80, min 50).
+> **🔧 Developer View**: All QA agents extend `BaseAgent`. The Frontend Architect uses a 6-category scoring prompt (hierarchy, components, layout, tokens, data binding, user flow). The Backend Architect (v8.0) uses an 8-category scoring prompt (API RESTfulness, DB normalization, service separation, auth/security, error handling, caching, scalability, documentation). The Gap Hunter runs 20 deterministic checks (15 FE + 5 BE) as pure functions BEFORE any LLM call. The Hardener produces `is_draft = 1` components/elements that appear in the unified Review Queue. Score threshold is configurable via `DesignScoreThreshold` setting (default 80, min 50).
 
-### Design Architect Agent
+### Frontend Architect Agent (renamed from Design Architect in v8.0)
 
-**Role**: Reviews overall design structure and scores quality across 6 categories.
+**Role**: Reviews overall front-end design structure and scores quality across 6 categories.
 
-**File**: `src/agents/design-architect-agent.ts`
+**File**: `src/agents/design-architect-agent.ts` (class: `FrontendArchitectAgent`)
+
+> **Note**: The class was renamed from `DesignArchitectAgent` to `FrontendArchitectAgent` in v8.0. The `AgentType.DesignArchitect` enum value is unchanged for backward compatibility. A deprecated `getDesignArchitectAgent()` alias exists in the Orchestrator.
 
 **What It Does**:
 - Evaluates page hierarchy and navigation flow (0-20 points)
@@ -665,13 +684,80 @@ Three specialized agents that work together to ensure design quality before codi
 
 **Score Threshold**: Configurable via Settings (default 80, minimum 50). Design must meet this score before advancing past the DesignReview phase.
 
+### Backend Architect Agent (v8.0 — Agent #17)
+
+**Role**: Reviews back-end architecture quality and scores across 8 categories. Can auto-generate, scaffold, or suggest BE architecture.
+
+**File**: `src/agents/backend-architect-agent.ts` (class: `BackendArchitectAgent`)
+
+> **👤 User View**: The Backend Architect is your BE quality reviewer. It scores your API routes, database tables, services, middleware, and other BE elements across 8 quality categories. It can also auto-generate a full BE architecture from your plan, create a basic scaffold for you to fill in, or suggest improvements as you design. Draft BE elements appear in the Review Queue for your approval.
+
+> **🔧 Developer View**: `BackendArchitectAgent` extends `BaseAgent`. Registered as `AgentType.BackendArchitect`. Routed via `backend_architect` intent category (keywords: backend review, backend architecture, api review, db review, service review, etc.). Output is a JSON `BackendQAScore` with 8 category scores (0-100 total), findings array, and recommendations. The agent has 3 operating modes controlled by the `mode` parameter: `auto_generate`, `scaffold`, and `suggest`.
+
+**9 Backend Element Types**:
+- `api_route` — API endpoints with path, method, auth, request/response schemas
+- `db_table` — Database tables with columns, indexes, foreign keys
+- `service` — Business logic services with methods and dependencies
+- `controller` — Request handlers connecting routes to services
+- `middleware` — Request/response interceptors (auth, logging, validation)
+- `auth_layer` — Authentication/authorization configuration
+- `background_job` — Scheduled/async tasks with cron schedules and retry policies
+- `cache_strategy` — Caching configuration with TTL, eviction, and backend selection
+- `queue_definition` — Message queue configuration with concurrency and dead letter handling
+
+**8 QA Scoring Categories** (100 total):
+
+| Category | Points | What It Evaluates |
+|----------|--------|-------------------|
+| API RESTfulness | 0-15 | Proper HTTP methods, resource naming, status codes, versioning |
+| DB Normalization | 0-15 | Table normalization, index coverage, foreign key integrity |
+| Service Separation | 0-15 | Single responsibility, dependency injection, circular dependency avoidance |
+| Auth & Security | 0-15 | Auth coverage on non-public routes, token handling, input validation |
+| Error Handling | 0-10 | Consistent error responses, edge case coverage, graceful degradation |
+| Caching Strategy | 0-10 | Appropriate TTLs, cache invalidation, cache-aside pattern usage |
+| Scalability | 0-10 | Statelessness, horizontal scaling readiness, bottleneck avoidance |
+| Documentation | 0-10 | API documentation, schema documentation, inline comments |
+
+**3 Operating Modes**:
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `auto_generate` | Reads plan + FE design + data models → generates full BE architecture | Starting from scratch |
+| `scaffold` | Generates basic structure (routes, tables, services) → user fills details | User wants control over specifics |
+| `suggest` | Watches design changes → suggests improvements as review queue items | Ongoing design refinement |
+
+**Output Format**:
+```json
+{
+  "backend_score": 0-100,
+  "category_scores": {
+    "api_restfulness": 0-15,
+    "db_normalization": 0-15,
+    "service_separation": 0-15,
+    "auth_security": 0-15,
+    "error_handling": 0-10,
+    "caching_strategy": 0-10,
+    "scalability": 0-10,
+    "documentation": 0-10
+  },
+  "findings": [
+    { "category": "auth_security", "severity": "critical", "message": "API route /api/users has no auth middleware", "element_id": "..." }
+  ],
+  "assessment": "One paragraph summary of BE architecture quality",
+  "recommendations": ["Specific actionable recommendations"],
+  "generated_elements": []
+}
+```
+
 ### Gap Hunter Agent
 
-**Role**: Finds missing pages, components, flows, and UX gaps using a hybrid deterministic+LLM approach.
+**Role**: Finds missing pages, components, flows, and UX gaps using a hybrid deterministic+LLM approach. **v8.0: Extended with 5 BE-specific checks.**
 
 **File**: `src/agents/gap-hunter-agent.ts`
 
-**15 Deterministic Checks** (run as pure functions, no LLM cost):
+**20 Deterministic Checks** (run as pure functions, no LLM cost):
+
+**Front-End Checks (#1-#15)**:
 | # | Check | Severity |
 |---|-------|----------|
 | 1 | Page has 0 components | critical |
@@ -690,23 +776,44 @@ Three specialized agents that work together to ensure design quality before codi
 | 14 | One-way navigation (no way back) | major |
 | 15 | Input without nearby label | major |
 
+**Back-End Checks (#16-#20, v8.0)**:
+| # | Check | Severity |
+|---|-------|----------|
+| 16 | API route with no middleware | major |
+| 17 | DB table with 3+ columns but no indexes | major |
+| 18 | Orphaned service (no route consumers) | minor |
+| 19 | Non-public API route with no auth | critical |
+| 20 | Data model exists but no matching DB table | major |
+
+**New Methods (v8.0)**:
+- `analyzeBackendGaps(planId)` — runs only BE checks (#16-#20)
+- `analyzeAllGaps(planId)` — runs all 20 checks (FE + BE combined)
+
 **LLM Analysis**: Only triggered when no critical deterministic gaps exist. Covers user flow gaps, missing interaction patterns, and edge-case pages.
 
 **Score Calculation**: `100 - (15 × critical) - (5 × major) - (2 × minor)`
 
 ### Design Hardener Agent
 
-**Role**: Creates draft component proposals from gap analysis for user review. Does NOT auto-apply changes.
+**Role**: Creates draft component/element proposals from gap analysis for user review. Does NOT auto-apply changes. **v8.0: Extended to create BE draft elements.**
 
 **File**: `src/agents/design-hardener-agent.ts`
 
 **Human-in-the-Loop Flow**:
-1. Takes `DesignGapAnalysis` as input
-2. Simple fixes (complete info) → creates draft components directly (no LLM)
-3. Complex fixes (new pages, insufficient detail) → LLM generates detailed proposals
-4. All created components have `is_draft = 1` (dashed outline on canvas)
-5. User can drag/resize, then approve or reject each draft
-6. **Drafts block phase advancement** — all must be handled before Design Review → Task Generation gate passes
+1. Takes `DesignGapAnalysis` as input (which now includes both FE and BE gaps)
+2. Simple fixes (complete info) → creates draft components/elements directly (no LLM)
+3. Complex fixes (new pages/services, insufficient detail) → LLM generates detailed proposals
+4. **FE drafts**: Created as design components with `is_draft = 1` (dashed outline on FE canvas)
+5. **BE drafts** (v8.0): Created as backend elements with `is_draft = 1` (dashed outline on BE canvas)
+6. **All drafts appear in the unified Review Queue** (v8.0) — approve/reject from queue OR from the canvas
+7. User can drag/resize, then approve or reject each draft
+8. **Drafts block phase advancement** — all must be handled before Design Review → Task Generation gate passes
+
+**v8.0 Enhancement — BE Draft Creation**:
+New method `hardenBackendDesign(planId, gapAnalysis)`:
+- Creates draft BE elements (`is_draft=1`) for each BE gap
+- Creates review queue entries (`item_type='be_draft'`) for each draft
+- Follows the same simple/complex split pattern as FE hardening
 
 ---
 
@@ -993,8 +1100,12 @@ This matrix defines WHO is Responsible, Accountable, Consulted, and Informed for
 | Question answering (system → user) | Ticket System | Orchestrator | Clarity Agent (quality check) | Boss AI |
 | Task verification | Verification Agent | Orchestrator | TestRunnerService (real tests) | Boss AI, User |
 | Verification follow-up creation | Verification Agent | Verification Agent | — | Orchestrator, Planning Agent |
-| Design quality Review | Design QA Team (3 agents) | Design Architect | Gap Hunter, Hardener | Planning Agent |
-| Draft component approval | User | User | Design Hardener (proposals) | Design Architect |
+| FE design quality review | FE QA Team (FE Architect, Gap Hunter, Hardener) | Frontend Architect | Gap Hunter, Hardener | Planning Agent |
+| BE architecture quality review (v8.0) | Backend Architect Agent | Backend Architect | Gap Hunter (BE checks) | Planning Agent |
+| Draft component/element approval | User | User | Hardener (proposals), Review Queue | Frontend/Backend Architect |
+| Review Queue management (v8.0) | ReviewQueueManager | User | Hardener, Backend Architect | Orchestrator |
+| Link detection and approval (v8.0) | LinkManager | User | Backend Architect (suggestions) | Orchestrator |
+| Tag assignment (v8.0) | TagManager | User/System | — | Orchestrator |
 | Ticket clarity scoring | Clarity Agent | Ticket Processor | — | Orchestrator |
 | Decision conflict resolution | Decision Memory Agent | Decision Memory Agent | User (if conflict detected) | Orchestrator |
 | System health monitoring | Boss AI | Boss AI | — | User (if escalated) |
@@ -1048,8 +1159,11 @@ Every agent can fail. This table documents what happens when each agent fails an
 | **Clarity Agent** | 5 rounds without resolution | Round counter | Escalate to Boss AI | Boss determines if question is unanswerable, removes from queue |
 | **Custom Agent** | Loop detected (3 similar responses) | Output similarity check | Halt agent, save partial results | User notified via ticket. Agent paused until user adjusts config. |
 | **Custom Agent** | Budget exceeded (50 LLM calls) | Call counter | Agent halts, saves progress | User notified, can resume with fresh budget or adjust goals |
-| **Design Architect** | Score below minimum (50) | Score validation | Block phase advancement | Design must be revised. Create ticket for user with specific deficiencies. |
+| **Frontend Architect** | Score below minimum (50) | Score validation | Block phase advancement | Design must be revised. Create ticket for user with specific deficiencies. |
+| **Backend Architect** | BE score below threshold | Score validation | Block BE phase advancement | BE architecture must be revised. Findings show specific category deficiencies. |
+| **Backend Architect** | Auto-generate produces invalid elements | Config schema validation | Reject invalid elements, log errors | User can manually create elements via BE Designer canvas |
 | **Gap Hunter** | False positives (finds gaps that don't exist) | User rejects gap findings | User can dismiss individual gaps | Dismissed gaps stored in `dismissed_gaps` to prevent re-flagging |
+| **Gap Hunter** | BE check false positive (e.g., flags intentionally unprotected route) | User rejects BE gap | User can dismiss individual BE gaps | Dismissed gaps stored, won't re-flag |
 | **Decision Memory** | Conflict not detected | Manual user discovery | User reports conflict | Mark old decision as `superseded_by`, update affected tasks |
 | **Ticket Processor** | Queue stuck (no progress for 5 min) | Idle watchdog timer | Trigger Boss AI health check | Boss classifies cause. If agent error → restart agent. If external → alert user. |
 | **External Coding AI** | MCP connection lost | HTTP connection error | Mark current task as `blocked` | Retry connection 3x at 10s intervals. If still down → queue tasks, alert user. |
@@ -1057,7 +1171,13 @@ Every agent can fail. This table documents what happens when each agent fails an
 | **Coding Director** | Prerequisites never met | Pre-flight check loop | Escalate to Boss with blocker list | Boss resolves blockers or cancels ticket |
 | **Coding Director** | External agent reports failure | `processExternalResult()` | Create escalation to Boss | Boss decides: retry, re-plan, or escalate to user |
 | **Document Manager** | Search returns no relevant docs | Empty result set | Fall back to LLM-only processing | Non-fatal — pipeline continues without doc context |
+| **Document Manager** | User tries to edit system-locked doc | Locking check in updateDocument() | Block edit, return error | User informed that system docs are read-only. Create user copy if needed. |
 | **File Cleanup** | Agent file detection false positive | User rejects cleanup | Skip file, log rejection | Pattern list can be refined |
+| **Review Queue** | Approve/reject on non-existent item | Item lookup returns null | Return error, skip operation | Non-fatal — UI refreshes to show current state |
+| **Review Queue** | Badge count out of sync | Polling detects mismatch | Force-refresh count from DB | Badge auto-corrects on next poll cycle (10s) |
+| **Link Manager** | Auto-detect finds spurious links | Low confidence score | Add to review queue as suggestion (not auto-approved) | User reviews and rejects false links |
+| **Link Manager** | Matrix/tree data too large | Element count > 500 | Paginate or summarize results | Warn user about large dataset, suggest filtering by plan |
+| **Tag Manager** | Attempt to delete builtin tag | `is_builtin` check in deleteTag() | Block deletion, return error | User informed that built-in tags cannot be removed |
 
 > **👤 User View**: When an agent fails, COE tries to fix it automatically. You only get notified when the system can't self-recover — usually via a ticket in the Ticket Panel. The ticket explains what went wrong in plain language and tells you what (if anything) you need to do.
 
@@ -1350,7 +1470,8 @@ These are the GATES that prevent bad work from flowing through the system. Each 
 | Answer Agent | 50% | Auto-escalate question to user via ticket |
 | Research Agent | 60% | Stop research, escalate to user |
 | Clarity Agent | 70% | Request clarification (up to 5 rounds) |
-| Design Architect | 80% (configurable, min 50) | Block phase advancement, require design revision |
+| Frontend Architect | 80% (configurable, min 50) | Block FE phase advancement, require design revision |
+| Backend Architect (v8.0) | 80% (configurable, min 50) | Block BE phase advancement, require architecture revision |
 | Verification Agent | N/A (uses met/not_met/unclear, not confidence) | N/A |
 
 ### Gate 3: Clarity Gate
@@ -1510,18 +1631,18 @@ External Coding AI
 - The external Coding AI can pull the next task while waiting for question answers
 - All state transitions are logged to `audit_log` and emitted via `EventBus`
 
-### Pattern 3: Design Review Chain (v3.0)
+### Pattern 3: FE Design Review Chain (v3.0)
 
 ```
 Planning Agent
     │
     ▼ plan generated with page/component definitions
-Design Architect Agent
+Frontend Architect Agent (renamed from Design Architect in v8.0)
     │
-    ▼ score design quality (0-100, 6 categories)
+    ▼ score FE design quality (0-100, 6 categories)
     │
     ├── SCORE ≥ threshold (default 80)
-    │       → Design approved, proceed to Gap Hunter
+    │       → FE design approved, proceed to Gap Hunter
     │
     └── SCORE < threshold
             → Block phase advancement
@@ -1533,7 +1654,7 @@ Design Architect Agent
 
 Gap Hunter Agent
     │
-    ▼ 15 deterministic checks first (no LLM cost)
+    ▼ 15 FE deterministic checks first (no LLM cost)
     ▼ LLM analysis only if no critical gaps found
     │
     ├── NO GAPS → Proceed to task generation
@@ -1544,9 +1665,10 @@ Gap Hunter Agent
                 Design Hardener Agent
                         │
                         ▼ create draft components (is_draft = 1)
-                        ▼ dashed outline on canvas
+                        ▼ dashed outline on FE canvas
+                        ▼ create review_queue entries (item_type='fe_draft') [v8.0]
                         │
-                        ▼ User reviews drafts
+                        ▼ User reviews drafts (via canvas OR Review Queue)
                         │
                         ├── APPROVED → is_draft = 0, proceed
                         │
@@ -1559,11 +1681,59 @@ Gap Hunter Agent
                         └── NO → Block phase advancement
 ```
 
+### Pattern 3b: BE Architecture Review Chain (v8.0)
+
+```
+Planning Agent
+    │
+    ▼ plan generated (or user creates BE elements on canvas)
+Backend Architect Agent (Agent #17)
+    │
+    ▼ score BE architecture (0-100, 8 categories)
+    │
+    ├── SCORE ≥ threshold
+    │       → BE architecture approved, proceed to BE Gap Hunter
+    │
+    └── SCORE < threshold
+            → Create ticket: "BE architecture needs revision"
+            → Findings show specific category deficiencies
+
+Gap Hunter Agent (BE mode)
+    │
+    ▼ 5 BE deterministic checks (#16-#20, no LLM cost)
+    │
+    ├── NO BE GAPS → Proceed
+    │
+    └── BE GAPS FOUND → Pass to Hardener (BE mode)
+                            │
+                            ▼
+                    Design Hardener Agent (BE mode)
+                            │
+                            ▼ create draft BE elements (is_draft = 1)
+                            ▼ dashed outline on BE canvas
+                            ▼ create review_queue entries (item_type='be_draft')
+                            │
+                            ▼ User reviews via Review Queue panel
+                            │
+                            ├── APPROVED → is_draft = 0, element finalized
+                            │
+                            └── REJECTED → remove draft element, log reason
+
+Backend Architect Agent (suggest mode)
+    │
+    ▼ analyze FE→BE and BE→BE relationships
+    ▼ generate link suggestions (auto-detect + AI)
+    │
+    ▼ create review_queue entries (item_type='link_suggestion')
+    │
+    ▼ User approves/rejects in Review Queue
+```
+
 ---
 
 ## Agent Implementation Checklist
 
-When adding a new agent to COE, follow this checklist. Missing any step will cause routing failures, type errors, or silent drops.
+When adding a new agent to COE, follow this checklist. Missing any step will cause routing failures, type errors, or silent drops. (Current count: **17 agents** as of v8.0)
 
 ### Required Steps
 
@@ -1573,10 +1743,10 @@ When adding a new agent to COE, follow this checklist. Missing any step will cau
 4. **Add keywords**: New entry in `KEYWORD_MAP` in `src/agents/orchestrator.ts`
 5. **Add priority**: New entry in `INTENT_PRIORITY` in `src/agents/orchestrator.ts`
 6. **Add routing case**: New case in `routeToAgent()` switch in `src/agents/orchestrator.ts`
-7. **Instantiate in extension**: Create instance in `src/extension.ts` `activate()` function
-8. **Register with Orchestrator**: Pass instance to Orchestrator constructor or setter
-9. **Write tests**: New test file in `tests/` covering: routing, output format, failure modes
-10. **Update True Plan**: Add to this document (Doc 03) with full team section
+7. **Instantiate in extension**: Create instance in `src/extension.ts` `activate()` function (or via Orchestrator `initialize()` for auto-registered agents)
+8. **Register with Orchestrator**: Pass instance to Orchestrator constructor or setter, update `getAllAgents()` count in tests
+9. **Write tests**: New test file in `tests/` covering: routing, output format, failure modes. Update `agents-coverage.test.ts` count.
+10. **Update True Plan**: Add to this document (Doc 03) with full team section. Update Doc 09 feature list.
 
 ### Optional Steps
 

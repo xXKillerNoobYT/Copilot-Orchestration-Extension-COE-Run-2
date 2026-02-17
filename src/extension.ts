@@ -25,6 +25,10 @@ import { getEventBus } from './core/event-bus';
 import { TicketProcessorService } from './core/ticket-processor';
 import { DocumentManagerService } from './core/document-manager';
 import { AgentFileCleanupService } from './core/agent-file-cleanup';
+// v8.0 services
+import { LinkManagerService } from './core/link-manager';
+import { TagManagerService } from './core/tag-manager';
+import { ReviewQueueManagerService } from './core/review-queue-manager';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -235,6 +239,17 @@ export async function activate(context: vscode.ExtensionContext) {
         ticketProcessor.setDocumentManager(documentManager);
         orchestrator.getAnswerAgent().setDocumentManager(documentManager);
         outputChannel.appendLine('DocumentManagerService initialized and wired into TicketProcessor + AnswerAgent.');
+
+        // Phase 3d: Initialize v8.0 services (LinkManager, TagManager, ReviewQueueManager)
+        const linkManager = new LinkManagerService(database, eventBus, outputChannel);
+        outputChannel.appendLine('LinkManagerService initialized.');
+
+        const tagManager = new TagManagerService(database, eventBus, outputChannel);
+        tagManager.seedBuiltinTags();
+        outputChannel.appendLine('TagManagerService initialized with 5 built-in tags seeded.');
+
+        const reviewQueueManager = new ReviewQueueManagerService(database, eventBus, outputChannel);
+        outputChannel.appendLine('ReviewQueueManagerService initialized.');
 
         // Phase 4: Initialize UI — single status view (full app opens in browser)
         const statusView = new StatusViewProvider(database, mcpServer);

@@ -116,6 +116,18 @@ export type COEEventType =
     | 'support:sync_call' | 'support:async_ticket_created'
     | 'docs:document_saved' | 'docs:document_updated' | 'docs:document_verified' | 'docs:folder_created'
     | 'agent_file:detected' | 'agent_file:processed' | 'agent_file:cleaned'
+    // v8.0: Backend Designer
+    | 'backend:element_created' | 'backend:element_updated' | 'backend:element_deleted'
+    | 'backend:architect_review_completed' | 'backend:qa_pipeline_completed'
+    // v8.0: Element Link System
+    | 'link:created' | 'link:updated' | 'link:deleted'
+    | 'link:approved' | 'link:rejected'
+    | 'link:auto_detected' | 'link:ai_suggested'
+    // v8.0: Tag System
+    | 'tag:created' | 'tag:deleted' | 'tag:assigned' | 'tag:removed'
+    // v8.0: Unified Review Queue
+    | 'review_queue:item_created' | 'review_queue:item_approved' | 'review_queue:item_rejected'
+    | 'review_queue:badge_update'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

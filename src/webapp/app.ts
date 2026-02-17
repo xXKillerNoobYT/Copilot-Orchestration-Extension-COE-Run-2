@@ -768,6 +768,9 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <button class="btn btn-sm btn-secondary" onclick="renderQuestionPopup()" style="position:relative;padding:4px 10px;font-size:0.85em">
             AI Feedback <span class="tab-badge red" id="badge-questions-nav" style="position:absolute;top:-4px;right:-4px"></span>
         </button>
+        <button class="btn btn-sm btn-secondary" onclick="switchToTab('planning');showSubPanel('reviewQueue')" style="position:relative;padding:4px 10px;font-size:0.85em">
+            Review Queue <span class="tab-badge" id="badge-review-nav" style="position:absolute;top:-4px;right:-4px;background:var(--orange);display:none"></span>
+        </button>
     </div>
     <div class="status">
         <span id="navBossCountdown" style="font-size:0.8em;color:var(--yellow);display:none"></span>
@@ -1325,6 +1328,120 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                     <button class="btn btn-sm btn-danger" onclick="qaBulkDraftAction('reject')">Reject All</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- ==================== v8.0 SUB-PANEL TABS ==================== -->
+    <div class="section" id="v8SubPanelTabs" style="display:none;margin-bottom:0;padding-bottom:0">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid var(--border);padding-bottom:8px">
+            <button class="btn btn-sm" id="subTab-beDesigner" onclick="showSubPanel('beDesigner')" style="opacity:0.6">BE Designer</button>
+            <button class="btn btn-sm" id="subTab-linkTree" onclick="showSubPanel('linkTree')" style="opacity:0.6">Link Tree</button>
+            <button class="btn btn-sm" id="subTab-filing" onclick="showSubPanel('filing')" style="opacity:0.6">Filing</button>
+            <button class="btn btn-sm" id="subTab-reviewQueue" onclick="showSubPanel('reviewQueue')" style="opacity:0.6">Review Queue <span id="subTab-reviewQueue-badge" style="background:var(--orange);color:#000;border-radius:50%;padding:0 5px;font-size:0.7em;margin-left:4px;display:none"></span></button>
+        </div>
+    </div>
+
+    <!-- ==================== BACK-END DESIGNER (v8.0) ==================== -->
+    <div class="section" id="beDesignerSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h2>Back-End Designer</h2>
+            <div style="display:flex;gap:6px">
+                <select id="beViewMode" onchange="toggleBeView(this.value)" style="padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)">
+                    <option value="layer">Layer View</option>
+                    <option value="domain">Domain View</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="runBeQA()">Run BE QA</button>
+                <button class="btn btn-sm btn-secondary" onclick="beAutoDetectLinks()">Auto-Detect Links</button>
+            </div>
+        </div>
+        <div style="display:flex;gap:12px;min-height:400px">
+            <!-- Left: Layer/Domain sidebar -->
+            <div style="width:200px;flex-shrink:0;background:var(--surface);border-radius:8px;padding:12px;overflow-y:auto;max-height:600px" id="beSidebar">
+                <div id="beSidebarContent"><p style="color:var(--subtext);font-size:0.85em">Select a plan to view backend elements</p></div>
+            </div>
+            <!-- Center: Canvas cards -->
+            <div style="flex:1;background:var(--surface);border-radius:8px;padding:16px;position:relative;overflow:auto;background-image:radial-gradient(circle,var(--border) 1px,transparent 1px);background-size:20px 20px;min-height:400px" id="beCanvas">
+                <div id="beCanvasContent" style="position:relative;min-height:380px"></div>
+            </div>
+            <!-- Right: Editor panel -->
+            <div style="width:280px;flex-shrink:0;background:var(--surface);border-radius:8px;padding:12px;overflow-y:auto;max-height:600px;display:none" id="beEditorPanel">
+                <div id="beEditorContent"></div>
+            </div>
+        </div>
+        <!-- BE QA Results -->
+        <div id="beQAResults" style="display:none;margin-top:12px">
+            <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;background:var(--surface);border-radius:8px;padding:16px">
+                <div style="text-align:center;min-width:80px">
+                    <div class="qa-score" id="beQaScoreValue">--</div>
+                    <div style="font-size:0.8em;color:var(--subtext)">BE QA Score</div>
+                </div>
+                <div style="flex:1;min-width:200px">
+                    <div class="qa-gaps" id="beQaGaps">
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--red)" id="beGapCritical">--</span> Critical</div>
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--yellow)" id="beGapMajor">--</span> Major</div>
+                        <div class="qa-gap-item"><span class="gap-count" style="color:var(--overlay)" id="beGapMinor">--</span> Minor</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== LINK TREE / MATRIX (v8.0) ==================== -->
+    <div class="section" id="linkTreeSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h2>Link Tree</h2>
+            <div style="display:flex;gap:6px">
+                <div style="display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden">
+                    <button class="btn btn-sm" id="linkViewMatrix" onclick="switchLinkView('matrix')" style="border-radius:0;border:none;opacity:0.6">Matrix</button>
+                    <button class="btn btn-sm" id="linkViewTree" onclick="switchLinkView('tree')" style="border-radius:0;border:none;opacity:1;background:var(--accent)">Tree</button>
+                </div>
+                <button class="btn btn-sm btn-secondary" onclick="refreshLinkData()">Refresh</button>
+                <button class="btn btn-sm btn-primary" onclick="autoDetectLinksFromUI()">Auto-Detect</button>
+            </div>
+        </div>
+        <div id="linkContent" style="background:var(--surface);border-radius:8px;padding:16px;min-height:300px">
+            <p style="color:var(--subtext);font-size:0.85em">Select a plan to view element links</p>
+        </div>
+    </div>
+
+    <!-- ==================== FILING (SUPPORT DOCS) (v8.0) ==================== -->
+    <div class="section" id="filingSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h2>Filing</h2>
+            <div style="display:flex;gap:6px">
+                <input type="text" id="filingSearch" placeholder="Search documents..." style="padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);width:200px" oninput="filterFilingDocs(this.value)">
+                <button class="btn btn-sm btn-primary" onclick="createUserDocument()">+ New Document</button>
+            </div>
+        </div>
+        <div style="display:flex;gap:12px;min-height:300px">
+            <!-- Folder list -->
+            <div style="width:180px;flex-shrink:0;background:var(--surface);border-radius:8px;padding:12px;overflow-y:auto;max-height:500px" id="filingFolders">
+                <p style="color:var(--subtext);font-size:0.85em">Loading folders...</p>
+            </div>
+            <!-- Document list -->
+            <div style="flex:1;background:var(--surface);border-radius:8px;padding:16px;overflow-y:auto;max-height:500px" id="filingDocList">
+                <p style="color:var(--subtext);font-size:0.85em">Select a folder to view documents</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== REVIEW QUEUE (v8.0) ==================== -->
+    <div class="section" id="reviewQueueSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h2>Review Queue <span id="reviewQueueCount" class="badge badge-gray" style="font-size:0.7em">0</span></h2>
+            <div style="display:flex;gap:6px">
+                <div style="display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden">
+                    <button class="btn btn-sm rqFilter active" data-filter="all" onclick="filterReviewQueue('all')" style="border-radius:0;border:none">All</button>
+                    <button class="btn btn-sm rqFilter" data-filter="fe_draft" onclick="filterReviewQueue('fe_draft')" style="border-radius:0;border:none;opacity:0.6">FE Drafts</button>
+                    <button class="btn btn-sm rqFilter" data-filter="be_draft" onclick="filterReviewQueue('be_draft')" style="border-radius:0;border:none;opacity:0.6">BE Drafts</button>
+                    <button class="btn btn-sm rqFilter" data-filter="link_suggestion" onclick="filterReviewQueue('link_suggestion')" style="border-radius:0;border:none;opacity:0.6">Links</button>
+                </div>
+                <button class="btn btn-sm btn-success" onclick="reviewQueueBulkAction('approve')">Approve All</button>
+                <button class="btn btn-sm btn-danger" onclick="reviewQueueBulkAction('reject')">Reject All</button>
+            </div>
+        </div>
+        <div id="reviewQueueItems" style="display:flex;flex-direction:column;gap:8px">
+            <p style="color:var(--subtext);font-size:0.85em">No pending review items</p>
         </div>
     </div>
 
@@ -4106,6 +4223,9 @@ async function loadDesignerForPlan(planId) {
     if (title) title.textContent = 'Visual Designer' + (planData ? ' \u2014 ' + planData.name : '');
     document.getElementById('designerSection').style.display = '';
     document.querySelector('.main').classList.add('designer-open');
+    // v8.0: Show sub-panel tabs
+    var subTabs = document.getElementById('v8SubPanelTabs');
+    if (subTabs) subTabs.style.display = '';
     // Scroll to designer
     document.getElementById('designerSection').scrollIntoView({ behavior: 'smooth' });
 
@@ -8471,6 +8591,531 @@ switchToTab = function(pageName) {
     _origSwitchToTab(pageName);
     updateAiChatContext();
 };
+
+// ==================== v8.0: SUB-PANEL SYSTEM ====================
+var currentSubPanels = {};
+
+function showSubPanel(panelName) {
+    var sections = {
+        beDesigner: 'beDesignerSection',
+        linkTree: 'linkTreeSection',
+        filing: 'filingSection',
+        reviewQueue: 'reviewQueueSection'
+    };
+    var sectionId = sections[panelName];
+    if (!sectionId) return;
+    var el = document.getElementById(sectionId);
+    if (!el) return;
+    var isVisible = el.style.display !== 'none';
+    // Toggle visibility
+    el.style.display = isVisible ? 'none' : '';
+    currentSubPanels[panelName] = !isVisible;
+    // Update tab button style
+    var tabBtn = document.getElementById('subTab-' + panelName);
+    if (tabBtn) tabBtn.style.opacity = isVisible ? '0.6' : '1';
+    // Load data when showing
+    if (!isVisible) {
+        if (panelName === 'beDesigner') loadBeDesigner();
+        if (panelName === 'linkTree') refreshLinkData();
+        if (panelName === 'filing') loadFiling();
+        if (panelName === 'reviewQueue') loadReviewQueue();
+    }
+}
+
+// ==================== v8.0: BE DESIGNER ====================
+var beElements = [];
+var selectedBeElement = null;
+var beIconMap = {
+    api_route: '→', db_table: '⊞', service: '⚙', controller: '☰',
+    middleware: '⛨', auth_layer: '🔒', background_job: '⏰',
+    cache_strategy: '⚡', queue_definition: '☷'
+};
+
+function loadBeDesigner() {
+    if (!currentDesignerPlanId) return;
+    api('backend/elements?plan_id=' + currentDesignerPlanId).then(function(data) {
+        beElements = Array.isArray(data) ? data : [];
+        renderBeSidebar();
+        renderBeCanvas();
+    });
+}
+
+function renderBeSidebar() {
+    var sidebar = document.getElementById('beSidebarContent');
+    if (!sidebar) return;
+    var viewMode = document.getElementById('beViewMode');
+    var mode = viewMode ? viewMode.value : 'layer';
+    var grouped = {};
+    var layers = ['routes', 'models', 'services', 'middleware', 'auth', 'jobs', 'caching', 'queues'];
+    if (mode === 'layer') {
+        for (var i = 0; i < layers.length; i++) grouped[layers[i]] = [];
+        for (var j = 0; j < beElements.length; j++) {
+            var layer = beElements[j].layer || 'services';
+            if (!grouped[layer]) grouped[layer] = [];
+            grouped[layer].push(beElements[j]);
+        }
+    } else {
+        for (var k = 0; k < beElements.length; k++) {
+            var domain = beElements[k].domain || 'general';
+            if (!grouped[domain]) grouped[domain] = [];
+            grouped[domain].push(beElements[k]);
+        }
+    }
+    var html = '';
+    var keys = Object.keys(grouped);
+    for (var g = 0; g < keys.length; g++) {
+        var groupName = keys[g];
+        var items = grouped[groupName];
+        html += '<div style="margin-bottom:8px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:4px 0" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'\':\'none\'">';
+        html += '<strong style="font-size:0.85em;text-transform:capitalize">' + groupName + ' <span style="color:var(--subtext)">(' + items.length + ')</span></strong>';
+        html += '<button class="btn btn-sm" onclick="event.stopPropagation();addBeElement(\'' + groupName + '\')" style="padding:0 6px;font-size:0.85em">+</button>';
+        html += '</div>';
+        html += '<div>';
+        for (var m = 0; m < items.length; m++) {
+            var el = items[m];
+            var icon = beIconMap[el.type] || '●';
+            var isDraft = el.is_draft === true || el.is_draft === 1;
+            var draftStyle = isDraft ? 'border:1px dashed var(--yellow);' : '';
+            html += '<div class="be-sidebar-item" onclick="selectBeElement(\'' + el.id + '\')" style="padding:4px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + draftStyle + '">';
+            html += '<span style="margin-right:4px">' + icon + '</span>' + el.name;
+            if (isDraft) html += ' <span style="color:var(--yellow);font-size:0.7em">(draft)</span>';
+            html += '</div>';
+        }
+        html += '</div></div>';
+    }
+    sidebar.innerHTML = html || '<p style="color:var(--subtext);font-size:0.85em">No backend elements</p>';
+}
+
+function renderBeCanvas() {
+    var canvas = document.getElementById('beCanvasContent');
+    if (!canvas) return;
+    var html = '';
+    for (var i = 0; i < beElements.length; i++) {
+        var el = beElements[i];
+        var icon = beIconMap[el.type] || '●';
+        var isDraft = el.is_draft === true || el.is_draft === 1;
+        var borderStyle = isDraft ? '2px dashed var(--yellow)' : '1px solid var(--border)';
+        var x = el.x || (100 + (i % 4) * 220);
+        var y = el.y || (50 + Math.floor(i / 4) * 150);
+        var w = el.width || 200;
+        var config = {};
+        try { config = JSON.parse(el.config_json || '{}'); } catch(e) {}
+        var detail = '';
+        if (el.type === 'api_route') detail = (config.method || 'GET') + ' ' + (config.path || '/');
+        else if (el.type === 'db_table') detail = (config.table_name || el.name);
+        else if (el.type === 'service') detail = (config.methods ? config.methods.length + ' methods' : '');
+        html += '<div class="be-card" onclick="selectBeElement(\'' + el.id + '\')" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;background:var(--background);border:' + borderStyle + ';border-radius:8px;padding:10px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2)">';
+        html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
+        html += '<span style="font-size:1.2em">' + icon + '</span>';
+        html += '<strong style="font-size:0.9em">' + el.name + '</strong>';
+        html += '</div>';
+        html += '<div style="font-size:0.75em;color:var(--subtext)">' + el.type.replace(/_/g, ' ') + '</div>';
+        if (detail) html += '<div style="font-size:0.75em;color:var(--accent);margin-top:4px">' + detail + '</div>';
+        if (isDraft) html += '<div style="font-size:0.7em;color:var(--yellow);margin-top:4px">⚠ Draft — needs review</div>';
+        html += '</div>';
+    }
+    if (beElements.length === 0) {
+        html = '<div style="text-align:center;padding:60px 20px;color:var(--subtext)"><p>No backend elements yet</p><button class="btn btn-primary btn-sm" onclick="addBeElement(\'services\')">+ Add First Element</button></div>';
+    }
+    canvas.innerHTML = html;
+}
+
+function selectBeElement(elementId) {
+    selectedBeElement = null;
+    for (var i = 0; i < beElements.length; i++) {
+        if (beElements[i].id === elementId) { selectedBeElement = beElements[i]; break; }
+    }
+    if (!selectedBeElement) return;
+    var panel = document.getElementById('beEditorPanel');
+    if (panel) panel.style.display = '';
+    renderBeEditor();
+}
+
+function renderBeEditor() {
+    var content = document.getElementById('beEditorContent');
+    if (!content || !selectedBeElement) return;
+    var el = selectedBeElement;
+    var html = '<h3 style="margin-bottom:12px">' + (beIconMap[el.type] || '●') + ' ' + el.name + '</h3>';
+    html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Name</label>';
+    html += '<input type="text" value="' + (el.name || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'name\',this.value)"></div>';
+    html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Type</label>';
+    html += '<select style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'type\',this.value)">';
+    var types = ['api_route','db_table','service','controller','middleware','auth_layer','background_job','cache_strategy','queue_definition'];
+    for (var i = 0; i < types.length; i++) {
+        html += '<option value="' + types[i] + '"' + (el.type === types[i] ? ' selected' : '') + '>' + types[i].replace(/_/g, ' ') + '</option>';
+    }
+    html += '</select></div>';
+    html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Domain</label>';
+    html += '<input type="text" value="' + (el.domain || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'domain\',this.value)"></div>';
+    html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Config (JSON)</label>';
+    html += '<textarea style="width:100%;height:120px;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-family:monospace;font-size:0.8em" onchange="updateBeField(\'' + el.id + '\',\'config_json\',this.value)">' + (el.config_json || '{}') + '</textarea></div>';
+    html += '<div style="display:flex;gap:6px;margin-top:12px">';
+    html += '<button class="btn btn-sm btn-danger" onclick="deleteBeElement(\'' + el.id + '\')">Delete</button>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\'beEditorPanel\').style.display=\'none\'">Close</button>';
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function addBeElement(layerOrDomain) {
+    if (!currentDesignerPlanId) return;
+    var typeMap = { routes: 'api_route', models: 'db_table', services: 'service', middleware: 'middleware', auth: 'auth_layer', jobs: 'background_job', caching: 'cache_strategy', queues: 'queue_definition' };
+    var elType = typeMap[layerOrDomain] || 'service';
+    api('backend/elements', 'POST', {
+        plan_id: currentDesignerPlanId,
+        type: elType,
+        name: 'New ' + elType.replace(/_/g, ' '),
+        layer: layerOrDomain,
+        domain: 'general'
+    }).then(function() { loadBeDesigner(); });
+}
+
+function updateBeField(elementId, field, value) {
+    var body = {};
+    body[field] = value;
+    api('backend/elements/' + elementId, 'PUT', body).then(function() { loadBeDesigner(); });
+}
+
+function deleteBeElement(elementId) {
+    api('backend/elements/' + elementId, 'DELETE').then(function() {
+        document.getElementById('beEditorPanel').style.display = 'none';
+        selectedBeElement = null;
+        loadBeDesigner();
+    });
+}
+
+function toggleBeView(mode) { renderBeSidebar(); }
+
+function runBeQA() {
+    if (!currentDesignerPlanId) return;
+    var resultsDiv = document.getElementById('beQAResults');
+    if (resultsDiv) resultsDiv.style.display = '';
+    api('backend/full-qa', 'POST', { plan_id: currentDesignerPlanId }).then(function(data) {
+        if (data && data.architect_score !== undefined) {
+            var scoreEl = document.getElementById('beQaScoreValue');
+            if (scoreEl) scoreEl.textContent = data.architect_score;
+        }
+        if (data && data.gap_analysis) {
+            var gaps = data.gap_analysis.gaps || [];
+            var crit = 0, maj = 0, min = 0;
+            for (var i = 0; i < gaps.length; i++) {
+                if (gaps[i].severity === 'critical') crit++;
+                else if (gaps[i].severity === 'major') maj++;
+                else min++;
+            }
+            var critEl = document.getElementById('beGapCritical');
+            var majEl = document.getElementById('beGapMajor');
+            var minEl = document.getElementById('beGapMinor');
+            if (critEl) critEl.textContent = crit;
+            if (majEl) majEl.textContent = maj;
+            if (minEl) minEl.textContent = min;
+        }
+        loadBeDesigner();
+        loadReviewQueue();
+    });
+}
+
+function beAutoDetectLinks() {
+    if (!currentDesignerPlanId) return;
+    api('links/auto-detect?plan_id=' + currentDesignerPlanId, 'POST').then(function(data) {
+        var count = data && data.created ? data.created : 0;
+        alert('Auto-detected ' + count + ' new links');
+        refreshLinkData();
+    });
+}
+
+// ==================== v8.0: LINK TREE / MATRIX ====================
+var currentLinkView = 'tree';
+
+function switchLinkView(mode) {
+    currentLinkView = mode;
+    var matBtn = document.getElementById('linkViewMatrix');
+    var treeBtn = document.getElementById('linkViewTree');
+    if (matBtn) { matBtn.style.opacity = mode === 'matrix' ? '1' : '0.6'; matBtn.style.background = mode === 'matrix' ? 'var(--accent)' : ''; }
+    if (treeBtn) { treeBtn.style.opacity = mode === 'tree' ? '1' : '0.6'; treeBtn.style.background = mode === 'tree' ? 'var(--accent)' : ''; }
+    refreshLinkData();
+}
+
+function refreshLinkData() {
+    if (!currentDesignerPlanId) return;
+    var endpoint = currentLinkView === 'matrix' ? 'links/matrix' : 'links/tree';
+    api(endpoint + '?plan_id=' + currentDesignerPlanId).then(function(data) {
+        if (currentLinkView === 'matrix') renderLinkMatrix(data);
+        else renderLinkTree(data);
+    });
+}
+
+function renderLinkMatrix(data) {
+    var container = document.getElementById('linkContent');
+    if (!container || !data) return;
+    var rows = data.rows || [];
+    var cols = data.cols || [];
+    var cells = data.cells || [];
+    if (rows.length === 0) { container.innerHTML = '<p style="color:var(--subtext)">No elements to display in matrix</p>'; return; }
+    var colorMap = { fe_to_fe: '#3B82F6', be_to_be: '#22C55E', fe_to_be: '#F97316', be_to_fe: '#A855F7' };
+    var html = '<div style="overflow:auto;max-height:500px"><table style="border-collapse:collapse;font-size:0.75em">';
+    html += '<tr><th style="padding:4px;border:1px solid var(--border)"></th>';
+    for (var c = 0; c < cols.length; c++) {
+        html += '<th style="padding:4px;border:1px solid var(--border);writing-mode:vertical-lr;transform:rotate(180deg);max-width:30px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + cols[c].name + '">' + cols[c].name.substring(0, 15) + '</th>';
+    }
+    html += '</tr>';
+    // Build cell lookup
+    var cellMap = {};
+    for (var k = 0; k < cells.length; k++) { cellMap[cells[k].row + ',' + cells[k].col] = cells[k]; }
+    for (var r = 0; r < rows.length; r++) {
+        html += '<tr><td style="padding:4px;border:1px solid var(--border);white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + rows[r].name + '">' + rows[r].name.substring(0, 15) + '</td>';
+        for (var c2 = 0; c2 < cols.length; c2++) {
+            var cell = cellMap[r + ',' + c2];
+            if (cell) {
+                var color = colorMap[cell.link_type] || '#888';
+                html += '<td style="padding:4px;border:1px solid var(--border);text-align:center;cursor:pointer" title="' + (cell.label || cell.link_type) + '" onclick="alert(\'Link: ' + (cell.label || cell.link_type).replace(/'/g, '') + '\')"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + '"></span></td>';
+            } else {
+                html += '<td style="padding:4px;border:1px solid var(--border)"></td>';
+            }
+        }
+        html += '</tr>';
+    }
+    html += '</table></div>';
+    html += '<div style="margin-top:8px;display:flex;gap:12px;font-size:0.75em">';
+    html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3B82F6"></span> FE↔FE</span>';
+    html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22C55E"></span> BE↔BE</span>';
+    html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F97316"></span> FE→BE</span>';
+    html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#A855F7"></span> BE→FE</span>';
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function renderLinkTree(data) {
+    var container = document.getElementById('linkContent');
+    if (!container) return;
+    if (!Array.isArray(data) || data.length === 0) { container.innerHTML = '<p style="color:var(--subtext)">No links found. Use Auto-Detect or create links manually.</p>'; return; }
+    var colorMap = { fe_to_fe: '#3B82F6', be_to_be: '#22C55E', fe_to_be: '#F97316', be_to_fe: '#A855F7' };
+    var html = '';
+    for (var i = 0; i < data.length; i++) {
+        var cat = data[i];
+        var linkCount = cat.links ? cat.links.length : 0;
+        var color = colorMap[cat.id] || '#888';
+        html += '<div style="margin-bottom:12px">';
+        html += '<div style="cursor:pointer;padding:6px 8px;background:var(--background);border-radius:4px;border-left:3px solid ' + color + '" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'\':\'none\'">';
+        html += '<strong>' + cat.name + '</strong> <span style="color:var(--subtext);font-size:0.8em">(' + linkCount + ' links)</span></div>';
+        html += '<div style="padding-left:16px">';
+        if (cat.children) {
+            for (var j = 0; j < cat.children.length; j++) {
+                var src = cat.children[j];
+                html += '<div style="margin:4px 0;padding:4px 8px;border-radius:4px;background:var(--surface)">';
+                html += '<strong style="font-size:0.85em">' + src.name + '</strong>';
+                if (src.children && src.children.length > 0) {
+                    html += '<div style="padding-left:12px">';
+                    for (var k = 0; k < src.children.length; k++) {
+                        var tgt = src.children[k];
+                        html += '<div style="font-size:0.8em;color:var(--subtext);padding:2px 0">→ ' + tgt.name + '</div>';
+                    }
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+        }
+        html += '</div></div>';
+    }
+    container.innerHTML = html;
+}
+
+function autoDetectLinksFromUI() {
+    if (!currentDesignerPlanId) return;
+    api('links/auto-detect?plan_id=' + currentDesignerPlanId, 'POST').then(function(data) {
+        refreshLinkData();
+    });
+}
+
+// ==================== v8.0: FILING ====================
+var filingCurrentFolder = null;
+var filingSearchTerm = '';
+
+function loadFiling() {
+    api('documents/folders').then(function(folders) {
+        if (!Array.isArray(folders)) folders = [];
+        renderFilingFolders(folders);
+        if (folders.length > 0 && !filingCurrentFolder) {
+            filingCurrentFolder = folders[0];
+            loadFilingDocs(filingCurrentFolder);
+        }
+    });
+}
+
+function renderFilingFolders(folders) {
+    var container = document.getElementById('filingFolders');
+    if (!container) return;
+    var html = '';
+    for (var i = 0; i < folders.length; i++) {
+        var isActive = folders[i] === filingCurrentFolder;
+        html += '<div onclick="filingCurrentFolder=\'' + folders[i].replace(/'/g, '') + '\';loadFilingDocs(filingCurrentFolder);renderFilingFolders(' + JSON.stringify(folders).replace(/"/g, '&quot;') + ')" style="padding:6px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + (isActive ? 'background:var(--accent);color:#000' : '') + '">';
+        html += '📁 ' + folders[i];
+        html += '</div>';
+    }
+    if (folders.length === 0) html = '<p style="color:var(--subtext);font-size:0.85em">No folders yet</p>';
+    container.innerHTML = html;
+}
+
+function loadFilingDocs(folderName) {
+    api('documents/search?folder_name=' + encodeURIComponent(folderName)).then(function(docs) {
+        if (!Array.isArray(docs)) docs = [];
+        renderFilingDocs(docs);
+    });
+}
+
+function renderFilingDocs(docs) {
+    var container = document.getElementById('filingDocList');
+    if (!container) return;
+    var filtered = docs;
+    if (filingSearchTerm) {
+        var term = filingSearchTerm.toLowerCase();
+        filtered = docs.filter(function(d) {
+            return (d.document_name || '').toLowerCase().indexOf(term) >= 0 || (d.content || '').toLowerCase().indexOf(term) >= 0;
+        });
+    }
+    if (filtered.length === 0) { container.innerHTML = '<p style="color:var(--subtext);font-size:0.85em">No documents found</p>'; return; }
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+        var doc = filtered[i];
+        var isUser = doc.source_type === 'user';
+        var badgeColor = isUser ? '#4CAF50' : '#9E9E9E';
+        var badgeLabel = isUser ? 'User' : 'System';
+        var lockIcon = doc.is_locked ? '🔒' : '';
+        html += '<div style="padding:10px;margin-bottom:8px;border-radius:6px;background:var(--background);border:1px solid var(--border)">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+        html += '<div><strong style="font-size:0.9em">' + doc.document_name + '</strong> <span style="display:inline-block;padding:1px 6px;border-radius:10px;font-size:0.7em;background:' + badgeColor + ';color:#fff">' + badgeLabel + '</span> ' + lockIcon + '</div>';
+        html += '<div style="display:flex;gap:4px">';
+        if (isUser) {
+            html += '<button class="btn btn-sm btn-danger" onclick="deleteFilingDoc(\'' + doc.id + '\')">Delete</button>';
+        }
+        html += '</div></div>';
+        if (doc.summary) html += '<div style="font-size:0.8em;color:var(--subtext);margin-top:4px">' + doc.summary + '</div>';
+        html += '<div style="font-size:0.75em;color:var(--subtext);margin-top:4px">' + (doc.content || '').substring(0, 150) + (doc.content && doc.content.length > 150 ? '...' : '') + '</div>';
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function filterFilingDocs(searchTerm) {
+    filingSearchTerm = searchTerm;
+    if (filingCurrentFolder) loadFilingDocs(filingCurrentFolder);
+}
+
+function createUserDocument() {
+    var docName = prompt('Document name:');
+    if (!docName) return;
+    var folderName = prompt('Folder:', filingCurrentFolder || 'General');
+    if (!folderName) return;
+    api('documents', 'POST', {
+        folder_name: folderName,
+        document_name: docName,
+        content: '',
+        source_type: 'user',
+        plan_id: currentDesignerPlanId || null
+    }).then(function() { loadFiling(); });
+}
+
+function deleteFilingDoc(docId) {
+    if (!confirm('Delete this document?')) return;
+    api('documents/' + docId, 'DELETE').then(function() { loadFiling(); });
+}
+
+// ==================== v8.0: REVIEW QUEUE ====================
+var reviewQueueFilter = 'all';
+var reviewQueueItems = [];
+
+function loadReviewQueue() {
+    if (!currentDesignerPlanId) return;
+    api('review-queue?plan_id=' + currentDesignerPlanId).then(function(items) {
+        reviewQueueItems = Array.isArray(items) ? items : [];
+        renderReviewQueue();
+        updateReviewBadge();
+    });
+}
+
+function filterReviewQueue(filter) {
+    reviewQueueFilter = filter;
+    // Update button styles
+    var btns = document.querySelectorAll('.rqFilter');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].style.opacity = btns[i].getAttribute('data-filter') === filter ? '1' : '0.6';
+        btns[i].classList.toggle('active', btns[i].getAttribute('data-filter') === filter);
+    }
+    renderReviewQueue();
+}
+
+function renderReviewQueue() {
+    var container = document.getElementById('reviewQueueItems');
+    if (!container) return;
+    var filtered = reviewQueueItems;
+    if (reviewQueueFilter !== 'all') {
+        filtered = reviewQueueItems.filter(function(item) { return item.item_type === reviewQueueFilter; });
+    }
+    var countEl = document.getElementById('reviewQueueCount');
+    if (countEl) countEl.textContent = filtered.length;
+    if (filtered.length === 0) { container.innerHTML = '<p style="color:var(--subtext);font-size:0.85em">No pending review items' + (reviewQueueFilter !== 'all' ? ' for this filter' : '') + '</p>'; return; }
+    var typeColors = { fe_draft: '#3B82F6', be_draft: '#22C55E', link_suggestion: '#F97316', tag_suggestion: '#A855F7' };
+    var typeLabels = { fe_draft: 'FE Draft', be_draft: 'BE Draft', link_suggestion: 'Link', tag_suggestion: 'Tag' };
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+        var item = filtered[i];
+        var color = typeColors[item.item_type] || '#888';
+        var label = typeLabels[item.item_type] || item.item_type;
+        html += '<div style="padding:12px;background:var(--surface);border-radius:8px;border-left:3px solid ' + color + ';display:flex;justify-content:space-between;align-items:center">';
+        html += '<div style="flex:1">';
+        html += '<div style="display:flex;align-items:center;gap:8px"><span style="padding:2px 8px;border-radius:10px;font-size:0.7em;background:' + color + ';color:#fff">' + label + '</span>';
+        html += '<strong style="font-size:0.9em">' + item.title + '</strong></div>';
+        if (item.description) html += '<div style="font-size:0.8em;color:var(--subtext);margin-top:4px">' + item.description + '</div>';
+        if (item.source_agent) html += '<div style="font-size:0.75em;color:var(--subtext);margin-top:2px">Source: ' + item.source_agent + '</div>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:6px;flex-shrink:0">';
+        html += '<button class="btn btn-sm btn-success" onclick="reviewAction(\'' + item.id + '\',\'approve\')">Approve</button>';
+        html += '<button class="btn btn-sm btn-danger" onclick="reviewAction(\'' + item.id + '\',\'reject\')">Reject</button>';
+        html += '</div></div>';
+    }
+    container.innerHTML = html;
+}
+
+function reviewAction(itemId, action) {
+    api('review-queue/' + itemId + '/' + action, 'POST').then(function() {
+        loadReviewQueue();
+        loadBeDesigner();
+    });
+}
+
+function reviewQueueBulkAction(action) {
+    if (!currentDesignerPlanId) return;
+    if (!confirm(action === 'approve' ? 'Approve all pending items?' : 'Reject all pending items?')) return;
+    api('review-queue/' + action + '-all?plan_id=' + currentDesignerPlanId, 'POST').then(function() {
+        loadReviewQueue();
+        loadBeDesigner();
+    });
+}
+
+function updateReviewBadge() {
+    if (!currentDesignerPlanId) return;
+    api('review-queue/count?plan_id=' + currentDesignerPlanId).then(function(data) {
+        var count = data && data.count ? data.count : 0;
+        // Nav badge
+        var navBadge = document.getElementById('badge-review-nav');
+        if (navBadge) {
+            navBadge.textContent = count;
+            navBadge.style.display = count > 0 ? '' : 'none';
+        }
+        // Sub-tab badge
+        var subBadge = document.getElementById('subTab-reviewQueue-badge');
+        if (subBadge) {
+            subBadge.textContent = count;
+            subBadge.style.display = count > 0 ? '' : 'none';
+        }
+    });
+}
+
+// Poll review badge every 10 seconds
+setInterval(function() {
+    if (currentDesignerPlanId) updateReviewBadge();
+}, 10000);
+
 </script>
 
 <!-- Live Preview Mini-Panel -->

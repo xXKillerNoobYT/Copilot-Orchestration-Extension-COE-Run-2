@@ -1,5 +1,5 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse, DesignComponent, DesignGapAnalysis, DesignGap, DesignHardeningResult } from '../types';
+import { AgentType, AgentContext, AgentResponse, DesignComponent, DesignGapAnalysis, DesignGap, DesignHardeningResult, BackendElementType } from '../types';
 
 /**
  * Design Hardener Agent — Takes a DesignGapAnalysis and creates draft components
@@ -422,6 +422,261 @@ REQUIRED JSON OUTPUT:
         this.outputChannel.appendLine(
             '[Design Hardener] Complete: ' + result.gaps_addressed + ' gaps addressed, ' +
             result.drafts_created + ' drafts created, ' + result.pages_created + ' pages created'
+        );
+
+        return result;
+    }
+
+    // ==================== BACKEND HARDENING (v8.0) ====================
+
+    /**
+     * Harden backend design by creating draft backend elements to fill gaps.
+     * Creates backend elements with is_draft=1 and corresponding review queue entries.
+     *
+     * Uses the same simple/complex split pattern as the FE hardener:
+     * - Simple: gaps with enough info → create directly (no LLM)
+     * - Complex: gaps needing detail → send to LLM for proposals
+     *
+     * @param planId - The plan to harden
+     * @param gapAnalysis - Gap analysis (filtered to BE gaps)
+     * @returns Hardening result
+     */
+    async hardenBackendDesign(planId: string, gapAnalysis: DesignGapAnalysis): Promise<DesignHardeningResult> {
+        const result: DesignHardeningResult = {
+            plan_id: planId,
+            gaps_addressed: 0,
+            drafts_created: 0,
+            pages_created: 0,
+            actions_taken: [],
+        };
+
+        // Filter to only backend-related actionable gaps (gap IDs starting with 'gap-be-')
+        const beGaps = gapAnalysis.gaps.filter(function (gap) {
+            if (!gap.suggested_fix) { return false; }
+            return gap.id.indexOf('gap-be-') === 0;
+        });
+
+        if (beGaps.length === 0) {
+            this.outputChannel.appendLine('[Design Hardener] No actionable backend gaps to harden.');
+            return result;
+        }
+
+        this.outputChannel.appendLine(
+            '[Design Hardener] Processing ' + beGaps.length + ' backend gaps for plan ' + planId
+        );
+
+        // Map gap component_type to backend element type
+        var beTypeMap: Record<string, BackendElementType> = {
+            'middleware': 'middleware',
+            'db_table': 'db_table',
+            'service': 'service',
+            'auth_layer': 'auth_layer',
+            'api_route': 'api_route',
+            'controller': 'controller',
+            'background_job': 'background_job',
+            'cache_strategy': 'cache_strategy',
+            'queue_definition': 'queue_definition',
+        };
+
+        // Simple fixes: create backend elements directly
+        var simpleGaps: DesignGap[] = [];
+        var complexGaps: DesignGap[] = [];
+
+        for (var i = 0; i < beGaps.length; i++) {
+            var gap = beGaps[i];
+            var fix = gap.suggested_fix;
+
+            if (fix.action === 'add_component' && fix.component_type && beTypeMap[fix.component_type]) {
+                simpleGaps.push(gap);
+            } else if (fix.action === 'modify_component') {
+                // modify_component gaps are flagged for review, not auto-created
+                simpleGaps.push(gap);
+            } else {
+                complexGaps.push(gap);
+            }
+        }
+
+        this.outputChannel.appendLine(
+            '[Design Hardener] BE: ' + simpleGaps.length + ' simple gaps, ' +
+            complexGaps.length + ' complex gaps'
+        );
+
+        // Handle simple gaps — create draft backend elements
+        for (var si = 0; si < simpleGaps.length; si++) {
+            var simpleGap = simpleGaps[si];
+            var simpleFix = simpleGap.suggested_fix;
+
+            try {
+                var elementType = beTypeMap[simpleFix.component_type || ''];
+                if (!elementType) {
+                    // For flag_review or unrecognized types, skip direct creation
+                    result.actions_taken.push({
+                        gap_id: simpleGap.id,
+                        action: simpleFix.action,
+                        result: 'skipped: no matching backend element type for ' + simpleFix.component_type,
+                    });
+                    continue;
+                }
+
+                var elementName = simpleFix.component_name || simpleGap.title;
+                var configJson = simpleFix.properties ? JSON.stringify(simpleFix.properties) : '{}';
+
+                var newElement = this.database.createBackendElement({
+                    plan_id: planId,
+                    type: elementType,
+                    name: elementName,
+                    domain: '',
+                    layer: elementType === 'api_route' || elementType === 'controller' ? 'routes' :
+                           elementType === 'service' ? 'services' :
+                           elementType === 'db_table' ? 'models' :
+                           elementType === 'middleware' ? 'middleware' :
+                           elementType === 'auth_layer' ? 'auth' :
+                           elementType === 'background_job' ? 'jobs' :
+                           elementType === 'cache_strategy' ? 'caching' :
+                           elementType === 'queue_definition' ? 'queues' : 'services',
+                    config_json: configJson,
+                    x: 0,
+                    y: si * 120,
+                    width: 280,
+                    height: 100,
+                    is_collapsed: false,
+                    is_draft: true,
+                    sort_order: si,
+                });
+
+                result.drafts_created++;
+                result.gaps_addressed++;
+                result.actions_taken.push({
+                    gap_id: simpleGap.id,
+                    action: 'add_backend_element',
+                    result: 'draft created: ' + elementType + ' "' + elementName + '" (id: ' + newElement.id + ')',
+                });
+
+                this.outputChannel.appendLine(
+                    '[Design Hardener] Created draft BE element: ' + elementType + ' "' + elementName + '"'
+                );
+            } catch (error) {
+                var errMsg = error instanceof Error ? error.message : String(error);
+                result.actions_taken.push({
+                    gap_id: simpleGap.id,
+                    action: simpleFix.action,
+                    result: 'error: ' + errMsg,
+                });
+            }
+        }
+
+        // Handle complex gaps via LLM
+        if (complexGaps.length > 0) {
+            try {
+                var sections: string[] = [];
+                sections.push('=== BACKEND DESIGN GAPS REQUIRING DETAILED PROPOSALS ===');
+                sections.push('Plan ID: ' + planId);
+                sections.push('Generate backend element specifications for each gap.');
+                sections.push('');
+
+                for (var ci = 0; ci < complexGaps.length; ci++) {
+                    var cGap = complexGaps[ci];
+                    sections.push('Gap #' + (ci + 1) + ':');
+                    sections.push('  ID: ' + cGap.id);
+                    sections.push('  Title: ' + cGap.title);
+                    sections.push('  Description: ' + cGap.description);
+                    if (cGap.suggested_fix) {
+                        sections.push('  Suggested Fix: ' + cGap.suggested_fix.action + ' — ' + (cGap.suggested_fix.component_name || ''));
+                    }
+                    sections.push('');
+                }
+
+                sections.push('Respond with JSON:');
+                sections.push('{');
+                sections.push('  "proposals": [');
+                sections.push('    {');
+                sections.push('      "gap_id": "<id>",');
+                sections.push('      "element_type": "api_route|db_table|service|controller|middleware|auth_layer|background_job|cache_strategy|queue_definition",');
+                sections.push('      "name": "<name>",');
+                sections.push('      "domain": "<domain>",');
+                sections.push('      "layer": "presentation|business|data|infrastructure",');
+                sections.push('      "config": { ... }');
+                sections.push('    }');
+                sections.push('  ]');
+                sections.push('}');
+
+                var prompt = sections.join('\n');
+                var context: AgentContext = { conversationHistory: [] };
+                var llmResponse = await this.processMessage(prompt, context);
+
+                // Parse LLM proposals
+                try {
+                    var jsonMatch = (llmResponse.content || '').match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        var parsed = JSON.parse(jsonMatch[0]);
+                        var proposals = parsed.proposals || [];
+
+                        for (var pi = 0; pi < proposals.length; pi++) {
+                            var proposal = proposals[pi];
+                            try {
+                                var pType = beTypeMap[proposal.element_type] || 'service';
+                                var pName = proposal.name || 'Generated Element';
+
+                                var created = this.database.createBackendElement({
+                                    plan_id: planId,
+                                    type: pType,
+                                    name: pName,
+                                    domain: proposal.domain || '',
+                                    layer: proposal.layer || 'services',
+                                    config_json: proposal.config ? JSON.stringify(proposal.config) : '{}',
+                                    x: 300,
+                                    y: pi * 120,
+                                    width: 280,
+                                    height: 100,
+                                    is_collapsed: false,
+                                    is_draft: true,
+                                    sort_order: simpleGaps.length + pi,
+                                });
+
+                                result.drafts_created++;
+                                result.gaps_addressed++;
+                                result.actions_taken.push({
+                                    gap_id: proposal.gap_id,
+                                    action: 'add_backend_element',
+                                    result: 'draft created: ' + pType + ' "' + pName + '" (id: ' + created.id + ')',
+                                });
+                            } catch (propErr) {
+                                var propErrMsg = propErr instanceof Error ? propErr.message : String(propErr);
+                                result.actions_taken.push({
+                                    gap_id: proposal.gap_id,
+                                    action: 'add_backend_element',
+                                    result: 'error: ' + propErrMsg,
+                                });
+                            }
+                        }
+                    }
+                } catch {
+                    this.outputChannel.appendLine('[Design Hardener] Failed to parse LLM backend proposals');
+                }
+            } catch (llmError) {
+                var llmErrMsg = llmError instanceof Error ? llmError.message : String(llmError);
+                this.outputChannel.appendLine('[Design Hardener] LLM backend analysis failed: ' + llmErrMsg);
+                for (var fi = 0; fi < complexGaps.length; fi++) {
+                    result.actions_taken.push({
+                        gap_id: complexGaps[fi].id,
+                        action: 'add_backend_element',
+                        result: 'error: LLM analysis failed — ' + llmErrMsg,
+                    });
+                }
+            }
+        }
+
+        this.database.addAuditLog(
+            this.name,
+            'harden_backend_design',
+            'Plan ' + planId + ': addressed=' + result.gaps_addressed +
+            ', drafts=' + result.drafts_created +
+            ' (from ' + beGaps.length + ' backend gaps)'
+        );
+
+        this.outputChannel.appendLine(
+            '[Design Hardener] Backend complete: ' + result.gaps_addressed + ' gaps addressed, ' +
+            result.drafts_created + ' backend drafts created'
         );
 
         return result;

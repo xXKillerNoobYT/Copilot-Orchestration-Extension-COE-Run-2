@@ -1,10 +1,10 @@
 # 09 — Features & Capabilities
 
-**Version**: 7.0
+**Version**: 8.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md)
-**Changelog**: v7.0 — Added Category 11 (Team Queue System), Category 12 (Documentation & File Management), Coding Director Agent, updated agent count (16), updated test count (2,770+), v7.0 compliance section | v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
+**Changelog**: v8.0 — Added Category 13 (Back-End Design System), Category 14 (Link Tree & Tag System), Category 15 (Review Queue & Filing System), Backend Architect Agent #17, renamed Frontend Architect, updated agent count (17), 15 routing categories, updated test count (2,770+), v8.0 compliance section | v7.0 — Added Category 11 (Team Queue System), Category 12 (Documentation & File Management), Coding Director Agent, updated agent count (16), updated test count (2,770+), v7.0 compliance section | v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
 
 ---
 
@@ -20,7 +20,7 @@ This is the complete feature catalog for COE — every capability the system pro
 
 ## Overview
 
-COE includes 65+ features across 12 categories. This document lists every capability the system provides, organized by what it does for the user.
+COE includes 80+ features across 15 categories. This document lists every capability the system provides, organized by what it does for the user.
 
 **Status Legend**: ✅ Implemented | 🔧 In Progress | 📋 Planned
 
@@ -97,8 +97,8 @@ One-click state reset that reloads everything from disk, verifies consistency, a
 ## Category 3: Agent Management (6 Features)
 
 ### Multi-Agent Orchestration ✅
-Routes work to 16 specialized agents based on intent classification, with fallback strategies and timeout detection.
-**Status**: Implemented in `src/agents/orchestrator.ts`. Two-stage classification (keyword + LLM), 14 routing categories, error boundaries, verification retry. v7.0: Added Coding Director agent, 4-team queue routing.
+Routes work to 17 specialized agents based on intent classification, with fallback strategies and timeout detection.
+**Status**: Implemented in `src/agents/orchestrator.ts`. Two-stage classification (keyword + LLM), 15 routing categories, error boundaries, verification retry. v7.0: Added Coding Director agent, 4-team queue routing. v8.0: Added Backend Architect agent (#17), `backend_architect` routing category.
 
 ### Boss AI Supervisor ✅
 Top-level oversight agent that monitors system health, manages 4 team queues, resolves inter-team conflicts, enforces plan alignment, dynamically allocates processing slots, and reviews cancelled tickets for re-engagement.
@@ -290,6 +290,82 @@ Relevant support documents are automatically injected into agent context during 
 
 ---
 
+## Category 13: Back-End Design System (6 Features) — v8.0 ✅
+
+### Backend Element Canvas ✅
+Visual canvas for designing back-end architecture with 9 element types: API routes, DB tables, services, controllers, middleware, auth layers, background jobs, caching strategies, and queue definitions.
+**Status**: Implemented in webapp BE Designer panel. Card blocks with type icons, expandable details, drag-to-reposition, SVG arrow overlay for connections. 3-column layout (layer sidebar, canvas, element editor).
+
+### Backend Architect Agent ✅
+Agent #17 — Reviews BE architecture quality across 8 scoring categories (API RESTfulness, DB normalization, service separation, auth/security, error handling, caching, scalability, documentation) with 3 operating modes.
+**Status**: Implemented in `src/agents/backend-architect-agent.ts`. `AgentType.BackendArchitect`, routed via `backend_architect` intent category. Modes: auto_generate, scaffold, suggest.
+
+### Backend QA Pipeline ✅
+Three-phase BE quality assurance: Backend Architect scoring → Gap Hunter BE checks → Design Hardener BE draft creation. Mirrors the FE Design QA pipeline.
+**Status**: Implemented across `backend-architect-agent.ts`, `gap-hunter-agent.ts` (5 new BE checks #16-#20), `design-hardener-agent.ts` (new `hardenBackendDesign()` method). API endpoints: `POST /api/backend/architect-review`, `/api/backend/gap-analysis`, `/api/backend/harden`, `/api/backend/full-qa`.
+
+### Backend Element CRUD ✅
+Full create/read/update/delete operations for all 9 BE element types, with filtering by plan, layer, and domain.
+**Status**: Implemented in `database.ts` (backend_elements table) + API endpoints: `GET/POST/PUT/DELETE /api/backend/elements`.
+
+### Backend Draft Management ✅
+Backend draft elements (created by Hardener or Backend Architect) appear with dashed outlines on the BE canvas and in the unified Review Queue. Approve/reject from either location.
+**Status**: Implemented. `is_draft=1` elements rendered with dashed borders. Approval via `POST /api/backend/drafts/:id/approve` or Review Queue.
+
+### Frontend Architect Rename ✅
+Design Architect Agent renamed to Frontend Architect Agent for clarity alongside the new Backend Architect. Enum value unchanged for backward compatibility.
+**Status**: Class renamed from `DesignArchitectAgent` to `FrontendArchitectAgent` in `design-architect-agent.ts`. Display name: `'Frontend Architect'`. Deprecated alias `getDesignArchitectAgent()` in orchestrator.
+
+---
+
+## Category 14: Link Tree & Tag System (5 Features) — v8.0 ✅
+
+### Element Link System ✅
+Cross-element relationship tracking with 4 link types (FE↔FE, BE↔BE, FE→BE, BE→FE), 2 granularity levels (high-level, component-level), and 3 creation sources (manual, auto-detected, AI-suggested).
+**Status**: Implemented in `src/core/link-manager.ts` + `element_links` table. API endpoints: `GET/POST/DELETE /api/links`, `POST /api/links/auto-detect`, `POST /api/links/:id/approve|reject`.
+
+### Link Matrix View ✅
+Grid visualization of all element relationships. Colored dots at intersections indicate link types (blue=FE↔FE, green=BE↔BE, orange=FE→BE, purple=BE→FE). Click dots to view/edit link details.
+**Status**: Implemented in webapp Link Tree panel (matrix toggle). API: `GET /api/links/matrix`.
+
+### Link Tree View ✅
+Expandable hierarchy organized by link type categories, with source elements and their connections as navigable children. Click to navigate to the element in the relevant designer.
+**Status**: Implemented in webapp Link Tree panel (tree toggle). API: `GET /api/links/tree`.
+
+### Tag Definition System ✅
+5 built-in tags (setting/blue, automatic/purple, hardcoded/red, env-variable/yellow, feature-flag/orange) plus user-created custom tags with custom colors. Tags can be assigned to any element type.
+**Status**: Implemented in `src/core/tag-manager.ts` + `tag_definitions` + `element_tags` tables. API endpoints: `GET/POST/DELETE /api/tags`, `POST/DELETE /api/tags/assign`, `POST /api/tags/seed`. Built-in tags seeded on startup.
+
+### Auto-Detect & AI Link Suggestions ✅
+Automatic link detection from DataModel relationships, component bindings, and API route middleware. AI suggestions from Backend Architect appear as review queue items for user approval.
+**Status**: Implemented via `LinkManagerService.autoDetectLinks()` + `BackendArchitectAgent.suggestConnections()`. Auto-detected links added to review queue with confidence scores.
+
+---
+
+## Category 15: Review Queue & Filing System (5 Features) — v8.0 ✅
+
+### Unified Review Queue ✅
+Single queue for all pending review items: FE drafts, BE drafts, link suggestions, and tag suggestions. Filter by item type, approve/reject individually or in batch.
+**Status**: Implemented in `src/core/review-queue-manager.ts` + `review_queue` table. Webapp Review Queue panel with filter buttons, item cards, batch operations. API endpoints: `GET /api/review-queue`, `POST /api/review-queue/:id/approve|reject`, `POST /api/review-queue/approve-all|reject-all`.
+
+### Review Queue Nav Badge ✅
+Pending review count displayed as a badge in the main navigation bar. Polls every 10 seconds for updates.
+**Status**: Implemented in webapp nav bar. API: `GET /api/review-queue/count`. CSS pulsing badge for P1 items.
+
+### Filing System (Support Documents UI) ✅
+Panel within Planning & Design tab for browsing, creating, and managing support documents. Color-coded by source: bright green (#4CAF50) = user-added, gray (#9E9E9E) = system-added.
+**Status**: Implemented in webapp Filing panel. Folder browser, document list, color badges, lock icons, search bar. User docs created via "+" button with `source_type='user'`.
+
+### Document Source Locking ✅
+Full separation between user and system documents. User-created docs (green) can only be edited/deleted by users; system-created docs (gray) can only be edited/deleted by the system. Lock icon shown on all documents.
+**Status**: Implemented in `DocumentManagerService` with `source_type` and `is_locked` fields. `isEditableBy()` enforces access control. Database migration adds columns to `support_documents` table.
+
+### FE Designer Review Integration ✅
+Existing FE draft system upgraded to use the unified Review Queue. When Design Hardener creates FE drafts, review_queue entries are also created. Approve/reject from either the canvas or the Review Queue.
+**Status**: Implemented. Hardener creates `review_queue` entries with `item_type='fe_draft'` alongside draft components. Both approval paths call the same underlying API.
+
+---
+
 ## Feature Priorities (What Gets Built First)
 
 | Priority | Count | What |
@@ -298,6 +374,7 @@ Relevant support documents are automatically injected into agent context during 
 | **P2 (Should Have)** | 13 | Custom agents, GitHub sync, evolution system, context management, planning wizard |
 | **P2+ (v2.0)** | 12 | Ethics engine, transparency logger, sync service, conflict resolver, coding agent, component schemas |
 | **P2+ (v7.0)** | 10 | Team queues, round-robin balancing, lead agent escalation, support agent calls, document system, file cleanup, Coding Director, context injection, cancel/re-engage, structured assignments |
+| **P2+ (v8.0)** | 16 | BE designer canvas, Backend Architect agent, BE QA pipeline, BE element CRUD, BE draft management, FE Architect rename, link system, link matrix, link tree, tag system, auto-detect links, unified review queue, nav badge, filing system, doc locking, FE review integration |
 | **P3 (Nice to Have)** | 10 | Advanced analytics, RL optimization, Copilot Workspace integration, Docker MCP toolkit |
 
 ---
@@ -334,6 +411,18 @@ flowchart TB
         CLEANUP[File Cleanup] --> DOCS
     end
 
+    subgraph "Design (v8.0)"
+        FEDESIGN[FE Designer] --> FEARCH[Frontend Architect]
+        BEDESIGN[BE Designer] --> BEARCH[Backend Architect]
+        BEARCH --> GAPHUNTER[Gap Hunter]
+        FEARCH --> GAPHUNTER
+        GAPHUNTER --> HARDENER[Design Hardener]
+        HARDENER --> REVIEWQ[Review Queue]
+        LINKS[Link Manager] --> REVIEWQ
+        TAGS[Tag Manager] --> FEDESIGN
+        TAGS --> BEDESIGN
+    end
+
     DECOMP --> QUEUE
     MCP --> AGENTS
     VERIFY --> TICKETS
@@ -342,6 +431,10 @@ flowchart TB
     SLOTS --> QUEUE
     DOCS --> QUEUE
     CODEDIR --> MCP
+    REVIEWQ --> FEDESIGN
+    REVIEWQ --> BEDESIGN
+    LINKS --> FEDESIGN
+    LINKS --> BEDESIGN
 ```
 
 ---
@@ -400,13 +493,16 @@ flowchart TB
 | Multi-Device Sync (v2.0) | 5 | 5 | 0 | 0 | 100% |
 | Team Queue System (v7.0) | 6 | 6 | 0 | 0 | 100% |
 | Documentation & File Mgmt (v7.0) | 4 | 4 | 0 | 0 | 100% |
-| **TOTAL** | **63** | **52** | **6** | **5** | **83%** |
+| Back-End Design System (v8.0) | 6 | 6 | 0 | 0 | 100% |
+| Link Tree & Tag System (v8.0) | 5 | 5 | 0 | 0 | 100% |
+| Review Queue & Filing (v8.0) | 5 | 5 | 0 | 0 | 100% |
+| **TOTAL** | **79** | **68** | **6** | **5** | **86%** |
 
 ### Agent Compliance (Plan Intent vs Actual)
 
 | Agent | Compliance | Notes |
 |-------|-----------|-------|
-| Orchestrator | 90% | Core routing solid, 14 categories, 16 agents. Missing: orchestrator-level loop detection |
+| Orchestrator | 95% | Core routing solid, 15 categories, 17 agents. v8.0: `backend_architect` routing. Missing: orchestrator-level loop detection |
 | Planning Agent | 100% | Fully matches plan spec. v7.0: escalation + support agent calls |
 | Answer Agent | 100% | Fully matches plan spec. v7.0: support document search before LLM |
 | Verification Agent | 100% | Fully matches plan spec. v7.0: escalation + support agent calls |
@@ -417,6 +513,10 @@ flowchart TB
 | CodingAgentService | 100% | All 6 intents, ethics gate, code gen, diffs |
 | Review Agent | 100% | Deterministic complexity + LLM scoring, auto-approval matrix |
 | Coding Director | 100% | v7.0: Pre-flight, context packaging, result processing, queue status |
+| Frontend Architect | 100% | v8.0: Renamed from Design Architect. 6-category FE scoring. Backward-compatible enum value |
+| Backend Architect | 100% | v8.0: Agent #17. 8-category BE scoring, 3 modes (auto_generate, scaffold, suggest) |
+| Gap Hunter (v8.0) | 100% | v8.0: Extended with 5 BE checks (#16-#20). `analyzeBackendGaps()` + `analyzeAllGaps()` |
+| Design Hardener (v8.0) | 100% | v8.0: Extended with `hardenBackendDesign()`. Creates BE drafts + review queue entries |
 
 ### v2.0 Service Compliance
 
@@ -437,7 +537,7 @@ flowchart TB
 ### v3.0 Features (February 14, 2026)
 
 #### Design Quality Pipeline ✅
-- **Design Architect Agent** — Reviews design structure, scores 0-100 across 6 categories
+- **Frontend Architect Agent** (renamed from Design Architect in v8.0) — Reviews FE design structure, scores 0-100 across 6 categories
 - **Gap Hunter Agent** — 15 deterministic checks + LLM analysis for nuanced gaps
 - **Design Hardener Agent** — Creates draft component proposals for human review
 - **Design QA Panel** — Shows scores, gaps, drafts with Approve All/Reject All buttons
@@ -511,8 +611,8 @@ flowchart TB
 | Service | Compliance | Notes |
 |---------|-----------|-------|
 | TicketProcessorService | 100% | Dual queues, routing, verification, retry, ghost tickets, idle watchdog |
-| DesignArchitectAgent | 100% | 6-category scoring, configurable threshold |
-| GapHunterAgent | 100% | 15 deterministic + LLM, hybrid approach |
+| FrontendArchitectAgent | 100% | 6-category FE scoring, configurable threshold. v8.0: Renamed from DesignArchitectAgent |
+| GapHunterAgent | 100% | 15 FE deterministic + 5 BE deterministic (v8.0) + LLM, hybrid approach |
 | DesignHardenerAgent | 100% | Draft components, human-in-the-loop |
 | DecisionMemoryAgent | 100% | Keyword fast path + LLM, 13 categories, conflict detection |
 | Phase Management | 100% | 8 phases, gate checks, design approval |
@@ -577,6 +677,58 @@ flowchart TB
 - **Total tests**: 2,770+
 - **Coverage target**: 100% (enforced in jest.config.js)
 
+### v8.0 Features (February 2026)
+
+#### Back-End Design System ✅
+- **Backend Element Canvas** — Visual canvas with 9 element types (API routes, DB tables, services, controllers, middleware, auth layers, jobs, caching, queues)
+- **Backend Architect Agent** — Agent #17, 8-category QA scoring (100 total), 3 operating modes (auto_generate, scaffold, suggest)
+- **Backend QA Pipeline** — Full 3-phase pipeline: Backend Architect scoring → Gap Hunter BE checks → Hardener BE draft creation
+- **Backend Element CRUD** — Full CRUD with plan/layer/domain filtering. `backend_elements` table + 14 API endpoints
+- **Backend Draft Management** — `is_draft=1` elements with dashed borders, approve/reject via canvas or Review Queue
+- **Frontend Architect Rename** — `DesignArchitectAgent` → `FrontendArchitectAgent`. Enum value unchanged for backward compat.
+
+#### Link Tree & Tag System ✅
+- **Element Link System** — 4 link types (FE↔FE, BE↔BE, FE→BE, BE→FE), 2 granularity levels, 3 sources (manual, auto-detect, AI suggestion)
+- **Link Matrix View** — Grid visualization with colored dots at intersections
+- **Link Tree View** — Expandable hierarchy organized by link type categories
+- **Tag System** — 5 built-in tags + custom tags with colors. `tag_definitions` + `element_tags` tables
+- **Auto-Detect Links** — Scans DataModel relationships, component bindings, API route middleware for automatic link creation
+- **AI Link Suggestions** — Backend Architect analyzes FE→BE relationships, creates suggestions as review queue items
+
+#### Review Queue & Filing System ✅
+- **Unified Review Queue** — Single queue for FE drafts, BE drafts, link suggestions, tag suggestions. Filter buttons, batch approve/reject
+- **Review Queue Nav Badge** — Pending count badge in main nav bar, polls every 10 seconds
+- **Filing System** — Support document UI panel with folder browser, search, color-coded source badges (green=user, gray=system)
+- **Document Source Locking** — Full user/system separation: `source_type` + `is_locked` fields, `isEditableBy()` access control
+- **FE Designer Review Integration** — FE drafts now appear in both canvas (dashed borders) AND Review Queue
+
+#### Gap Hunter BE Extension ✅
+- **5 New BE Checks** (#16-#20): API route without middleware, DB table without indexes, orphaned service, unprotected non-public route, data model without DB table
+- **New Methods**: `analyzeBackendGaps(planId)`, `analyzeAllGaps(planId)` for combined FE+BE analysis
+
+#### Design Hardener BE Extension ✅
+- **BE Draft Creation** — New `hardenBackendDesign(planId, gapAnalysis)` method creates BE draft elements + review queue entries
+- **Unified Approach** — Same simple/complex split pattern as FE hardening applied to BE elements
+
+### v8.0 Service Compliance
+
+| Service | Compliance | Notes |
+|---------|-----------|-------|
+| BackendArchitectAgent | 100% | 8-category scoring, 3 modes, `backend_architect` routing, agent #17 |
+| LinkManagerService | 100% | CRUD, auto-detect, matrix/tree builders, approve/reject |
+| TagManagerService | 100% | CRUD, builtin seeding, assignment/removal, builtin deletion protection |
+| ReviewQueueManagerService | 100% | CRUD, approval/rejection dispatching, batch operations, pending count |
+| DocumentManagerService (v8.0) | 100% | Source type locking, `isEditableBy()`, `source_type`/`is_locked` fields |
+| FrontendArchitectAgent | 100% | Renamed from DesignArchitectAgent, backward-compat enum + deprecated alias |
+| GapHunterAgent (v8.0) | 100% | 5 new BE checks (#16-#20), `analyzeBackendGaps()`, `analyzeAllGaps()` |
+| DesignHardenerAgent (v8.0) | 100% | `hardenBackendDesign()`, BE draft + review queue entry creation |
+
+### Updated Test Coverage (v8.0)
+
+- **Test suites**: 53+
+- **Total tests**: 2,770+
+- **Coverage target**: 100% (enforced in jest.config.js)
+
 ### Remaining Gaps (Planned)
 
 1. **Adaptive Wizard Paths** — UI-level question branching by project scale
@@ -587,7 +739,7 @@ flowchart TB
 6. **PRD Auto-Generation** — Automatic PRD maintenance from plans
 7. **Orchestrator Loop Detection** — Pattern tracking across all agent calls
 8. **Visual Verification Webview** — Dedicated VS Code panel (API ready)
-9. **Back-End Designer Agent** — Planned for next project (deferred from v7.0)
+9. **Research Agent Upgrade** — Own tab, 3rd-party research prompts, help requests (deferred to v9.0)
 
 ---
 
@@ -609,7 +761,11 @@ The features don't exist in isolation — they depend on each other. This table 
 | Ethics Engine | LLM Service | Transparency Logger |
 | Sync Service | Database, Conflict Resolver | Vector Clocks |
 | Coding Agent | Component Schema, LLM Service | Ethics Engine |
-| Design QA Pipeline | Design Architect, Gap Hunter, Hardener | — |
+| FE Design QA Pipeline | Frontend Architect, Gap Hunter, Hardener | — |
+| BE Design QA Pipeline (v8.0) | Backend Architect, Gap Hunter (BE checks), Hardener (BE mode) | Review Queue |
+| Link Manager (v8.0) | Database, Event Bus | Backend Architect, Frontend Architect |
+| Tag Manager (v8.0) | Database, Event Bus | — |
+| Review Queue Manager (v8.0) | Database, Event Bus | Frontend Architect, Backend Architect, Link Manager |
 | Ticket Processor | Database, Agent Router, Verification | Ghost Tickets |
 | Decision Memory | Database, LLM Service | Question Queue |
 | Team Queue System | Ticket Processor, Database | Boss AI |

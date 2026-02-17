@@ -12,12 +12,13 @@ import { BossAgent } from './boss-agent';
 import { CustomAgentRunner } from './custom-agent';
 import { UITestingAgent } from './ui-testing-agent';
 import { ObservationAgent } from './observation-agent';
-import { DesignArchitectAgent } from './design-architect-agent';
+import { FrontendArchitectAgent } from './design-architect-agent';
 import { GapHunterAgent } from './gap-hunter-agent';
 import { DesignHardenerAgent } from './design-hardener-agent';
 import { DecisionMemoryAgent } from './decision-memory-agent';
 import { ReviewAgent } from './review-agent';
 import { CodingDirectorAgent } from './coding-director-agent';
+import { BackendArchitectAgent } from './backend-architect-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
@@ -30,7 +31,7 @@ import {
 
 const INTENT_CATEGORIES = [
     'planning', 'verification', 'ui_testing', 'observation',
-    'design_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
+    'design_architect', 'backend_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
     'review', 'coding_director', 'question', 'research', 'custom', 'general',
 ] as const;
 
@@ -44,15 +45,16 @@ const INTENT_PRIORITY: Record<string, number> = {
     observation: 2,
     review: 3,
     design_architect: 4,
-    gap_hunter: 5,
-    design_hardener: 6,
-    decision_memory: 7,
-    coding_director: 8,
-    planning: 9,
-    question: 10,
-    research: 11,
-    custom: 12,
-    general: 13,
+    backend_architect: 5,
+    gap_hunter: 6,
+    design_hardener: 7,
+    decision_memory: 8,
+    coding_director: 9,
+    planning: 10,
+    question: 11,
+    research: 12,
+    custom: 13,
+    general: 14,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -97,6 +99,12 @@ const KEYWORD_MAP: Record<string, string[]> = {
     design_architect: [
         'design review', 'architecture review', 'page hierarchy', 'design assessment',
         'design score', 'structure review', 'score design', 'review design quality',
+    ],
+    backend_architect: [
+        'backend review', 'backend architecture', 'api review', 'backend score',
+        'backend design', 'review backend', 'score backend', 'backend quality',
+        'generate backend', 'scaffold backend', 'backend generate', 'api architecture',
+        'database design review', 'service architecture', 'backend qa',
     ],
     gap_hunter: [
         'gap analysis', 'find gaps', 'missing components', 'missing pages',
@@ -144,29 +152,31 @@ Classify every incoming message into EXACTLY ONE intent category, then route it 
    Examples: "review system health", "find improvements in the codebase", "detect recurring issues"
 4. **review** — Reviewing ticket deliverables, auto-approval, quality checks on completed work.
    Examples: "review this ticket output", "check deliverable quality", "what's in the review queue?"
-5. **design_architect** — Design structure review, page hierarchy assessment, design scoring.
+5. **design_architect** — Frontend design structure review, page hierarchy assessment, design scoring.
    Examples: "review the design architecture", "score the page hierarchy", "assess design quality"
-6. **gap_hunter** — Finding missing components, coverage gaps, completeness checks in designs.
+6. **backend_architect** — Backend architecture review, API design, database schema, service architecture scoring.
+   Examples: "review backend architecture", "score backend design", "generate backend scaffolding"
+7. **gap_hunter** — Finding missing components, coverage gaps, completeness checks in designs.
    Examples: "find gaps in the design", "what components are missing?", "run completeness check"
-7. **design_hardener** — Filling gaps, proposing draft components, hardening incomplete designs.
+8. **design_hardener** — Filling gaps, proposing draft components, hardening incomplete designs.
    Examples: "harden the design", "propose missing components", "fill the gaps found by gap hunter"
-8. **decision_memory** — Looking up past decisions, user preferences, conflict checks.
+9. **decision_memory** — Looking up past decisions, user preferences, conflict checks.
    Examples: "what did the user decide about auth?", "check for conflicting decisions", "recall past preferences"
-9. **coding_director** — Code generation tasks, external coding agent interface, MCP task management.
+10. **coding_director** — Code generation tasks, external coding agent interface, MCP task management.
    Examples: "generate code for the auth module", "what's the coding agent status?", "prepare next coding task"
-10. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
+11. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
    Examples: "plan a REST API with auth", "break this feature into tasks", "create a roadmap for v2"
-11. **question** — Asking for information, clarification, or explanation.
+12. **question** — Asking for information, clarification, or explanation.
     Examples: "how does the database schema work?", "what's the difference between P1 and P2?", "explain the verification flow"
-12. **research** — Investigation, comparison, benchmarking, or deep analysis.
+13. **research** — Investigation, comparison, benchmarking, or deep analysis.
     Examples: "compare SQLite vs PostgreSQL for our use case", "investigate why tests are slow", "best practices for MCP servers?"
-13. **custom** — Explicitly requesting a custom or specialized agent.
+14. **custom** — Explicitly requesting a custom or specialized agent.
     Examples: "run my custom lint agent", "invoke the security specialist", "call agent gallery"
-14. **general** — Does not fit any of the above. Fallback to Answer Agent.
+15. **general** — Does not fit any of the above. Fallback to Answer Agent.
 
 ## Tie-Breaking Rules
 If a message matches multiple categories, use this priority (highest first):
-verification > ui_testing > observation > review > design_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
+verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
 Example: "verify my plan is correct" matches both verification and planning — choose verification.
 Example: "review the design quality" matches both review and design_architect — choose review.
 
@@ -178,7 +188,8 @@ When classifying, respond with ONLY the category name as a single lowercase word
 - ui_testing → UI Testing Agent
 - observation → Observation Agent
 - review → Review Agent
-- design_architect → Design Architect Agent
+- design_architect → Frontend Architect Agent
+- backend_architect → Backend Architect Agent
 - gap_hunter → Gap Hunter Agent
 - design_hardener → Design Hardener Agent
 - decision_memory → Decision Memory Agent
@@ -214,7 +225,8 @@ If you cannot proceed or information is missing:
     private customAgentRunner!: CustomAgentRunner;
     private uiTestingAgent!: UITestingAgent;
     private observationAgent!: ObservationAgent;
-    private designArchitectAgent!: DesignArchitectAgent;
+    private frontendArchitectAgent!: FrontendArchitectAgent;
+    private backendArchitectAgent!: BackendArchitectAgent;
     private gapHunterAgent!: GapHunterAgent;
     private designHardenerAgent!: DesignHardenerAgent;
     private decisionMemoryAgent!: DecisionMemoryAgent;
@@ -263,7 +275,8 @@ If you cannot proceed or information is missing:
         this.customAgentRunner = new CustomAgentRunner(this.database, this.llm, this.config, this.outputChannel);
         this.uiTestingAgent = new UITestingAgent(this.database, this.llm, this.config, this.outputChannel);
         this.observationAgent = new ObservationAgent(this.database, this.llm, this.config, this.outputChannel);
-        this.designArchitectAgent = new DesignArchitectAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.frontendArchitectAgent = new FrontendArchitectAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.backendArchitectAgent = new BackendArchitectAgent(this.database, this.llm, this.config, this.outputChannel);
         this.gapHunterAgent = new GapHunterAgent(this.database, this.llm, this.config, this.outputChannel);
         this.designHardenerAgent = new DesignHardenerAgent(this.database, this.llm, this.config, this.outputChannel);
         this.decisionMemoryAgent = new DecisionMemoryAgent(this.database, this.llm, this.config, this.outputChannel);
@@ -280,7 +293,8 @@ If you cannot proceed or information is missing:
             this.customAgentRunner.initialize(),
             this.uiTestingAgent.initialize(),
             this.observationAgent.initialize(),
-            this.designArchitectAgent.initialize(),
+            this.frontendArchitectAgent.initialize(),
+            this.backendArchitectAgent.initialize(),
             this.gapHunterAgent.initialize(),
             this.designHardenerAgent.initialize(),
             this.decisionMemoryAgent.initialize(),
@@ -423,7 +437,8 @@ If you cannot proceed or information is missing:
             case 'verification': return this.verificationAgent;
             case 'ui_testing': return this.uiTestingAgent;
             case 'observation': return this.observationAgent;
-            case 'design_architect': return this.designArchitectAgent;
+            case 'design_architect': return this.frontendArchitectAgent;
+            case 'backend_architect': return this.backendArchitectAgent;
             case 'gap_hunter': return this.gapHunterAgent;
             case 'design_hardener': return this.designHardenerAgent;
             case 'decision_memory': return this.decisionMemoryAgent;
@@ -449,7 +464,9 @@ If you cannot proceed or information is missing:
             clarity: this.clarityAgent,
             boss: this.bossAgent,
             custom: this.customAgentRunner,
-            design_architect: this.designArchitectAgent,
+            design_architect: this.frontendArchitectAgent,
+            frontend_architect: this.frontendArchitectAgent,
+            backend_architect: this.backendArchitectAgent,
             gap_hunter: this.gapHunterAgent,
             design_hardener: this.designHardenerAgent,
             decision_memory: this.decisionMemoryAgent,
@@ -561,7 +578,10 @@ If you cannot proceed or information is missing:
     getCustomAgentRunner(): CustomAgentRunner { return this.customAgentRunner; }
     getUITestingAgent(): UITestingAgent { return this.uiTestingAgent; }
     getObservationAgent(): ObservationAgent { return this.observationAgent; }
-    getDesignArchitectAgent(): DesignArchitectAgent { return this.designArchitectAgent; }
+    getFrontendArchitectAgent(): FrontendArchitectAgent { return this.frontendArchitectAgent; }
+    /** @deprecated Use getFrontendArchitectAgent() — kept for backward compatibility */
+    getDesignArchitectAgent(): FrontendArchitectAgent { return this.frontendArchitectAgent; }
+    getBackendArchitectAgent(): BackendArchitectAgent { return this.backendArchitectAgent; }
     getGapHunterAgent(): GapHunterAgent { return this.gapHunterAgent; }
     getDesignHardenerAgent(): DesignHardenerAgent { return this.designHardenerAgent; }
     getDecisionMemoryAgent(): DecisionMemoryAgent { return this.decisionMemoryAgent; }
@@ -584,7 +604,8 @@ If you cannot proceed or information is missing:
             this.customAgentRunner,
             this.uiTestingAgent,
             this.observationAgent,
-            this.designArchitectAgent,
+            this.frontendArchitectAgent,
+            this.backendArchitectAgent,
             this.gapHunterAgent,
             this.designHardenerAgent,
             this.decisionMemoryAgent,
@@ -626,7 +647,8 @@ If you cannot proceed or information is missing:
         this.customAgentRunner?.dispose();
         this.uiTestingAgent?.dispose();
         this.observationAgent?.dispose();
-        this.designArchitectAgent?.dispose();
+        this.frontendArchitectAgent?.dispose();
+        this.backendArchitectAgent?.dispose();
         this.gapHunterAgent?.dispose();
         this.designHardenerAgent?.dispose();
         this.decisionMemoryAgent?.dispose();

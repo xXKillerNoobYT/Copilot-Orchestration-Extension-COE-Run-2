@@ -1,10 +1,10 @@
 # 05 — User Experience & Interface Design
 
-**Version**: 7.0
+**Version**: 8.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [09-Features-and-Capabilities](09-Features-and-Capabilities.md)
-**Changelog**: v7.0 — Tickets tab team queue grouping/filtering, Coding tab "NOT READY" status display, Boss AI nav indicator per-queue breakdown, queue status display in Progress Dashboard | v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
+**Changelog**: v8.0 — Added Back-End Designer tab (layer/domain views, element cards, BE canvas), Link Tree & Link Matrix views, Unified Review Queue panel, Tag system UI (color-coded pills, filter-by-tag), expanded designer canvas with side-by-side FE/BE layout | v7.0 — Tickets tab team queue grouping/filtering, Coding tab "NOT READY" status display, Boss AI nav indicator per-queue breakdown, queue status display in Progress Dashboard | v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
 
 ---
 
@@ -716,6 +716,222 @@ When no plans exist, shows a welcome tour explaining the 3-stage model with a "C
 ### State Persistence
 
 Planning page fully restores state after reboot — phase indicator, tasks, design, QA scores, question count — all from SQLite via API. SSE events drive real-time updates without page reload.
+
+---
+
+## v8.0 Back-End Designer (Browser-Based) — IMPLEMENTED
+
+A full visual designer for back-end architecture, parallel to the front-end Visual Designer. Displays architecture elements as cards on a canvas with two viewing modes.
+
+### BE Designer Canvas
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Backend Designer          [Layer View ▼]  [+ Add Element]        │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│ ┌─── ROUTES LAYER ───────────────────────────────────────────┐   │
+│ │                                                             │   │
+│ │  ┌──────────────────┐  ┌──────────────────┐                │   │
+│ │  │ 🔵 GET /api/users│  │ 🔵 POST /api/auth│                │   │
+│ │  │ Auth: JWT         │  │ Auth: none       │                │   │
+│ │  │ [DRAFT]           │  │ Rate: 10/min     │                │   │
+│ │  │ [setting] [env]   │  │                  │                │   │
+│ │  └──────────────────┘  └──────────────────┘                │   │
+│ │                                                             │   │
+│ └─────────────────────────────────────────────────────────────┘   │
+│                                                                   │
+│ ┌─── MODELS LAYER ───────────────────────────────────────────┐   │
+│ │                                                             │   │
+│ │  ┌──────────────────┐  ┌──────────────────┐                │   │
+│ │  │ 📊 users          │  │ 📊 sessions      │                │   │
+│ │  │ 5 columns         │  │ 3 columns        │                │   │
+│ │  │ 2 indexes         │  │ FK → users       │                │   │
+│ │  └──────────────────┘  └──────────────────┘                │   │
+│ │                                                             │   │
+│ └─────────────────────────────────────────────────────────────┘   │
+│                                                                   │
+│ ┌─── SERVICES LAYER ────────────────────────────────────────┐    │
+│ │  ┌──────────────────┐  ┌──────────────────┐               │    │
+│ │  │ ⚙️ UserService    │  │ ⚙️ AuthService    │               │    │
+│ │  │ 4 methods         │  │ 3 methods        │               │    │
+│ │  │ Deps: AuthService │  │ Singleton        │               │    │
+│ │  └──────────────────┘  └──────────────────┘               │    │
+│ └────────────────────────────────────────────────────────────┘    │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Two View Modes
+
+| Mode | Organization | Best For |
+|------|-------------|----------|
+| **Layer View** (default) | Groups by layer: Routes → Models → Services → Middleware → Auth → Jobs → Caching → Queues | Understanding architecture tiers |
+| **Domain View** | Groups by domain: Auth, Users, Products, etc. | Understanding feature boundaries |
+
+Toggle via dropdown in the BE Designer header.
+
+### Element Card Types
+
+| Element Type | Icon | Card Shows | Expandable Details |
+|-------------|------|-----------|-------------------|
+| `api_route` | 🔵 | Method + path, auth type, rate limit | Request/response schema, params, middleware |
+| `db_table` | 📊 | Table name, column count, FK count | Full column definitions, indexes, constraints |
+| `service` | ⚙️ | Name, method count, dependencies | Method signatures, return types, async flag |
+| `controller` | 🎛️ | Name, route bindings | Method-to-route mappings |
+| `middleware` | 🔗 | Name, scope (global/route/group) | Config params, execution order |
+| `auth_layer` | 🔐 | Auth type, provider, scope count | Protected routes, token config |
+| `background_job` | ⏰ | Schedule, max retries, timeout | Dependencies, description |
+| `cache_strategy` | 💾 | Backend, TTL, eviction policy | Cached routes, max size |
+| `queue_definition` | 📤 | Backend, concurrency, job types | Retry policy, dead letter config |
+
+### Draft Elements
+
+Draft elements (created by Design Hardener or Backend Architect) display with:
+- Dashed border outline
+- "DRAFT" badge in top-right corner
+- Reduced opacity (70%)
+- Clicking opens in Review Queue panel for approve/reject
+
+> **👤 User View**: The Backend Designer gives you a visual canvas for your server-side architecture. Cards represent API routes, database tables, services, and other backend components. You can switch between layer view (horizontal tiers) and domain view (feature groupings). Draft elements from the AI appear with dashed borders — approve or reject them in the Review Queue.
+
+> **🔧 Developer View**: BE designer renders in `src/webapp/app.ts` as a new tab. Elements come from `GET /api/backend-elements?plan_id=X`. Canvas supports click-to-select (same pattern as FE components). Element CRUD: `GET/POST/PUT/DELETE /api/backend-elements`. Layer/domain grouping is computed client-side from the `layer` and `domain` fields. Draft elements (is_draft=1) have CSS class `.be-element-draft` for visual differentiation.
+
+---
+
+## v8.0 Link Tree & Link Matrix — IMPLEMENTED
+
+Two complementary views for visualizing cross-element connections.
+
+### Link Tree View
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Element Links                        [Tree ▼] [+ Link]   │
+├──────────────────────────────────────────────────────────┤
+│                                                           │
+│ 📄 Login Page (FE)                                       │
+│ ├── → 🔵 POST /api/auth/login (BE)                      │
+│ │   └── label: "Login form submission"                   │
+│ ├── → 🔵 POST /api/auth/register (BE)                   │
+│ └── → 📄 Dashboard Page (FE)                             │
+│     └── label: "Redirect after login"                    │
+│                                                           │
+│ 📄 Dashboard Page (FE)                                   │
+│ ├── → 🔵 GET /api/users/me (BE)                         │
+│ └── → 🔵 GET /api/stats/overview (BE)                   │
+│                                                           │
+│ ⚙️ UserService (BE)                                      │
+│ ├── → 📊 users (BE table)                               │
+│ ├── → ⚙️ AuthService (BE)                                │
+│ └── → 🔗 AuthMiddleware (BE)                             │
+│                                                           │
+│ 🟡 Unapproved suggestions: 2 [Review]                   │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Link Matrix View
+
+```
+┌────────────────────────────────────────────────────────┐
+│ Link Matrix                                             │
+├──────┬────────┬────────┬──────────┬──────────┬─────────┤
+│      │ Login  │ Dash   │ /auth/*  │ /users/* │ UserSvc │
+├──────┼────────┼────────┼──────────┼──────────┼─────────┤
+│Login │        │ FE→FE  │ FE→BE    │          │         │
+│Dash  │        │        │          │ FE→BE    │         │
+│/auth │ BE→FE  │        │          │          │ BE→BE   │
+│/user │        │ BE→FE  │          │          │ BE→BE   │
+│USvc  │        │        │ BE→BE    │ BE→BE    │         │
+└──────┴────────┴────────┴──────────┴──────────┴─────────┘
+
+Legend: FE→FE (purple) | BE→BE (blue) | FE→BE (green) | BE→FE (orange)
+```
+
+> **👤 User View**: The Link Tree shows connections as an expandable hierarchy — pick any element and see everything it connects to. The Link Matrix shows the same information in a grid. Use whichever view makes more sense for your task. Unapproved suggestions (from auto-detect or AI) appear at the bottom with a link to the Review Queue.
+
+> **🔧 Developer View**: Tree data from `GET /api/links/tree/:planId`, matrix from `GET /api/links/matrix/:planId`. Both computed by `LinkManagerService`. Tree renders using recursive DOM generation. Matrix uses a `<table>` with color-coded cells. Unapproved count from links where `is_approved=0`.
+
+---
+
+## v8.0 Unified Review Queue Panel — IMPLEMENTED
+
+A centralized panel for reviewing all pending drafts and suggestions.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Review Queue  (5 pending)        [Approve All] [Reject All]│
+├──────────────────────────────────────────────────────────┤
+│                                                           │
+│ 🟦 FE DRAFT  [P2]                                        │
+│ ErrorBoundary component for Dashboard                     │
+│ Source: Design Hardener                                   │
+│ [Approve] [Reject] [View in Designer]                    │
+│                                                           │
+│ 🟩 BE DRAFT  [P2]                                        │
+│ GET /api/users/:id — missing from auth domain            │
+│ Source: Backend Architect                                  │
+│ [Approve] [Reject] [View in BE Designer]                 │
+│                                                           │
+│ 🟨 LINK SUGGESTION  [P3]                                 │
+│ Login Page → POST /api/auth/login                        │
+│ Source: Auto-detect (confidence: 92%)                     │
+│ [Approve] [Reject]                                       │
+│                                                           │
+│ 🟨 LINK SUGGESTION  [P3]                                 │
+│ UserService → users table                                │
+│ Source: AI-suggested (confidence: 85%)                    │
+│ [Approve] [Reject]                                       │
+│                                                           │
+└──────────────────────────────────────────────────────────┘
+```
+
+| Item Type | Badge Color | Approval Action | Rejection Action |
+|-----------|------------|-----------------|-----------------|
+| `fe_draft` | Blue (🟦) | Component `is_draft` → 0 | Component deleted |
+| `be_draft` | Green (🟩) | BackendElement `is_draft` → 0 | BackendElement deleted |
+| `link_suggestion` | Yellow (🟨) | Link `is_approved` → 1 | Link deleted |
+
+> **👤 User View**: Everything that needs your approval is in one place. Each item shows what it is, who suggested it, and a confidence score for auto-detected items. Approve individually or batch-process with "Approve All" / "Reject All".
+
+> **🔧 Developer View**: Panel renders from `GET /api/review-queue?plan_id=X`. Approval: `POST /api/review-queue/:id/approve`. Rejection: `POST /api/review-queue/:id/reject`. Batch: `POST /api/review-queue/approve-all?plan_id=X`. `ReviewQueueManagerService` dispatches to correct table based on `item_type`. Nav badge: `GET /api/review-queue/count`.
+
+---
+
+## v8.0 Tag Display — IMPLEMENTED
+
+Tags appear as color-coded pills on element cards across all designers.
+
+```
+Element Card with Tags:
+┌──────────────────────────────────────┐
+│ ⚙️ UserService                        │
+│ 4 methods | Deps: AuthService         │
+│                                       │
+│ [🔵 setting] [🟡 env-variable]       │
+│ [🟠 feature-flag]                     │
+└──────────────────────────────────────┘
+
+Tag Filter Bar (above canvas):
+┌──────────────────────────────────────┐
+│ Filter: [🔵 setting ✕] [🔴 hardcoded ✕] │
+│ Showing 4 of 12 elements              │
+└──────────────────────────────────────┘
+```
+
+Built-in tags and their colors:
+
+| Tag | Color | Hex | Purpose |
+|-----|-------|-----|---------|
+| `setting` | Blue | `#3B82F6` | Configuration values |
+| `automatic` | Purple | `#8B5CF6` | Auto-managed values |
+| `hardcoded` | Red | `#EF4444` | Hardcoded magic values |
+| `env-variable` | Yellow | `#F59E0B` | Environment-dependent |
+| `feature-flag` | Orange | `#F97316` | Feature-toggle controlled |
+
+> **👤 User View**: Tags are colored pills that classify your elements. Use built-in tags like "setting" or "env-variable" to mark important properties. Create custom tags for project-specific classification. Click a tag to filter the canvas to only elements with that tag.
+
+> **🔧 Developer View**: Tags from `GET /api/elements/:type/:id/tags`. Tag assignment: `POST /api/tags/:id/assign`. Built-in tags seeded via `TagManagerService.seedBuiltinTags()` on activation. Tags render as `<span class="tag-pill">` with inline `background-color` from the tag definition. Filter-by-tag is client-side filtering.
 
 ---
 

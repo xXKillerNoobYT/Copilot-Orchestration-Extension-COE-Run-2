@@ -27,6 +27,9 @@ import {
     TicketRun,
     // v4.2 types
     ElementStatus, LifecycleStage, ImplementationStatus, ReadinessLevel, PlanMode,
+    // v8.0 types
+    BackendElement, ElementLink, TagDefinition, ElementTag,
+    ReviewQueueItem, BUILTIN_TAGS,
 } from '../types';
 
 export class Database {
@@ -1055,6 +1058,118 @@ export class Database {
             )
         `);
         try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_boss_notepad_section ON boss_notepad(section)'); } catch { /* already exists */ }
+
+        // ==================== v8.0 TABLES ====================
+
+        // v8.0: Backend architecture elements (BE designer canvas cards)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS backend_elements (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'service',
+                name TEXT NOT NULL,
+                domain TEXT NOT NULL DEFAULT 'general',
+                layer TEXT NOT NULL DEFAULT 'services',
+                config_json TEXT NOT NULL DEFAULT '{}',
+                x REAL NOT NULL DEFAULT 0,
+                y REAL NOT NULL DEFAULT 0,
+                width REAL NOT NULL DEFAULT 280,
+                height REAL NOT NULL DEFAULT 120,
+                is_collapsed INTEGER NOT NULL DEFAULT 1,
+                is_draft INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_backend_elements_plan ON backend_elements(plan_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_backend_elements_type ON backend_elements(type)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_backend_elements_domain ON backend_elements(domain)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_backend_elements_layer ON backend_elements(layer)'); } catch { /* already exists */ }
+
+        // v8.0: Element links (FE↔FE, BE↔BE, FE→BE, BE→FE connections)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS element_links (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                link_type TEXT NOT NULL DEFAULT 'fe_to_be',
+                granularity TEXT NOT NULL DEFAULT 'high',
+                source TEXT NOT NULL DEFAULT 'manual',
+                from_element_type TEXT NOT NULL,
+                from_element_id TEXT NOT NULL,
+                to_element_type TEXT NOT NULL,
+                to_element_id TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                confidence INTEGER,
+                is_approved INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_links_plan ON element_links(plan_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_links_from ON element_links(from_element_type, from_element_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_links_to ON element_links(to_element_type, to_element_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_links_type ON element_links(link_type)'); } catch { /* already exists */ }
+
+        // v8.0: Tag definitions (builtin + custom, color-coded)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS tag_definitions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                name TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT 'gray',
+                custom_color TEXT,
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tag_definitions_plan ON tag_definitions(plan_id)'); } catch { /* already exists */ }
+
+        // v8.0: Element-tag assignments (junction table)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS element_tags (
+                id TEXT PRIMARY KEY,
+                tag_id TEXT NOT NULL,
+                element_type TEXT NOT NULL,
+                element_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (tag_id) REFERENCES tag_definitions(id) ON DELETE CASCADE
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_tags_tag ON element_tags(tag_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_element_tags_element ON element_tags(element_type, element_id)'); } catch { /* already exists */ }
+
+        // v8.0: Unified review queue (FE drafts + BE drafts + link suggestions)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS review_queue (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                item_type TEXT NOT NULL DEFAULT 'fe_draft',
+                element_id TEXT NOT NULL,
+                element_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                source_agent TEXT NOT NULL DEFAULT 'system',
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority TEXT NOT NULL DEFAULT 'P2',
+                reviewed_at TEXT,
+                review_notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_review_queue_plan ON review_queue(plan_id)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status)'); } catch { /* already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_review_queue_type ON review_queue(item_type)'); } catch { /* already exists */ }
+
+        // v8.0 Migrations: add source_type and is_locked to support_documents
+        try { this.db.exec("ALTER TABLE support_documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'system'"); } catch { /* already exists */ }
+        try { this.db.exec("ALTER TABLE support_documents ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0"); } catch { /* already exists */ }
     }
 
     private genId(): string {
@@ -4243,11 +4358,13 @@ export class Database {
         source_agent?: string | null;
         tags?: string[];
         relevance_score?: number;
+        source_type?: 'user' | 'system';
+        is_locked?: number;
     }): { id: string; folder_name: string; document_name: string; created_at: string } {
         const id = this.genId();
         this.db.prepare(`
-            INSERT INTO support_documents (id, plan_id, folder_name, document_name, content, summary, category, source_ticket_id, source_agent, tags, relevance_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO support_documents (id, plan_id, folder_name, document_name, content, summary, category, source_ticket_id, source_agent, tags, relevance_score, source_type, is_locked)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id,
             data.plan_id ?? null,
@@ -4259,7 +4376,9 @@ export class Database {
             data.source_ticket_id ?? null,
             data.source_agent ?? null,
             JSON.stringify(data.tags ?? []),
-            data.relevance_score ?? 50
+            data.relevance_score ?? 50,
+            data.source_type ?? 'system',
+            data.is_locked ?? 0
         );
         return this.db.prepare('SELECT id, folder_name, document_name, created_at FROM support_documents WHERE id = ?').get(id) as { id: string; folder_name: string; document_name: string; created_at: string };
     }
@@ -4379,6 +4498,386 @@ export class Database {
         const rows = this.db.prepare('SELECT * FROM tickets WHERE assigned_queue = ? ORDER BY priority ASC, created_at ASC')
             .all(queue) as Record<string, unknown>[];
         return rows.map(r => this.rowToTicket(r));
+    }
+
+    // ==================== BACKEND ELEMENTS (v8.0) ====================
+
+    createBackendElement(data: Partial<BackendElement> & { plan_id: string; type: string; name: string }): BackendElement {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO backend_elements (id, plan_id, type, name, domain, layer, config_json, x, y, width, height, is_collapsed, is_draft, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.plan_id, data.type, data.name,
+            data.domain ?? 'general', data.layer ?? 'services', data.config_json ?? '{}',
+            data.x ?? 0, data.y ?? 0, data.width ?? 280, data.height ?? 120,
+            data.is_collapsed ? 1 : 0, data.is_draft ? 1 : 0,
+            data.sort_order ?? 0, now, now
+        );
+        return this.getBackendElement(id)!;
+    }
+
+    getBackendElement(id: string): BackendElement | null {
+        const row = this.db.prepare('SELECT * FROM backend_elements WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToBackendElement(row) : null;
+    }
+
+    getBackendElementsByPlan(planId: string): BackendElement[] {
+        const rows = this.db.prepare('SELECT * FROM backend_elements WHERE plan_id = ? ORDER BY layer ASC, sort_order ASC, name ASC')
+            .all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToBackendElement(r));
+    }
+
+    getBackendElementsByPlanAndLayer(planId: string, layer: string): BackendElement[] {
+        const rows = this.db.prepare('SELECT * FROM backend_elements WHERE plan_id = ? AND layer = ? ORDER BY sort_order ASC, name ASC')
+            .all(planId, layer) as Record<string, unknown>[];
+        return rows.map(r => this.rowToBackendElement(r));
+    }
+
+    getBackendElementsByPlanAndDomain(planId: string, domain: string): BackendElement[] {
+        const rows = this.db.prepare('SELECT * FROM backend_elements WHERE plan_id = ? AND domain = ? ORDER BY layer ASC, sort_order ASC')
+            .all(planId, domain) as Record<string, unknown>[];
+        return rows.map(r => this.rowToBackendElement(r));
+    }
+
+    updateBackendElement(id: string, updates: Partial<BackendElement>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        const allowed = ['type', 'name', 'domain', 'layer', 'config_json', 'x', 'y', 'width', 'height', 'is_collapsed', 'is_draft', 'sort_order'];
+        for (const key of allowed) {
+            if (key in updates) {
+                const val = (updates as Record<string, unknown>)[key];
+                fields.push(`${key} = ?`);
+                values.push(key === 'is_collapsed' || key === 'is_draft' ? (val ? 1 : 0) : val);
+            }
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        const result = this.db.prepare(`UPDATE backend_elements SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return result.changes > 0;
+    }
+
+    deleteBackendElement(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM backend_elements WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    private rowToBackendElement(row: Record<string, unknown>): BackendElement {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            type: row.type as BackendElement['type'],
+            name: row.name as string,
+            domain: row.domain as string,
+            layer: row.layer as BackendElement['layer'],
+            config_json: row.config_json as string,
+            x: row.x as number,
+            y: row.y as number,
+            width: row.width as number,
+            height: row.height as number,
+            is_collapsed: Boolean(row.is_collapsed),
+            is_draft: Boolean(row.is_draft),
+            sort_order: (row.sort_order as number) ?? 0,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== ELEMENT LINKS (v8.0) ====================
+
+    createElementLink(data: Partial<ElementLink> & { plan_id: string; from_element_type: string; from_element_id: string; to_element_type: string; to_element_id: string }): ElementLink {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO element_links (id, plan_id, link_type, granularity, source, from_element_type, from_element_id, to_element_type, to_element_id, label, metadata_json, confidence, is_approved, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.plan_id, data.link_type ?? 'fe_to_be', data.granularity ?? 'high',
+            data.source ?? 'manual',
+            data.from_element_type, data.from_element_id,
+            data.to_element_type, data.to_element_id,
+            data.label ?? '', data.metadata_json ?? '{}',
+            data.confidence ?? null, data.is_approved !== false ? 1 : 0,
+            now, now
+        );
+        return this.getElementLink(id)!;
+    }
+
+    getElementLink(id: string): ElementLink | null {
+        const row = this.db.prepare('SELECT * FROM element_links WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToElementLink(row) : null;
+    }
+
+    getElementLinksByPlan(planId: string): ElementLink[] {
+        const rows = this.db.prepare('SELECT * FROM element_links WHERE plan_id = ? ORDER BY link_type ASC, created_at ASC')
+            .all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToElementLink(r));
+    }
+
+    getElementLinksByElement(elementType: string, elementId: string): ElementLink[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM element_links
+            WHERE (from_element_type = ? AND from_element_id = ?) OR (to_element_type = ? AND to_element_id = ?)
+            ORDER BY created_at ASC
+        `).all(elementType, elementId, elementType, elementId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToElementLink(r));
+    }
+
+    updateElementLink(id: string, updates: Partial<ElementLink>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        const allowed = ['link_type', 'granularity', 'source', 'label', 'metadata_json', 'confidence', 'is_approved'];
+        for (const key of allowed) {
+            if (key in updates) {
+                const val = (updates as Record<string, unknown>)[key];
+                fields.push(`${key} = ?`);
+                values.push(key === 'is_approved' ? (val ? 1 : 0) : val);
+            }
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        const result = this.db.prepare(`UPDATE element_links SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return result.changes > 0;
+    }
+
+    deleteElementLink(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM element_links WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    private rowToElementLink(row: Record<string, unknown>): ElementLink {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            link_type: row.link_type as ElementLink['link_type'],
+            granularity: row.granularity as ElementLink['granularity'],
+            source: row.source as ElementLink['source'],
+            from_element_type: row.from_element_type as ElementLink['from_element_type'],
+            from_element_id: row.from_element_id as string,
+            to_element_type: row.to_element_type as ElementLink['to_element_type'],
+            to_element_id: row.to_element_id as string,
+            label: row.label as string,
+            metadata_json: row.metadata_json as string,
+            confidence: (row.confidence as number) ?? null,
+            is_approved: Boolean(row.is_approved),
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== TAG DEFINITIONS (v8.0) ====================
+
+    createTagDefinition(data: { name: string; color: string; plan_id?: string; custom_color?: string; is_builtin?: boolean; description?: string }): TagDefinition {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO tag_definitions (id, plan_id, name, color, custom_color, is_builtin, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.plan_id ?? null, data.name, data.color, data.custom_color ?? null, data.is_builtin ? 1 : 0, data.description ?? '', now);
+        return this.getTagDefinition(id)!;
+    }
+
+    getTagDefinition(id: string): TagDefinition | null {
+        const row = this.db.prepare('SELECT * FROM tag_definitions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToTagDefinition(row) : null;
+    }
+
+    getTagDefinitions(planId?: string): TagDefinition[] {
+        const rows = planId
+            ? this.db.prepare('SELECT * FROM tag_definitions WHERE plan_id = ? OR plan_id IS NULL ORDER BY is_builtin DESC, name ASC').all(planId) as Record<string, unknown>[]
+            : this.db.prepare('SELECT * FROM tag_definitions ORDER BY is_builtin DESC, name ASC').all() as Record<string, unknown>[];
+        return rows.map(r => this.rowToTagDefinition(r));
+    }
+
+    deleteTagDefinition(id: string): boolean {
+        // Prevent deletion of builtin tags
+        const tag = this.getTagDefinition(id);
+        if (tag?.is_builtin) return false;
+        // Remove all assignments first
+        this.db.prepare('DELETE FROM element_tags WHERE tag_id = ?').run(id);
+        const result = this.db.prepare('DELETE FROM tag_definitions WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    seedBuiltinTags(planId?: string): void {
+        for (const tag of BUILTIN_TAGS) {
+            // Check if already seeded (by name + plan_id)
+            const existing = planId
+                ? this.db.prepare('SELECT id FROM tag_definitions WHERE name = ? AND (plan_id = ? OR plan_id IS NULL) AND is_builtin = 1').get(tag.name, planId) as Record<string, unknown> | undefined
+                : this.db.prepare('SELECT id FROM tag_definitions WHERE name = ? AND plan_id IS NULL AND is_builtin = 1').get(tag.name) as Record<string, unknown> | undefined;
+            if (!existing) {
+                this.createTagDefinition({
+                    name: tag.name,
+                    color: tag.color,
+                    plan_id: planId,
+                    is_builtin: true,
+                    description: tag.description,
+                });
+            }
+        }
+    }
+
+    private rowToTagDefinition(row: Record<string, unknown>): TagDefinition {
+        return {
+            id: row.id as string,
+            plan_id: (row.plan_id as string) ?? null,
+            name: row.name as string,
+            color: row.color as TagDefinition['color'],
+            custom_color: (row.custom_color as string) ?? null,
+            is_builtin: Boolean(row.is_builtin),
+            description: row.description as string,
+            created_at: row.created_at as string,
+        };
+    }
+
+    // ==================== ELEMENT TAGS (v8.0) ====================
+
+    assignTag(tagId: string, elementType: string, elementId: string): ElementTag {
+        // Check for existing assignment
+        const existing = this.db.prepare('SELECT id FROM element_tags WHERE tag_id = ? AND element_type = ? AND element_id = ?')
+            .get(tagId, elementType, elementId) as Record<string, unknown> | undefined;
+        if (existing) {
+            return this.getElementTag(existing.id as string)!;
+        }
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare('INSERT INTO element_tags (id, tag_id, element_type, element_id, created_at) VALUES (?, ?, ?, ?, ?)')
+            .run(id, tagId, elementType, elementId, now);
+        return this.getElementTag(id)!;
+    }
+
+    getElementTag(id: string): ElementTag | null {
+        const row = this.db.prepare('SELECT * FROM element_tags WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return {
+            id: row.id as string,
+            tag_id: row.tag_id as string,
+            element_type: row.element_type as ElementTag['element_type'],
+            element_id: row.element_id as string,
+            created_at: row.created_at as string,
+        };
+    }
+
+    removeTag(tagId: string, elementType: string, elementId: string): boolean {
+        const result = this.db.prepare('DELETE FROM element_tags WHERE tag_id = ? AND element_type = ? AND element_id = ?')
+            .run(tagId, elementType, elementId);
+        return result.changes > 0;
+    }
+
+    getTagsForElement(elementType: string, elementId: string): TagDefinition[] {
+        const rows = this.db.prepare(`
+            SELECT td.* FROM tag_definitions td
+            INNER JOIN element_tags et ON et.tag_id = td.id
+            WHERE et.element_type = ? AND et.element_id = ?
+            ORDER BY td.name ASC
+        `).all(elementType, elementId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTagDefinition(r));
+    }
+
+    getElementsByTag(tagId: string): Array<{ element_type: string; element_id: string }> {
+        return this.db.prepare('SELECT element_type, element_id FROM element_tags WHERE tag_id = ? ORDER BY created_at ASC')
+            .all(tagId) as Array<{ element_type: string; element_id: string }>;
+    }
+
+    // ==================== REVIEW QUEUE (v8.0) ====================
+
+    createReviewQueueItem(data: Partial<ReviewQueueItem> & { plan_id: string; element_id: string; element_type: string; title: string }): ReviewQueueItem {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO review_queue (id, plan_id, item_type, element_id, element_type, title, description, source_agent, status, priority, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        `).run(
+            id, data.plan_id, data.item_type ?? 'fe_draft',
+            data.element_id, data.element_type, data.title,
+            data.description ?? '', data.source_agent ?? 'system',
+            data.priority ?? 'P2', now, now
+        );
+        return this.getReviewQueueItem(id)!;
+    }
+
+    getReviewQueueItem(id: string): ReviewQueueItem | null {
+        const row = this.db.prepare('SELECT * FROM review_queue WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        return row ? this.rowToReviewQueueItem(row) : null;
+    }
+
+    getReviewQueueByPlan(planId: string, status?: string): ReviewQueueItem[] {
+        const query = status
+            ? 'SELECT * FROM review_queue WHERE plan_id = ? AND status = ? ORDER BY priority ASC, created_at ASC'
+            : 'SELECT * FROM review_queue WHERE plan_id = ? ORDER BY priority ASC, created_at ASC';
+        const rows = status
+            ? this.db.prepare(query).all(planId, status) as Record<string, unknown>[]
+            : this.db.prepare(query).all(planId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToReviewQueueItem(r));
+    }
+
+    getPendingReviewCount(planId?: string): number {
+        if (planId) {
+            const row = this.db.prepare("SELECT COUNT(*) as cnt FROM review_queue WHERE plan_id = ? AND status = 'pending'").get(planId) as { cnt: number };
+            return row.cnt;
+        }
+        const row = this.db.prepare("SELECT COUNT(*) as cnt FROM review_queue WHERE status = 'pending'").get() as { cnt: number };
+        return row.cnt;
+    }
+
+    updateReviewQueueItem(id: string, updates: Partial<ReviewQueueItem>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        const allowed = ['status', 'priority', 'reviewed_at', 'review_notes', 'description', 'title'];
+        for (const key of allowed) {
+            if (key in updates) {
+                fields.push(`${key} = ?`);
+                values.push((updates as Record<string, unknown>)[key]);
+            }
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        const result = this.db.prepare(`UPDATE review_queue SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return result.changes > 0;
+    }
+
+    deleteReviewQueueItem(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM review_queue WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    approveReviewItem(id: string, notes?: string): boolean {
+        return this.updateReviewQueueItem(id, {
+            status: 'approved' as ReviewQueueItem['status'],
+            reviewed_at: new Date().toISOString(),
+            review_notes: notes ?? null,
+        });
+    }
+
+    rejectReviewItem(id: string, notes?: string): boolean {
+        return this.updateReviewQueueItem(id, {
+            status: 'rejected' as ReviewQueueItem['status'],
+            reviewed_at: new Date().toISOString(),
+            review_notes: notes ?? null,
+        });
+    }
+
+    private rowToReviewQueueItem(row: Record<string, unknown>): ReviewQueueItem {
+        return {
+            id: row.id as string,
+            plan_id: row.plan_id as string,
+            item_type: row.item_type as ReviewQueueItem['item_type'],
+            element_id: row.element_id as string,
+            element_type: row.element_type as string,
+            title: row.title as string,
+            description: row.description as string,
+            source_agent: row.source_agent as string,
+            status: row.status as ReviewQueueItem['status'],
+            priority: row.priority as TicketPriority,
+            reviewed_at: (row.reviewed_at as string) ?? null,
+            review_notes: (row.review_notes as string) ?? null,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
     }
 
     close(): void {

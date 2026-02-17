@@ -4655,6 +4655,7 @@ Only return the JSON array.`;
                 return true;
             }
 
+            const sourceType = (body.source_type as 'user' | 'system') || 'user'; // API calls default to 'user'
             const record = database.createSupportDocument({
                 folder_name: folderName,
                 document_name: documentName,
@@ -4666,21 +4667,552 @@ Only return the JSON array.`;
                 tags: Array.isArray(body.tags) ? body.tags as string[] : [],
                 relevance_score: typeof body.relevance_score === 'number' ? body.relevance_score : 50,
                 plan_id: (body.plan_id as string) || null,
+                source_type: sourceType,
+                is_locked: 1, // All docs locked by default for full separation
             });
             json(res, record, 201);
             return true;
         }
 
-        // DELETE /api/documents/:id — delete a document
+        // DELETE /api/documents/:id — delete a document (with locking enforcement)
         if (route.startsWith('documents/') && !route.includes('folders') && method === 'DELETE') {
             const docId = route.replace('documents/', '');
-            const deleted = database.deleteSupportDocument(docId);
+            const { DocumentManagerService } = await import('../core/document-manager');
+            const docMgr = new DocumentManagerService(database, eventBus, noopOutputChannel);
+            // Default actor is 'user' from API
+            const deleted = docMgr.deleteDocument(docId, 'user');
             if (deleted) {
                 json(res, { success: true, message: 'Document deleted' });
             } else {
-                json(res, { error: 'Document not found' }, 404);
+                json(res, { error: 'Document not found or locked to system-only edits' }, 404);
             }
             return true;
+        }
+
+        // ==================== BACKEND ELEMENTS (v8.0) ====================
+
+        // GET /api/backend/elements?plan_id&layer&domain — list/filter
+        if (route === 'backend/elements' && method === 'GET') {
+            const params = new URL(req.url || '', 'http://localhost').searchParams;
+            const planId = params.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const layer = params.get('layer') || undefined;
+            const domain = params.get('domain') || undefined;
+            let elements;
+            if (layer) {
+                elements = database.getBackendElementsByPlanAndLayer(planId, layer);
+            } else if (domain) {
+                elements = database.getBackendElementsByPlanAndDomain(planId, domain);
+            } else {
+                elements = database.getBackendElementsByPlan(planId);
+            }
+            json(res, elements);
+            return true;
+        }
+
+        // GET /api/backend/elements/:id — get one
+        {
+            const beId = extractParam(route, 'backend/elements/:id');
+            if (beId && method === 'GET' && !route.includes('/approve') && !route.includes('/reject')) {
+                const el = database.getBackendElement(beId);
+                if (el) {
+                    json(res, el);
+                } else {
+                    json(res, { error: 'Backend element not found' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/backend/elements — create
+        if (route === 'backend/elements' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const el = database.createBackendElement({
+                plan_id: planId,
+                type: ((body.type as string) || 'service') as import('../types').BackendElementType,
+                name: (body.name as string) || 'Untitled',
+                domain: (body.domain as string) || 'default',
+                layer: ((body.layer as string) || 'services') as import('../types').BackendElementLayer,
+                config_json: (body.config_json as string) || '{}',
+                x: typeof body.x === 'number' ? body.x : 100,
+                y: typeof body.y === 'number' ? body.y : 100,
+                width: typeof body.width === 'number' ? body.width : 200,
+                height: typeof body.height === 'number' ? body.height : 120,
+                is_collapsed: body.is_collapsed === true,
+                is_draft: body.is_draft === true,
+                sort_order: typeof body.sort_order === 'number' ? body.sort_order : 0,
+            });
+            eventBus.emit('backend:element_created', 'webapp', { id: el.id, type: el.type, name: el.name });
+            json(res, el, 201);
+            return true;
+        }
+
+        // PUT /api/backend/elements/:id — update
+        {
+            const beId = extractParam(route, 'backend/elements/:id');
+            if (beId && method === 'PUT') {
+                const body = await parseBody(req);
+                const updates: Record<string, unknown> = {};
+                for (const key of ['name', 'type', 'domain', 'layer', 'config_json', 'x', 'y', 'width', 'height', 'is_collapsed', 'is_draft', 'sort_order']) {
+                    if (body[key] !== undefined) updates[key] = body[key];
+                }
+                database.updateBackendElement(beId, updates);
+                eventBus.emit('backend:element_updated', 'webapp', { id: beId });
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // DELETE /api/backend/elements/:id — delete
+        {
+            const beId = extractParam(route, 'backend/elements/:id');
+            if (beId && method === 'DELETE') {
+                const deleted = database.deleteBackendElement(beId);
+                if (deleted) {
+                    eventBus.emit('backend:element_deleted', 'webapp', { id: beId });
+                    json(res, { success: true });
+                } else {
+                    json(res, { error: 'Backend element not found' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/backend/architect-review — run BE QA scoring
+        if (route === 'backend/architect-review' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const agent = orchestrator.getBackendArchitectAgent();
+            const response = await agent.reviewBackend(planId);
+            eventBus.emit('backend:architect_review_completed', 'webapp', { planId, response: response.content.substring(0, 200) });
+            json(res, { success: true, review: response.content, actions: response.actions });
+            return true;
+        }
+
+        // POST /api/backend/generate — generate architecture (mode in body)
+        if (route === 'backend/generate' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            const mode = (body.mode as string) || 'auto_generate';
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const agent = orchestrator.getBackendArchitectAgent();
+            const response = await agent.generateArchitecture(planId, mode as import('../types').BackendArchitectMode);
+            json(res, { success: true, result: response.content, actions: response.actions });
+            return true;
+        }
+
+        // POST /api/backend/suggest-connections — AI link suggestions
+        if (route === 'backend/suggest-connections' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const agent = orchestrator.getBackendArchitectAgent();
+            const response = await agent.suggestConnections(planId);
+            json(res, { success: true, suggestions: response.content, actions: response.actions });
+            return true;
+        }
+
+        // POST /api/backend/gap-analysis — run BE gap analysis
+        if (route === 'backend/gap-analysis' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const gapAgent = orchestrator.getGapHunterAgent();
+            const gaps = gapAgent.analyzeBackendGaps(planId);
+            json(res, { gaps, count: gaps.length });
+            return true;
+        }
+
+        // POST /api/backend/harden — create BE draft fixes
+        if (route === 'backend/harden' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            const gapAnalysis = body.gap_analysis as import('../types').DesignGapAnalysis;
+            if (!planId || !gapAnalysis) { json(res, { error: 'plan_id and gap_analysis required' }, 400); return true; }
+            const agent = orchestrator.getDesignHardenerAgent();
+            const result = await agent.hardenBackendDesign(planId, gapAnalysis);
+            json(res, result);
+            return true;
+        }
+
+        // POST /api/backend/full-qa — run all 3 BE QA phases
+        if (route === 'backend/full-qa' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+
+            // Step 1: Architect Review
+            const architectAgent = orchestrator.getBackendArchitectAgent();
+            const reviewResponse = await architectAgent.reviewBackend(planId);
+            const scoreMatch = reviewResponse.content.match(/Score:\s*(\d+)/);
+            const beArchitectScore = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+
+            // Step 2: Gap Analysis
+            const gapAgent = orchestrator.getGapHunterAgent();
+            const beGaps = gapAgent.analyzeBackendGaps(planId);
+            const beGapAnalysis: import('../types').DesignGapAnalysis = {
+                plan_id: planId,
+                analysis_timestamp: new Date().toISOString(),
+                overall_score: 0,
+                gaps: beGaps,
+                summary: `Found ${beGaps.length} backend gaps`,
+                pages_analyzed: 0,
+                components_analyzed: 0,
+            };
+
+            // Step 3: Hardening (draft proposals)
+            const hardenerAgent = orchestrator.getDesignHardenerAgent();
+            const beHardenResult = await hardenerAgent.hardenBackendDesign(planId, beGapAnalysis);
+
+            json(res, {
+                architect_score: beArchitectScore,
+                architect_review: reviewResponse.content,
+                gap_analysis: beGapAnalysis,
+                hardening_result: beHardenResult,
+            });
+            return true;
+        }
+
+        // GET /api/backend/drafts?plan_id — list pending BE drafts
+        if (route === 'backend/drafts' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const allBe = database.getBackendElementsByPlan(planId);
+            const drafts = allBe.filter((el: any) => el.is_draft === true || el.is_draft === 1);
+            json(res, drafts);
+            return true;
+        }
+
+        // POST /api/backend/drafts/:id/approve — approve BE draft
+        {
+            const draftId = extractParam(route, 'backend/drafts/:id/approve');
+            if (draftId && method === 'POST') {
+                database.updateBackendElement(draftId, { is_draft: false });
+                eventBus.emit('backend:element_updated', 'webapp', { id: draftId, action: 'draft_approved' });
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // POST /api/backend/drafts/:id/reject — reject (delete) BE draft
+        {
+            const draftId = extractParam(route, 'backend/drafts/:id/reject');
+            if (draftId && method === 'POST') {
+                database.deleteBackendElement(draftId);
+                eventBus.emit('backend:element_deleted', 'webapp', { id: draftId, action: 'draft_rejected' });
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // ==================== LINKS (v8.0) ====================
+
+        // GET /api/links?plan_id — all links
+        if (route === 'links' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const links = database.getElementLinksByPlan(planId);
+            json(res, links);
+            return true;
+        }
+
+        // GET /api/links/matrix?plan_id — matrix data
+        if (route === 'links/matrix' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const { LinkManagerService } = await import('../core/link-manager');
+            const linkMgr = new LinkManagerService(database, eventBus, noopOutputChannel);
+            const matrix = linkMgr.buildMatrix(planId);
+            json(res, matrix);
+            return true;
+        }
+
+        // GET /api/links/tree?plan_id — tree data
+        if (route === 'links/tree' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const { LinkManagerService } = await import('../core/link-manager');
+            const linkMgr = new LinkManagerService(database, eventBus, noopOutputChannel);
+            const tree = linkMgr.buildTree(planId);
+            json(res, tree);
+            return true;
+        }
+
+        // POST /api/links — create manual link
+        if (route === 'links' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = body.plan_id as string;
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const link = database.createElementLink({
+                plan_id: planId,
+                link_type: ((body.link_type as string) || 'fe_to_be') as import('../types').LinkType,
+                granularity: ((body.granularity as string) || 'high') as import('../types').LinkGranularity,
+                source: 'manual' as import('../types').LinkSource,
+                from_element_type: ((body.from_element_type as string) || 'page') as import('../types').ElementLink['from_element_type'],
+                from_element_id: (body.from_element_id as string) || '',
+                to_element_type: ((body.to_element_type as string) || 'backend_element') as import('../types').ElementLink['to_element_type'],
+                to_element_id: (body.to_element_id as string) || '',
+                label: (body.label as string) || '',
+                metadata_json: (body.metadata_json as string) || '{}',
+                confidence: typeof body.confidence === 'number' ? body.confidence : 1.0,
+                is_approved: true,
+            });
+            eventBus.emit('link:created', 'webapp', { id: link.id, link_type: link.link_type });
+            json(res, link, 201);
+            return true;
+        }
+
+        // DELETE /api/links/:id — delete
+        {
+            const linkId = extractParam(route, 'links/:id');
+            if (linkId && method === 'DELETE' && !route.includes('/approve') && !route.includes('/reject')) {
+                const deleted = database.deleteElementLink(linkId);
+                if (deleted) {
+                    eventBus.emit('link:deleted', 'webapp', { id: linkId });
+                    json(res, { success: true });
+                } else {
+                    json(res, { error: 'Link not found' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/links/auto-detect?plan_id — auto-detect
+        if (route === 'links/auto-detect' && method === 'POST') {
+            const params = new URL(req.url || '', 'http://localhost').searchParams;
+            const planId = params.get('plan_id') || ((await parseBody(req)).plan_id as string);
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const { LinkManagerService } = await import('../core/link-manager');
+            const linkMgr = new LinkManagerService(database, eventBus, noopOutputChannel);
+            const created = linkMgr.autoDetectLinks(planId);
+            json(res, { success: true, created: created.length, links: created });
+            return true;
+        }
+
+        // POST /api/links/:id/approve — approve AI suggestion
+        {
+            const linkId = extractParam(route, 'links/:id/approve');
+            if (linkId && method === 'POST') {
+                database.updateElementLink(linkId, { is_approved: true });
+                eventBus.emit('link:approved', 'webapp', { id: linkId });
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // POST /api/links/:id/reject — reject AI suggestion
+        {
+            const linkId = extractParam(route, 'links/:id/reject');
+            if (linkId && method === 'POST') {
+                database.deleteElementLink(linkId);
+                eventBus.emit('link:rejected', 'webapp', { id: linkId });
+                json(res, { success: true });
+                return true;
+            }
+        }
+
+        // ==================== TAGS (v8.0) ====================
+
+        // GET /api/tags?plan_id — list definitions
+        if (route === 'tags' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id') || undefined;
+            const tags = database.getTagDefinitions(planId);
+            json(res, tags);
+            return true;
+        }
+
+        // POST /api/tags — create custom tag
+        if (route === 'tags' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.name || !body.color) { json(res, { error: 'name and color required' }, 400); return true; }
+            const tag = database.createTagDefinition({
+                name: body.name as string,
+                color: body.color as string,
+                plan_id: (body.plan_id as string) || undefined,
+                custom_color: (body.custom_color as string) || undefined,
+                description: (body.description as string) || '',
+            });
+            eventBus.emit('tag:created', 'webapp', { id: tag.id, name: tag.name });
+            json(res, tag, 201);
+            return true;
+        }
+
+        // DELETE /api/tags/:id — delete (not builtin)
+        {
+            const tagId = extractParam(route, 'tags/:id');
+            if (tagId && method === 'DELETE' && !route.includes('assign') && !route.includes('element') && !route.includes('seed')) {
+                const deleted = database.deleteTagDefinition(tagId);
+                if (deleted) {
+                    eventBus.emit('tag:deleted', 'webapp', { id: tagId });
+                    json(res, { success: true });
+                } else {
+                    json(res, { error: 'Tag not found or is built-in' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/tags/assign — assign tag to element
+        if (route === 'tags/assign' && method === 'POST') {
+            const body = await parseBody(req);
+            const tagId = body.tag_id as string;
+            const elementType = body.element_type as string;
+            const elementId = body.element_id as string;
+            if (!tagId || !elementType || !elementId) { json(res, { error: 'tag_id, element_type, element_id required' }, 400); return true; }
+            const assignment = database.assignTag(tagId, elementType, elementId);
+            eventBus.emit('tag:assigned', 'webapp', { tag_id: tagId, element_type: elementType, element_id: elementId });
+            json(res, assignment, 201);
+            return true;
+        }
+
+        // DELETE /api/tags/assign — remove tag from element
+        if (route === 'tags/assign' && method === 'DELETE') {
+            const body = await parseBody(req);
+            const tagId = body.tag_id as string;
+            const elementType = body.element_type as string;
+            const elementId = body.element_id as string;
+            if (!tagId || !elementType || !elementId) { json(res, { error: 'tag_id, element_type, element_id required' }, 400); return true; }
+            const removed = database.removeTag(tagId, elementType, elementId);
+            if (removed) {
+                eventBus.emit('tag:removed', 'webapp', { tag_id: tagId, element_type: elementType, element_id: elementId });
+                json(res, { success: true });
+            } else {
+                json(res, { error: 'Tag assignment not found' }, 404);
+            }
+            return true;
+        }
+
+        // GET /api/tags/element/:type/:id — tags for element
+        {
+            if (route.startsWith('tags/element/') && method === 'GET') {
+                const parts = route.replace('tags/element/', '').split('/');
+                if (parts.length >= 2) {
+                    const elementType = parts[0];
+                    const elementId = parts.slice(1).join('/');
+                    const tags = database.getTagsForElement(elementType, elementId);
+                    json(res, tags);
+                } else {
+                    json(res, { error: 'element type and id required' }, 400);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/tags/seed — seed builtins
+        if (route === 'tags/seed' && method === 'POST') {
+            const body = await parseBody(req);
+            const planId = (body.plan_id as string) || undefined;
+            database.seedBuiltinTags(planId);
+            json(res, { success: true, message: 'Built-in tags seeded' });
+            return true;
+        }
+
+        // ==================== REVIEW QUEUE (v8.0) ====================
+
+        // GET /api/review-queue?plan_id — pending items
+        if (route === 'review-queue' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const items = database.getReviewQueueByPlan(planId).filter((i: any) => i.status === 'pending');
+            json(res, items);
+            return true;
+        }
+
+        // GET /api/review-queue/count?plan_id — count for badge
+        if (route === 'review-queue/count' && method === 'GET') {
+            const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id') || undefined;
+            const count = database.getPendingReviewCount(planId);
+            json(res, { count });
+            return true;
+        }
+
+        // POST /api/review-queue/:id/approve — approve
+        {
+            const itemId = extractParam(route, 'review-queue/:id/approve');
+            if (itemId && method === 'POST') {
+                const body = await parseBody(req);
+                const { ReviewQueueManagerService } = await import('../core/review-queue-manager');
+                const rqm = new ReviewQueueManagerService(database, eventBus, noopOutputChannel);
+                const success = rqm.approveItem(itemId, body.notes as string | undefined);
+                if (success) {
+                    json(res, { success: true });
+                } else {
+                    json(res, { error: 'Item not found or already reviewed' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/review-queue/:id/reject — reject
+        {
+            const itemId = extractParam(route, 'review-queue/:id/reject');
+            if (itemId && method === 'POST') {
+                const body = await parseBody(req);
+                const { ReviewQueueManagerService } = await import('../core/review-queue-manager');
+                const rqm = new ReviewQueueManagerService(database, eventBus, noopOutputChannel);
+                const success = rqm.rejectItem(itemId, body.notes as string | undefined);
+                if (success) {
+                    json(res, { success: true });
+                } else {
+                    json(res, { error: 'Item not found or already reviewed' }, 404);
+                }
+                return true;
+            }
+        }
+
+        // POST /api/review-queue/approve-all?plan_id — batch approve
+        if (route === 'review-queue/approve-all' && method === 'POST') {
+            const params = new URL(req.url || '', 'http://localhost').searchParams;
+            const planId = params.get('plan_id') || ((await parseBody(req)).plan_id as string);
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const { ReviewQueueManagerService } = await import('../core/review-queue-manager');
+            const rqm = new ReviewQueueManagerService(database, eventBus, noopOutputChannel);
+            const count = rqm.approveAll(planId);
+            json(res, { success: true, approved: count });
+            return true;
+        }
+
+        // POST /api/review-queue/reject-all?plan_id — batch reject
+        if (route === 'review-queue/reject-all' && method === 'POST') {
+            const params = new URL(req.url || '', 'http://localhost').searchParams;
+            const planId = params.get('plan_id') || ((await parseBody(req)).plan_id as string);
+            if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
+            const { ReviewQueueManagerService } = await import('../core/review-queue-manager');
+            const rqm = new ReviewQueueManagerService(database, eventBus, noopOutputChannel);
+            const count = rqm.rejectAll(planId);
+            json(res, { success: true, rejected: count });
+            return true;
+        }
+
+        // ==================== ENHANCED DOCUMENT ENDPOINTS (v8.0) ====================
+
+        // PUT /api/documents/:id — update document (with locking enforcement)
+        {
+            const docId = extractParam(route, 'documents/:id');
+            if (docId && method === 'PUT' && !route.includes('folders')) {
+                const body = await parseBody(req);
+                const actor = (body.actor as 'user' | 'system') || 'user';
+                const { DocumentManagerService } = await import('../core/document-manager');
+                const docMgr = new DocumentManagerService(database, eventBus, noopOutputChannel);
+                try {
+                    docMgr.updateDocument(docId, {
+                        content: body.content as string | undefined,
+                        summary: body.summary as string | undefined,
+                        category: body.category as string | undefined,
+                        tags: Array.isArray(body.tags) ? body.tags as string[] : undefined,
+                        relevance_score: typeof body.relevance_score === 'number' ? body.relevance_score : undefined,
+                        folder_name: body.folder_name as string | undefined,
+                        document_name: body.document_name as string | undefined,
+                    }, actor);
+                    json(res, { success: true });
+                } catch (lockErr) {
+                    json(res, { error: lockErr instanceof Error ? lockErr.message : 'Document is locked' }, 403);
+                }
+                return true;
+            }
         }
 
         // Not found
