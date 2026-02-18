@@ -1,5 +1,7 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus } from '../types';
+import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus, WorkflowExecutionStatus, TreeNodeStatus } from '../types';
+import type { AgentTreeManager } from '../core/agent-tree-manager';
+import type { WorkflowEngine } from '../core/workflow-engine';
 
 /**
  * Boss AI — top-level project manager of the COE system (per True Plan 03 hierarchy).
@@ -22,6 +24,52 @@ import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, Ti
 export class BossAgent extends BaseAgent {
     readonly name = 'Boss AI';
     readonly type = AgentType.Boss;
+
+    // v9.0: Tree and workflow awareness
+    private treeManager: AgentTreeManager | null = null;
+    private workflowEngine: WorkflowEngine | null = null;
+
+    /**
+     * v9.0: Inject agent tree manager for tree-based ticket routing.
+     */
+    setTreeManager(atm: AgentTreeManager): void {
+        this.treeManager = atm;
+    }
+
+    /**
+     * v9.0: Inject workflow engine for workflow-aware health checks.
+     */
+    setWorkflowEngine(we: WorkflowEngine): void {
+        this.workflowEngine = we;
+    }
+
+    /**
+     * v9.0: Spawn a full 10-level agent tree for a plan.
+     * Creates L0-L4 skeleton upfront; L5-L9 branches spawn lazily when work arrives.
+     */
+    async spawnTree(planId: string, templateName?: string): Promise<{ rootId: string }> {
+        if (!this.treeManager) {
+            throw new Error('AgentTreeManager not injected — cannot spawn tree');
+        }
+        const rootNode = this.treeManager.buildSkeletonForPlan(planId, templateName);
+        this.database.addAuditLog(this.name, 'spawn_tree',
+            `Spawned agent tree for plan ${planId} (root: ${rootNode.id})`);
+        return { rootId: rootNode.id };
+    }
+
+    /**
+     * v9.0: Prune completed branches from a tree to free resources.
+     */
+    pruneBranches(rootId: string): number {
+        if (!this.treeManager) return 0;
+        const pruned = this.treeManager.pruneCompletedBranches(rootId);
+        if (pruned > 0) {
+            this.database.addAuditLog(this.name, 'prune_branch',
+                `Pruned ${pruned} completed branches from tree root ${rootId}`);
+        }
+        return pruned;
+    }
+
     readonly systemPrompt = `You are the Boss AI — the top-level PROJECT MANAGER of the Copilot Orchestration Extension (COE).
 
 ## Your Role
@@ -335,6 +383,42 @@ ESCALATE: [true or false]
         });
         if (reengageable.length > 0) {
             issues.push(`INFO: ${reengageable.length} cancelled ticket(s) have resolved blockers — consider re-engaging`);
+        }
+
+        // v9.0: Tree health checks
+        if (this.treeManager && activePlan) {
+            const planTreeNodes = this.database.getTreeNodesByTask(activePlan.id);
+            const failedTreeNodes = planTreeNodes.filter(n => n.status === TreeNodeStatus.Failed);
+            if (failedTreeNodes.length > 0) {
+                issues.push(`WARNING: ${failedTreeNodes.length} tree node(s) in failed state — may need recovery`);
+            }
+
+            // Prune completed branches from active plan trees
+            const rootNodes = planTreeNodes.filter(n => !n.parent_id);
+            for (const rootNode of rootNodes) {
+                this.pruneBranches(rootNode.id);
+            }
+        }
+
+        // v9.0: Workflow health checks
+        if (this.workflowEngine) {
+            const runningExecutions = this.database.getPendingWorkflowExecutions();
+            const stuckExecutions = runningExecutions.filter(e => {
+                if (e.status !== WorkflowExecutionStatus.Running && e.status !== WorkflowExecutionStatus.WaitingApproval) return false;
+                // Stuck if running for more than 30 minutes
+                const startedAt = new Date(e.started_at).getTime();
+                return Date.now() - startedAt > 30 * 60 * 1000;
+            });
+            const pendingApprovals = runningExecutions.filter(
+                e => e.status === WorkflowExecutionStatus.WaitingApproval
+            );
+
+            if (stuckExecutions.length > 0) {
+                issues.push(`WARNING: ${stuckExecutions.length} workflow execution(s) stuck for >30 minutes`);
+            }
+            if (pendingApprovals.length > 0) {
+                issues.push(`INFO: ${pendingApprovals.length} workflow execution(s) waiting for user approval`);
+            }
         }
 
         // ==================== PROACTIVE WORK GENERATION ====================

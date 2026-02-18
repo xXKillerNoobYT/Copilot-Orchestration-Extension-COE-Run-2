@@ -128,6 +128,41 @@ export type COEEventType =
     // v8.0: Unified Review Queue
     | 'review_queue:item_created' | 'review_queue:item_approved' | 'review_queue:item_rejected'
     | 'review_queue:badge_update'
+    // v9.0: Agent Tree Hierarchy
+    | 'tree:node_spawned' | 'tree:node_completed' | 'tree:node_failed'
+    | 'tree:node_escalated' | 'tree:context_sliced'
+    | 'tree:skeleton_built' | 'tree:branch_spawned' | 'tree:branch_pruned'
+    | 'tree:question_escalated' | 'tree:question_answered'
+    // v9.0: Workflow Designer & Engine
+    | 'workflow:created' | 'workflow:updated' | 'workflow:deleted'
+    | 'workflow:execution_started' | 'workflow:execution_completed' | 'workflow:execution_failed'
+    | 'workflow:step_started' | 'workflow:step_completed' | 'workflow:step_failed'
+    | 'workflow:condition_evaluated' | 'workflow:branch_taken'
+    | 'workflow:user_approval_requested' | 'workflow:user_approval_received'
+    | 'workflow:tool_unlocked' | 'workflow:escalation_triggered'
+    | 'workflow:paused' | 'workflow:resumed' | 'workflow:cancelled'
+    // v9.0: User Communication Orchestrator
+    | 'user_comm:message_queued' | 'user_comm:message_delivered'
+    | 'user_comm:preference_updated' | 'user_comm:profile_updated'
+    | 'user_comm:bypass_triggered' | 'user_comm:auto_answered'
+    | 'user_comm:research_requested' | 'user_comm:question_presented'
+    | 'user_comm:profile_suggestion'
+    // v9.0: MCP Confirmation
+    | 'mcp:confirmation_requested' | 'mcp:confirmation_approved'
+    | 'mcp:confirmation_rejected' | 'mcp:confirmation_expired'
+    // v9.0: Model Router
+    | 'model:assignment_changed' | 'model:swap_requested'
+    | 'model:capability_detected' | 'model:detection_completed'
+    // v9.0: Escalation Chain
+    | 'escalation:chain_started' | 'escalation:chain_resolved'
+    | 'escalation:chain_blocked' | 'escalation:level_checked'
+    | 'escalation:ticket_paused' | 'escalation:ticket_blocked'
+    // v9.0: Niche Agents
+    | 'niche:agent_spawned' | 'niche:definitions_seeded'
+    | 'niche:agent_selected' | 'niche:prompt_built'
+    // v9.0: Permissions
+    | 'permission:granted' | 'permission:revoked'
+    | 'permission:check_failed' | 'permission:enforced'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

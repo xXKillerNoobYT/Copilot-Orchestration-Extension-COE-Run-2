@@ -30,6 +30,18 @@ import {
     // v8.0 types
     BackendElement, ElementLink, TagDefinition, ElementTag,
     ReviewQueueItem, BUILTIN_TAGS,
+    // v9.0 types
+    AgentTreeNode, AgentTreeTemplate, AgentLevel, AgentPermission,
+    TreeNodeStatus, ModelPreference, ModelCapability,
+    NicheAgentDefinition,
+    WorkflowDefinition, WorkflowStep, WorkflowStepType, WorkflowStatus,
+    WorkflowExecution, WorkflowStepResult, WorkflowExecutionStatus,
+    AgentPermissionSet,
+    UserProfile, UserProgrammingLevel, UserPreferenceAction,
+    AgentConversation,
+    EscalationChain, EscalationChainStatus,
+    ModelAssignment,
+    MCPConfirmation, MCPConfirmationStatus,
 } from '../types';
 
 export class Database {
@@ -1170,6 +1182,282 @@ export class Database {
         // v8.0 Migrations: add source_type and is_locked to support_documents
         try { this.db.exec("ALTER TABLE support_documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'system'"); } catch { /* already exists */ }
         try { this.db.exec("ALTER TABLE support_documents ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0"); } catch { /* already exists */ }
+
+        // ==================== v9.0 Tables ====================
+
+        // v9.0: Agent tree nodes — 10-level hierarchy instances
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS agent_tree_nodes (
+                id TEXT PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 0,
+                parent_id TEXT,
+                task_id TEXT,
+                workflow_execution_id TEXT,
+                scope TEXT NOT NULL DEFAULT '',
+                permissions_json TEXT NOT NULL DEFAULT '[]',
+                model_preference_json TEXT,
+                max_fanout INTEGER NOT NULL DEFAULT 5,
+                max_depth_below INTEGER NOT NULL DEFAULT 9,
+                escalation_threshold INTEGER NOT NULL DEFAULT 3,
+                escalation_target_id TEXT,
+                context_isolation INTEGER NOT NULL DEFAULT 1,
+                history_isolation INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'idle',
+                retries INTEGER NOT NULL DEFAULT 0,
+                escalations INTEGER NOT NULL DEFAULT 0,
+                tokens_consumed INTEGER NOT NULL DEFAULT 0,
+                input_contract TEXT,
+                output_contract TEXT,
+                niche_definition_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tree_nodes_parent ON agent_tree_nodes(parent_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tree_nodes_level ON agent_tree_nodes(level)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tree_nodes_task ON agent_tree_nodes(task_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tree_nodes_instance ON agent_tree_nodes(instance_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tree_nodes_status ON agent_tree_nodes(status)'); } catch { /* */ }
+
+        // v9.0: Agent tree templates — predefined hierarchy structures
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS agent_tree_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                nodes_json TEXT NOT NULL DEFAULT '[]',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+
+        // v9.0: Niche agent definitions — ~230 leaf agent templates
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS niche_agent_definitions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                level INTEGER NOT NULL,
+                specialty TEXT NOT NULL,
+                domain TEXT NOT NULL DEFAULT 'code',
+                area TEXT NOT NULL DEFAULT '',
+                system_prompt_template TEXT NOT NULL DEFAULT '',
+                parent_level INTEGER NOT NULL,
+                required_capability TEXT NOT NULL DEFAULT 'general',
+                default_model_capability TEXT NOT NULL DEFAULT 'fast',
+                input_contract TEXT,
+                output_contract TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_niche_agents_level ON niche_agent_definitions(level)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_niche_agents_domain ON niche_agent_definitions(domain)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_niche_agents_specialty ON niche_agent_definitions(specialty)'); } catch { /* */ }
+
+        // v9.0: Workflow definitions — templates for multi-step processes
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS workflow_definitions (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                mermaid_source TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_by TEXT NOT NULL DEFAULT 'system',
+                version INTEGER NOT NULL DEFAULT 1,
+                acceptance_criteria TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                is_template INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_defs_plan ON workflow_definitions(plan_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_defs_status ON workflow_definitions(status)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_defs_template ON workflow_definitions(is_template)'); } catch { /* */ }
+
+        // v9.0: Workflow steps — steps within workflow definitions
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS workflow_steps (
+                id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                step_type TEXT NOT NULL DEFAULT 'agent_call',
+                label TEXT NOT NULL DEFAULT '',
+                agent_type TEXT,
+                agent_prompt TEXT,
+                condition_expression TEXT,
+                tools_unlocked_json TEXT NOT NULL DEFAULT '[]',
+                acceptance_criteria TEXT,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                retry_delay_ms INTEGER NOT NULL DEFAULT 1000,
+                escalation_step_id TEXT,
+                next_step_id TEXT,
+                true_branch_step_id TEXT,
+                false_branch_step_id TEXT,
+                parallel_step_ids_json TEXT NOT NULL DEFAULT '[]',
+                model_preference_json TEXT,
+                x REAL NOT NULL DEFAULT 0,
+                y REAL NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id)'); } catch { /* */ }
+
+        // v9.0: Workflow executions — runtime state
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS workflow_executions (
+                id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                ticket_id TEXT,
+                task_id TEXT,
+                current_step_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                step_results_json TEXT NOT NULL DEFAULT '{}',
+                variables_json TEXT NOT NULL DEFAULT '{}',
+                tokens_consumed INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_exec_workflow ON workflow_executions(workflow_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_exec_status ON workflow_executions(status)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_exec_ticket ON workflow_executions(ticket_id)'); } catch { /* */ }
+
+        // v9.0: Workflow step results — per-step execution results
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS workflow_step_results (
+                id TEXT PRIMARY KEY,
+                execution_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                agent_response TEXT,
+                acceptance_check INTEGER,
+                retries INTEGER NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (execution_id) REFERENCES workflow_executions(id),
+                FOREIGN KEY (step_id) REFERENCES workflow_steps(id)
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_wf_step_results_exec ON workflow_step_results(execution_id)'); } catch { /* */ }
+
+        // v9.0: Agent permission sets
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS agent_permission_sets (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL,
+                agent_instance_id TEXT,
+                permissions_json TEXT NOT NULL DEFAULT '[]',
+                allowed_tools_json TEXT NOT NULL DEFAULT '[]',
+                blocked_tools_json TEXT NOT NULL DEFAULT '[]',
+                can_spawn INTEGER NOT NULL DEFAULT 1,
+                max_llm_calls INTEGER NOT NULL DEFAULT 100,
+                max_time_minutes INTEGER NOT NULL DEFAULT 60,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_perm_sets_agent ON agent_permission_sets(agent_type)'); } catch { /* */ }
+
+        // v9.0: User profiles — programming level, preferences, communication style
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                id TEXT PRIMARY KEY,
+                programming_level TEXT NOT NULL DEFAULT 'good',
+                strengths_json TEXT NOT NULL DEFAULT '[]',
+                weaknesses_json TEXT NOT NULL DEFAULT '[]',
+                known_areas_json TEXT NOT NULL DEFAULT '[]',
+                unknown_areas_json TEXT NOT NULL DEFAULT '[]',
+                area_preferences_json TEXT NOT NULL DEFAULT '{}',
+                repeat_answers_json TEXT NOT NULL DEFAULT '{}',
+                communication_style TEXT NOT NULL DEFAULT 'balanced',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+
+        // v9.0: Agent conversations — per-level chats in the agent tree
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS agent_conversations (
+                id TEXT PRIMARY KEY,
+                tree_node_id TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 0,
+                parent_conversation_id TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                content TEXT NOT NULL DEFAULT '',
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                question_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_agent_conv_node ON agent_conversations(tree_node_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_agent_conv_question ON agent_conversations(question_id)'); } catch { /* */ }
+
+        // v9.0: Escalation chains — question tracking as they bubble up the tree
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS escalation_chains (
+                id TEXT PRIMARY KEY,
+                tree_root_id TEXT NOT NULL,
+                originating_node_id TEXT NOT NULL,
+                current_node_id TEXT NOT NULL,
+                question TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'escalating',
+                answer TEXT,
+                levels_traversed TEXT NOT NULL DEFAULT '[]',
+                resolved_at_level INTEGER,
+                ticket_id TEXT,
+                context TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                resolved_at TEXT
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_escalation_chains_status ON escalation_chains(status)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_escalation_chains_root ON escalation_chains(tree_root_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_escalation_chains_origin ON escalation_chains(originating_node_id)'); } catch { /* */ }
+
+        // v9.0: Model assignments — agent-to-model mapping for multi-model routing
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS model_assignments (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL,
+                capability TEXT NOT NULL DEFAULT 'general',
+                model_id TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_model_assign_agent ON model_assignments(agent_type)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_model_assign_cap ON model_assignments(capability)'); } catch { /* */ }
+
+        // v9.0: MCP confirmations — confirmation stage before calling agents externally
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS mcp_confirmations (
+                id TEXT PRIMARY KEY,
+                tool_name TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                arguments_preview TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                expires_at TEXT NOT NULL,
+                user_response TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_mcp_confirm_status ON mcp_confirmations(status)'); } catch { /* */ }
     }
 
     private genId(): string {
@@ -4877,6 +5165,837 @@ export class Database {
             review_notes: (row.review_notes as string) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: AGENT TREE NODES ====================
+
+    createTreeNode(data: Partial<AgentTreeNode> & { name: string; agent_type: string; level: AgentLevel }): AgentTreeNode {
+        const id = this.genId();
+        const instanceId = data.instance_id || this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO agent_tree_nodes (id, instance_id, agent_type, name, level, parent_id, task_id, workflow_execution_id, scope, permissions_json, model_preference_json, max_fanout, max_depth_below, escalation_threshold, escalation_target_id, context_isolation, history_isolation, status, retries, escalations, tokens_consumed, input_contract, output_contract, niche_definition_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, instanceId, data.agent_type, data.name, data.level,
+            data.parent_id ?? null, data.task_id ?? null, data.workflow_execution_id ?? null,
+            data.scope ?? '', JSON.stringify(data.permissions ?? []),
+            data.model_preference ? JSON.stringify(data.model_preference) : null,
+            data.max_fanout ?? 5, data.max_depth_below ?? 9,
+            data.escalation_threshold ?? 3, data.escalation_target_id ?? null,
+            data.context_isolation !== false ? 1 : 0, data.history_isolation !== false ? 1 : 0,
+            data.status ?? TreeNodeStatus.Idle, 0, 0, 0,
+            data.input_contract ?? null, data.output_contract ?? null,
+            data.niche_definition_id ?? null, now, now
+        );
+        return this.getTreeNode(id)!;
+    }
+
+    getTreeNode(id: string): AgentTreeNode | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeNode(row);
+    }
+
+    getTreeNodeChildren(parentId: string): AgentTreeNode[] {
+        const rows = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE parent_id = ? ORDER BY level ASC, name ASC').all(parentId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTreeNode(r));
+    }
+
+    getTreeNodesByTask(taskId: string): AgentTreeNode[] {
+        const rows = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE task_id = ? ORDER BY level ASC').all(taskId) as Record<string, unknown>[];
+        return rows.map(r => this.rowToTreeNode(r));
+    }
+
+    getTreeNodesByLevel(level: AgentLevel, taskId?: string): AgentTreeNode[] {
+        if (taskId) {
+            return (this.db.prepare('SELECT * FROM agent_tree_nodes WHERE level = ? AND task_id = ?').all(level, taskId) as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
+        }
+        return (this.db.prepare('SELECT * FROM agent_tree_nodes WHERE level = ?').all(level) as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
+    }
+
+    getTreeAncestors(nodeId: string): AgentTreeNode[] {
+        const ancestors: AgentTreeNode[] = [];
+        let current = this.getTreeNode(nodeId);
+        while (current?.parent_id) {
+            const parent = this.getTreeNode(current.parent_id);
+            if (!parent) break;
+            ancestors.push(parent);
+            current = parent;
+        }
+        return ancestors;
+    }
+
+    getTreeByRoot(rootId: string): AgentTreeNode[] {
+        // BFS traversal from root
+        const allNodes: AgentTreeNode[] = [];
+        const root = this.getTreeNode(rootId);
+        if (!root) return [];
+        const queue = [root];
+        while (queue.length > 0) {
+            const node = queue.shift()!;
+            allNodes.push(node);
+            const children = this.getTreeNodeChildren(node.id);
+            queue.push(...children);
+        }
+        return allNodes;
+    }
+
+    updateTreeNode(id: string, updates: Partial<AgentTreeNode>): boolean {
+        const allowed = ['status', 'retries', 'escalations', 'tokens_consumed', 'scope', 'max_fanout', 'escalation_target_id'] as const;
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const key of allowed) {
+            if (key in updates) {
+                fields.push(`${key} = ?`);
+                values.push((updates as Record<string, unknown>)[key]);
+            }
+        }
+        if ('permissions' in updates && updates.permissions) {
+            fields.push('permissions_json = ?');
+            values.push(JSON.stringify(updates.permissions));
+        }
+        if ('model_preference' in updates) {
+            fields.push('model_preference_json = ?');
+            values.push(updates.model_preference ? JSON.stringify(updates.model_preference) : null);
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE agent_tree_nodes SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    deleteTreeNode(id: string): boolean {
+        return this.db.prepare('DELETE FROM agent_tree_nodes WHERE id = ?').run(id).changes > 0;
+    }
+
+    deleteTreeNodesByTask(taskId: string): number {
+        return Number(this.db.prepare('DELETE FROM agent_tree_nodes WHERE task_id = ?').run(taskId).changes);
+    }
+
+    private rowToTreeNode(row: Record<string, unknown>): AgentTreeNode {
+        return {
+            id: row.id as string,
+            instance_id: row.instance_id as string,
+            agent_type: row.agent_type as string,
+            name: row.name as string,
+            level: row.level as AgentLevel,
+            parent_id: (row.parent_id as string) ?? null,
+            task_id: (row.task_id as string) ?? null,
+            workflow_execution_id: (row.workflow_execution_id as string) ?? null,
+            scope: row.scope as string,
+            permissions: JSON.parse((row.permissions_json as string) || '[]') as AgentPermission[],
+            model_preference: row.model_preference_json ? JSON.parse(row.model_preference_json as string) as ModelPreference : null,
+            max_fanout: row.max_fanout as number,
+            max_depth_below: row.max_depth_below as number,
+            escalation_threshold: row.escalation_threshold as number,
+            escalation_target_id: (row.escalation_target_id as string) ?? null,
+            context_isolation: !!(row.context_isolation as number),
+            history_isolation: !!(row.history_isolation as number),
+            status: row.status as TreeNodeStatus,
+            retries: row.retries as number,
+            escalations: row.escalations as number,
+            tokens_consumed: row.tokens_consumed as number,
+            input_contract: (row.input_contract as string) ?? null,
+            output_contract: (row.output_contract as string) ?? null,
+            niche_definition_id: (row.niche_definition_id as string) ?? null,
+            created_at: row.created_at as string,
+            updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: AGENT TREE TEMPLATES ====================
+
+    createTreeTemplate(data: { name: string; description?: string; nodes_json?: string; is_default?: boolean }): AgentTreeTemplate {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO agent_tree_templates (id, name, description, nodes_json, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.name, data.description ?? '', data.nodes_json ?? '[]', data.is_default ? 1 : 0, now, now);
+        return this.getTreeTemplate(id)!;
+    }
+
+    getTreeTemplate(id: string): AgentTreeTemplate | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_templates WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeTemplate(row);
+    }
+
+    getTreeTemplateByName(name: string): AgentTreeTemplate | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_templates WHERE name = ?').get(name) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeTemplate(row);
+    }
+
+    getDefaultTreeTemplate(): AgentTreeTemplate | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_templates WHERE is_default = 1 LIMIT 1').get() as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeTemplate(row);
+    }
+
+    getAllTreeTemplates(): AgentTreeTemplate[] {
+        return (this.db.prepare('SELECT * FROM agent_tree_templates ORDER BY name ASC').all() as Record<string, unknown>[]).map(r => this.rowToTreeTemplate(r));
+    }
+
+    private rowToTreeTemplate(row: Record<string, unknown>): AgentTreeTemplate {
+        return {
+            id: row.id as string, name: row.name as string, description: row.description as string,
+            nodes_json: row.nodes_json as string, is_default: !!(row.is_default as number),
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: NICHE AGENT DEFINITIONS ====================
+
+    createNicheAgentDefinition(data: Partial<NicheAgentDefinition> & { name: string; level: AgentLevel; specialty: string }): NicheAgentDefinition {
+        const id = data.id || this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT OR IGNORE INTO niche_agent_definitions (id, name, level, specialty, domain, area, system_prompt_template, parent_level, required_capability, default_model_capability, input_contract, output_contract, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.name, data.level, data.specialty,
+            data.domain ?? 'code', data.area ?? '',
+            data.system_prompt_template ?? '', data.parent_level ?? Math.max(0, data.level - 1),
+            data.required_capability ?? ModelCapability.General,
+            data.default_model_capability ?? ModelCapability.Fast,
+            data.input_contract ?? null, data.output_contract ?? null, now, now
+        );
+        return this.getNicheAgentDefinition(id)!;
+    }
+
+    getNicheAgentDefinition(id: string): NicheAgentDefinition | null {
+        const row = this.db.prepare('SELECT * FROM niche_agent_definitions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToNicheAgent(row);
+    }
+
+    getNicheAgentsByLevel(level: AgentLevel): NicheAgentDefinition[] {
+        return (this.db.prepare('SELECT * FROM niche_agent_definitions WHERE level = ? ORDER BY name ASC').all(level) as Record<string, unknown>[]).map(r => this.rowToNicheAgent(r));
+    }
+
+    getNicheAgentsByDomain(domain: string): NicheAgentDefinition[] {
+        return (this.db.prepare('SELECT * FROM niche_agent_definitions WHERE domain = ? ORDER BY level ASC, name ASC').all(domain) as Record<string, unknown>[]).map(r => this.rowToNicheAgent(r));
+    }
+
+    getNicheAgentsBySpecialty(specialty: string): NicheAgentDefinition[] {
+        return (this.db.prepare("SELECT * FROM niche_agent_definitions WHERE specialty LIKE ? ORDER BY level ASC, name ASC").all(`%${specialty}%`) as Record<string, unknown>[]).map(r => this.rowToNicheAgent(r));
+    }
+
+    getAllNicheAgentDefinitions(): NicheAgentDefinition[] {
+        return (this.db.prepare('SELECT * FROM niche_agent_definitions ORDER BY domain ASC, level ASC, name ASC').all() as Record<string, unknown>[]).map(r => this.rowToNicheAgent(r));
+    }
+
+    updateNicheAgentDefinition(id: string, updates: Partial<NicheAgentDefinition>): boolean {
+        const allowed = ['name', 'specialty', 'domain', 'area', 'system_prompt_template', 'required_capability', 'default_model_capability', 'input_contract', 'output_contract'] as const;
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const key of allowed) {
+            if (key in updates) {
+                fields.push(`${key} = ?`);
+                values.push((updates as Record<string, unknown>)[key]);
+            }
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE niche_agent_definitions SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    getNicheAgentCount(): number {
+        const row = this.db.prepare('SELECT COUNT(*) as count FROM niche_agent_definitions').get() as { count: number };
+        return row.count;
+    }
+
+    private rowToNicheAgent(row: Record<string, unknown>): NicheAgentDefinition {
+        return {
+            id: row.id as string, name: row.name as string,
+            level: row.level as AgentLevel, specialty: row.specialty as string,
+            domain: row.domain as string, area: row.area as string,
+            system_prompt_template: row.system_prompt_template as string,
+            parent_level: row.parent_level as AgentLevel,
+            required_capability: row.required_capability as ModelCapability,
+            default_model_capability: row.default_model_capability as ModelCapability,
+            input_contract: (row.input_contract as string) ?? null,
+            output_contract: (row.output_contract as string) ?? null,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: WORKFLOW DEFINITIONS ====================
+
+    createWorkflowDefinition(data: Partial<WorkflowDefinition> & { name: string }): WorkflowDefinition {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO workflow_definitions (id, plan_id, name, description, mermaid_source, status, created_by, version, acceptance_criteria, tags_json, is_template, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.plan_id ?? null, data.name, data.description ?? '', data.mermaid_source ?? '',
+            data.status ?? WorkflowStatus.Draft, data.created_by ?? 'system', data.version ?? 1,
+            data.acceptance_criteria ?? '', JSON.stringify(data.tags ?? []), data.is_template ? 1 : 0, now, now
+        );
+        return this.getWorkflowDefinition(id)!;
+    }
+
+    getWorkflowDefinition(id: string): WorkflowDefinition | null {
+        const row = this.db.prepare('SELECT * FROM workflow_definitions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToWorkflowDef(row);
+    }
+
+    getWorkflowsByPlan(planId: string | null): WorkflowDefinition[] {
+        if (planId === null) {
+            return (this.db.prepare('SELECT * FROM workflow_definitions WHERE plan_id IS NULL ORDER BY name ASC').all() as Record<string, unknown>[]).map(r => this.rowToWorkflowDef(r));
+        }
+        return (this.db.prepare('SELECT * FROM workflow_definitions WHERE plan_id = ? ORDER BY name ASC').all(planId) as Record<string, unknown>[]).map(r => this.rowToWorkflowDef(r));
+    }
+
+    getWorkflowTemplates(): WorkflowDefinition[] {
+        return (this.db.prepare('SELECT * FROM workflow_definitions WHERE is_template = 1 ORDER BY name ASC').all() as Record<string, unknown>[]).map(r => this.rowToWorkflowDef(r));
+    }
+
+    updateWorkflowDefinition(id: string, updates: Partial<WorkflowDefinition>): boolean {
+        const allowed = ['name', 'description', 'mermaid_source', 'status', 'acceptance_criteria', 'is_template'] as const;
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const key of allowed) {
+            if (key in updates) {
+                const v = key === 'is_template' ? ((updates as Record<string, unknown>)[key] ? 1 : 0) : (updates as Record<string, unknown>)[key];
+                fields.push(`${key} = ?`);
+                values.push(v);
+            }
+        }
+        if ('tags' in updates && updates.tags) {
+            fields.push('tags_json = ?');
+            values.push(JSON.stringify(updates.tags));
+        }
+        if (fields.length === 0) return false;
+        fields.push('version = version + 1');
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE workflow_definitions SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    deleteWorkflowDefinition(id: string): boolean {
+        this.db.prepare('DELETE FROM workflow_steps WHERE workflow_id = ?').run(id);
+        return this.db.prepare('DELETE FROM workflow_definitions WHERE id = ?').run(id).changes > 0;
+    }
+
+    private rowToWorkflowDef(row: Record<string, unknown>): WorkflowDefinition {
+        return {
+            id: row.id as string, plan_id: (row.plan_id as string) ?? null,
+            name: row.name as string, description: row.description as string,
+            mermaid_source: row.mermaid_source as string, status: row.status as WorkflowStatus,
+            created_by: row.created_by as string, version: row.version as number,
+            acceptance_criteria: row.acceptance_criteria as string,
+            tags: JSON.parse((row.tags_json as string) || '[]') as string[],
+            is_template: !!(row.is_template as number),
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: WORKFLOW STEPS ====================
+
+    createWorkflowStep(data: Partial<WorkflowStep> & { workflow_id: string }): WorkflowStep {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO workflow_steps (id, workflow_id, step_type, label, agent_type, agent_prompt, condition_expression, tools_unlocked_json, acceptance_criteria, max_retries, retry_delay_ms, escalation_step_id, next_step_id, true_branch_step_id, false_branch_step_id, parallel_step_ids_json, model_preference_json, x, y, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.workflow_id, data.step_type ?? WorkflowStepType.AgentCall,
+            data.label ?? '', data.agent_type ?? null, data.agent_prompt ?? null,
+            data.condition_expression ?? null, JSON.stringify(data.tools_unlocked ?? []),
+            data.acceptance_criteria ?? null, data.max_retries ?? 3, data.retry_delay_ms ?? 1000,
+            data.escalation_step_id ?? null, data.next_step_id ?? null,
+            data.true_branch_step_id ?? null, data.false_branch_step_id ?? null,
+            JSON.stringify(data.parallel_step_ids ?? []),
+            data.model_preference ? JSON.stringify(data.model_preference) : null,
+            data.x ?? 0, data.y ?? 0, data.sort_order ?? 0, now, now
+        );
+        return this.getWorkflowStep(id)!;
+    }
+
+    getWorkflowStep(id: string): WorkflowStep | null {
+        const row = this.db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToWorkflowStep(row);
+    }
+
+    getWorkflowSteps(workflowId: string): WorkflowStep[] {
+        return (this.db.prepare('SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY sort_order ASC').all(workflowId) as Record<string, unknown>[]).map(r => this.rowToWorkflowStep(r));
+    }
+
+    updateWorkflowStep(id: string, updates: Partial<WorkflowStep>): boolean {
+        const allowed = ['label', 'agent_type', 'agent_prompt', 'condition_expression', 'acceptance_criteria', 'max_retries', 'retry_delay_ms', 'escalation_step_id', 'next_step_id', 'true_branch_step_id', 'false_branch_step_id', 'x', 'y', 'sort_order', 'step_type'] as const;
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        for (const key of allowed) {
+            if (key in updates) {
+                fields.push(`${key} = ?`);
+                values.push((updates as Record<string, unknown>)[key]);
+            }
+        }
+        if ('tools_unlocked' in updates) {
+            fields.push('tools_unlocked_json = ?');
+            values.push(JSON.stringify(updates.tools_unlocked ?? []));
+        }
+        if ('parallel_step_ids' in updates) {
+            fields.push('parallel_step_ids_json = ?');
+            values.push(JSON.stringify(updates.parallel_step_ids ?? []));
+        }
+        if ('model_preference' in updates) {
+            fields.push('model_preference_json = ?');
+            values.push(updates.model_preference ? JSON.stringify(updates.model_preference) : null);
+        }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE workflow_steps SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    deleteWorkflowStep(id: string): boolean {
+        return this.db.prepare('DELETE FROM workflow_steps WHERE id = ?').run(id).changes > 0;
+    }
+
+    private rowToWorkflowStep(row: Record<string, unknown>): WorkflowStep {
+        return {
+            id: row.id as string, workflow_id: row.workflow_id as string,
+            step_type: row.step_type as WorkflowStepType, label: row.label as string,
+            agent_type: (row.agent_type as string) ?? null, agent_prompt: (row.agent_prompt as string) ?? null,
+            condition_expression: (row.condition_expression as string) ?? null,
+            tools_unlocked: JSON.parse((row.tools_unlocked_json as string) || '[]') as string[],
+            acceptance_criteria: (row.acceptance_criteria as string) ?? null,
+            max_retries: row.max_retries as number, retry_delay_ms: row.retry_delay_ms as number,
+            escalation_step_id: (row.escalation_step_id as string) ?? null,
+            next_step_id: (row.next_step_id as string) ?? null,
+            true_branch_step_id: (row.true_branch_step_id as string) ?? null,
+            false_branch_step_id: (row.false_branch_step_id as string) ?? null,
+            parallel_step_ids: JSON.parse((row.parallel_step_ids_json as string) || '[]') as string[],
+            model_preference: row.model_preference_json ? JSON.parse(row.model_preference_json as string) as ModelPreference : null,
+            x: row.x as number, y: row.y as number, sort_order: row.sort_order as number,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: WORKFLOW EXECUTIONS ====================
+
+    createWorkflowExecution(data: { workflow_id: string; ticket_id?: string; task_id?: string; variables?: Record<string, unknown> }): WorkflowExecution {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO workflow_executions (id, workflow_id, ticket_id, task_id, current_step_id, status, step_results_json, variables_json, tokens_consumed, started_at)
+            VALUES (?, ?, ?, ?, NULL, ?, '{}', ?, 0, ?)
+        `).run(id, data.workflow_id, data.ticket_id ?? null, data.task_id ?? null, WorkflowExecutionStatus.Pending, JSON.stringify(data.variables ?? {}), now);
+        return this.getWorkflowExecution(id)!;
+    }
+
+    getWorkflowExecution(id: string): WorkflowExecution | null {
+        const row = this.db.prepare('SELECT * FROM workflow_executions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToWorkflowExecution(row);
+    }
+
+    getWorkflowExecutionsByWorkflow(workflowId: string): WorkflowExecution[] {
+        return (this.db.prepare('SELECT * FROM workflow_executions WHERE workflow_id = ? ORDER BY started_at DESC').all(workflowId) as Record<string, unknown>[]).map(r => this.rowToWorkflowExecution(r));
+    }
+
+    getPendingWorkflowExecutions(): WorkflowExecution[] {
+        return (this.db.prepare("SELECT * FROM workflow_executions WHERE status IN ('pending', 'running', 'waiting_approval') ORDER BY started_at ASC").all() as Record<string, unknown>[]).map(r => this.rowToWorkflowExecution(r));
+    }
+
+    updateWorkflowExecution(id: string, updates: Partial<WorkflowExecution>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('current_step_id' in updates) { fields.push('current_step_id = ?'); values.push(updates.current_step_id ?? null); }
+        if ('status' in updates) { fields.push('status = ?'); values.push(updates.status); }
+        if ('tokens_consumed' in updates) { fields.push('tokens_consumed = ?'); values.push(updates.tokens_consumed); }
+        if ('completed_at' in updates) { fields.push('completed_at = ?'); values.push(updates.completed_at ?? null); }
+        if ('step_results_json' in updates) { fields.push('step_results_json = ?'); values.push(updates.step_results_json); }
+        if ('variables_json' in updates) { fields.push('variables_json = ?'); values.push(updates.variables_json); }
+        if (fields.length === 0) return false;
+        values.push(id);
+        return this.db.prepare(`UPDATE workflow_executions SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    private rowToWorkflowExecution(row: Record<string, unknown>): WorkflowExecution {
+        return {
+            id: row.id as string, workflow_id: row.workflow_id as string,
+            ticket_id: (row.ticket_id as string) ?? null, task_id: (row.task_id as string) ?? null,
+            current_step_id: (row.current_step_id as string) ?? null,
+            status: row.status as WorkflowExecutionStatus,
+            step_results_json: row.step_results_json as string,
+            variables_json: row.variables_json as string,
+            tokens_consumed: row.tokens_consumed as number,
+            started_at: row.started_at as string,
+            completed_at: (row.completed_at as string) ?? null,
+        };
+    }
+
+    // ==================== v9.0: WORKFLOW STEP RESULTS ====================
+
+    createWorkflowStepResult(data: { execution_id: string; step_id: string; status?: WorkflowExecutionStatus; agent_response?: string; acceptance_check?: boolean; retries?: number; duration_ms?: number; tokens_used?: number; error?: string }): WorkflowStepResult {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO workflow_step_results (id, execution_id, step_id, status, agent_response, acceptance_check, retries, duration_ms, tokens_used, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.execution_id, data.step_id, data.status ?? WorkflowExecutionStatus.Pending,
+            data.agent_response ?? null, data.acceptance_check != null ? (data.acceptance_check ? 1 : 0) : null,
+            data.retries ?? 0, data.duration_ms ?? 0, data.tokens_used ?? 0, data.error ?? null
+        );
+        return {
+            step_id: data.step_id, status: data.status ?? WorkflowExecutionStatus.Pending,
+            agent_response: data.agent_response ?? null, acceptance_check: data.acceptance_check ?? null,
+            retries: data.retries ?? 0, duration_ms: data.duration_ms ?? 0,
+            tokens_used: data.tokens_used ?? 0, error: data.error ?? null,
+        };
+    }
+
+    getWorkflowStepResults(executionId: string): WorkflowStepResult[] {
+        return (this.db.prepare('SELECT * FROM workflow_step_results WHERE execution_id = ? ORDER BY created_at ASC').all(executionId) as Record<string, unknown>[]).map(r => ({
+            step_id: r.step_id as string, status: r.status as WorkflowExecutionStatus,
+            agent_response: (r.agent_response as string) ?? null,
+            acceptance_check: r.acceptance_check != null ? !!(r.acceptance_check as number) : null,
+            retries: r.retries as number, duration_ms: r.duration_ms as number,
+            tokens_used: r.tokens_used as number, error: (r.error as string) ?? null,
+        }));
+    }
+
+    // ==================== v9.0: AGENT PERMISSION SETS ====================
+
+    createPermissionSet(data: Partial<AgentPermissionSet> & { agent_type: string }): AgentPermissionSet {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO agent_permission_sets (id, agent_type, agent_instance_id, permissions_json, allowed_tools_json, blocked_tools_json, can_spawn, max_llm_calls, max_time_minutes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data.agent_type, data.agent_instance_id ?? null,
+            JSON.stringify(data.permissions ?? [AgentPermission.Read, AgentPermission.Write, AgentPermission.Execute, AgentPermission.Escalate]),
+            JSON.stringify(data.allowed_tools ?? []), JSON.stringify(data.blocked_tools ?? []),
+            data.can_spawn !== false ? 1 : 0, data.max_llm_calls ?? 100, data.max_time_minutes ?? 60, now, now
+        );
+        return this.getPermissionSet(id)!;
+    }
+
+    getPermissionSet(id: string): AgentPermissionSet | null {
+        const row = this.db.prepare('SELECT * FROM agent_permission_sets WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToPermissionSet(row);
+    }
+
+    getPermissionSetByAgent(agentType: string, instanceId?: string): AgentPermissionSet | null {
+        let row: Record<string, unknown> | undefined;
+        if (instanceId) {
+            row = this.db.prepare('SELECT * FROM agent_permission_sets WHERE agent_type = ? AND agent_instance_id = ?').get(agentType, instanceId) as Record<string, unknown> | undefined;
+        }
+        if (!row) {
+            row = this.db.prepare('SELECT * FROM agent_permission_sets WHERE agent_type = ? AND agent_instance_id IS NULL').get(agentType) as Record<string, unknown> | undefined;
+        }
+        if (!row) return null;
+        return this.rowToPermissionSet(row);
+    }
+
+    updatePermissionSet(id: string, updates: Partial<AgentPermissionSet>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('permissions' in updates) { fields.push('permissions_json = ?'); values.push(JSON.stringify(updates.permissions ?? [])); }
+        if ('allowed_tools' in updates) { fields.push('allowed_tools_json = ?'); values.push(JSON.stringify(updates.allowed_tools ?? [])); }
+        if ('blocked_tools' in updates) { fields.push('blocked_tools_json = ?'); values.push(JSON.stringify(updates.blocked_tools ?? [])); }
+        if ('can_spawn' in updates) { fields.push('can_spawn = ?'); values.push(updates.can_spawn ? 1 : 0); }
+        if ('max_llm_calls' in updates) { fields.push('max_llm_calls = ?'); values.push(updates.max_llm_calls); }
+        if ('max_time_minutes' in updates) { fields.push('max_time_minutes = ?'); values.push(updates.max_time_minutes); }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE agent_permission_sets SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    deletePermissionSet(id: string): boolean {
+        return this.db.prepare('DELETE FROM agent_permission_sets WHERE id = ?').run(id).changes > 0;
+    }
+
+    private rowToPermissionSet(row: Record<string, unknown>): AgentPermissionSet {
+        return {
+            id: row.id as string, agent_type: row.agent_type as string,
+            agent_instance_id: (row.agent_instance_id as string) ?? null,
+            permissions: JSON.parse((row.permissions_json as string) || '[]') as AgentPermission[],
+            allowed_tools: JSON.parse((row.allowed_tools_json as string) || '[]') as string[],
+            blocked_tools: JSON.parse((row.blocked_tools_json as string) || '[]') as string[],
+            can_spawn: !!(row.can_spawn as number),
+            max_llm_calls: row.max_llm_calls as number, max_time_minutes: row.max_time_minutes as number,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: USER PROFILES ====================
+
+    createUserProfile(data?: Partial<UserProfile>): UserProfile {
+        const id = data?.id || this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO user_profiles (id, programming_level, strengths_json, weaknesses_json, known_areas_json, unknown_areas_json, area_preferences_json, repeat_answers_json, communication_style, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, data?.programming_level ?? UserProgrammingLevel.Good,
+            JSON.stringify(data?.strengths ?? []), JSON.stringify(data?.weaknesses ?? []),
+            JSON.stringify(data?.known_areas ?? []), JSON.stringify(data?.unknown_areas ?? []),
+            JSON.stringify(data?.area_preferences ?? {}), JSON.stringify(data?.repeat_answers ?? {}),
+            data?.communication_style ?? 'balanced', data?.notes ?? '', now, now
+        );
+        return this.getUserProfile(id)!;
+    }
+
+    getUserProfile(id: string): UserProfile | null {
+        const row = this.db.prepare('SELECT * FROM user_profiles WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToUserProfile(row);
+    }
+
+    getDefaultUserProfile(): UserProfile | null {
+        const row = this.db.prepare('SELECT * FROM user_profiles ORDER BY created_at ASC LIMIT 1').get() as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToUserProfile(row);
+    }
+
+    updateUserProfile(id: string, updates: Partial<UserProfile>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('programming_level' in updates) { fields.push('programming_level = ?'); values.push(updates.programming_level); }
+        if ('communication_style' in updates) { fields.push('communication_style = ?'); values.push(updates.communication_style); }
+        if ('notes' in updates) { fields.push('notes = ?'); values.push(updates.notes); }
+        if ('strengths' in updates) { fields.push('strengths_json = ?'); values.push(JSON.stringify(updates.strengths ?? [])); }
+        if ('weaknesses' in updates) { fields.push('weaknesses_json = ?'); values.push(JSON.stringify(updates.weaknesses ?? [])); }
+        if ('known_areas' in updates) { fields.push('known_areas_json = ?'); values.push(JSON.stringify(updates.known_areas ?? [])); }
+        if ('unknown_areas' in updates) { fields.push('unknown_areas_json = ?'); values.push(JSON.stringify(updates.unknown_areas ?? [])); }
+        if ('area_preferences' in updates) { fields.push('area_preferences_json = ?'); values.push(JSON.stringify(updates.area_preferences ?? {})); }
+        if ('repeat_answers' in updates) { fields.push('repeat_answers_json = ?'); values.push(JSON.stringify(updates.repeat_answers ?? {})); }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE user_profiles SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    private rowToUserProfile(row: Record<string, unknown>): UserProfile {
+        return {
+            id: row.id as string,
+            programming_level: row.programming_level as UserProgrammingLevel,
+            strengths: JSON.parse((row.strengths_json as string) || '[]') as string[],
+            weaknesses: JSON.parse((row.weaknesses_json as string) || '[]') as string[],
+            known_areas: JSON.parse((row.known_areas_json as string) || '[]') as string[],
+            unknown_areas: JSON.parse((row.unknown_areas_json as string) || '[]') as string[],
+            area_preferences: JSON.parse((row.area_preferences_json as string) || '{}') as Record<string, UserPreferenceAction>,
+            repeat_answers: JSON.parse((row.repeat_answers_json as string) || '{}') as Record<string, string>,
+            communication_style: row.communication_style as 'technical' | 'simple' | 'balanced',
+            notes: row.notes as string,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: AGENT CONVERSATIONS ====================
+
+    createAgentConversation(data: { tree_node_id: string; level: AgentLevel; role: ConversationRole; content: string; tokens_used?: number; parent_conversation_id?: string; question_id?: string }): AgentConversation {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO agent_conversations (id, tree_node_id, level, parent_conversation_id, role, content, tokens_used, question_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.tree_node_id, data.level, data.parent_conversation_id ?? null, data.role, data.content, data.tokens_used ?? 0, data.question_id ?? null, now);
+        return {
+            id, tree_node_id: data.tree_node_id, level: data.level,
+            parent_conversation_id: data.parent_conversation_id ?? null,
+            role: data.role, content: data.content, tokens_used: data.tokens_used ?? 0,
+            question_id: data.question_id ?? null, created_at: now,
+        };
+    }
+
+    getAgentConversationsByNode(treeNodeId: string): AgentConversation[] {
+        return (this.db.prepare('SELECT * FROM agent_conversations WHERE tree_node_id = ? ORDER BY created_at ASC').all(treeNodeId) as Record<string, unknown>[]).map(r => ({
+            id: r.id as string, tree_node_id: r.tree_node_id as string, level: r.level as AgentLevel,
+            parent_conversation_id: (r.parent_conversation_id as string) ?? null,
+            role: r.role as ConversationRole, content: r.content as string,
+            tokens_used: r.tokens_used as number, question_id: (r.question_id as string) ?? null,
+            created_at: r.created_at as string,
+        }));
+    }
+
+    getAgentConversationsByQuestion(questionId: string): AgentConversation[] {
+        return (this.db.prepare('SELECT * FROM agent_conversations WHERE question_id = ? ORDER BY created_at ASC').all(questionId) as Record<string, unknown>[]).map(r => ({
+            id: r.id as string, tree_node_id: r.tree_node_id as string, level: r.level as AgentLevel,
+            parent_conversation_id: (r.parent_conversation_id as string) ?? null,
+            role: r.role as ConversationRole, content: r.content as string,
+            tokens_used: r.tokens_used as number, question_id: (r.question_id as string) ?? null,
+            created_at: r.created_at as string,
+        }));
+    }
+
+    // ==================== v9.0: ESCALATION CHAINS ====================
+
+    createEscalationChain(data: { tree_root_id: string; originating_node_id: string; current_node_id: string; question: string; context?: string }): EscalationChain {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO escalation_chains (id, tree_root_id, originating_node_id, current_node_id, question, status, levels_traversed, context, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.tree_root_id, data.originating_node_id, data.current_node_id, data.question, EscalationChainStatus.Escalating, JSON.stringify([data.current_node_id]), data.context ?? null, now);
+        return this.getEscalationChain(id)!;
+    }
+
+    getEscalationChain(id: string): EscalationChain | null {
+        const row = this.db.prepare('SELECT * FROM escalation_chains WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToEscalationChain(row);
+    }
+
+    getActiveEscalationChains(treeRootId?: string): EscalationChain[] {
+        let sql = "SELECT * FROM escalation_chains WHERE status = 'escalating'";
+        const params: unknown[] = [];
+        if (treeRootId) { sql += ' AND tree_root_id = ?'; params.push(treeRootId); }
+        sql += ' ORDER BY created_at ASC';
+        return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(r => this.rowToEscalationChain(r));
+    }
+
+    updateEscalationChain(id: string, updates: Partial<EscalationChain>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('current_node_id' in updates) { fields.push('current_node_id = ?'); values.push(updates.current_node_id); }
+        if ('status' in updates) { fields.push('status = ?'); values.push(updates.status); }
+        if ('answer' in updates) { fields.push('answer = ?'); values.push(updates.answer ?? null); }
+        if ('resolved_at_level' in updates) { fields.push('resolved_at_level = ?'); values.push(updates.resolved_at_level ?? null); }
+        if ('ticket_id' in updates) { fields.push('ticket_id = ?'); values.push(updates.ticket_id ?? null); }
+        if ('resolved_at' in updates) { fields.push('resolved_at = ?'); values.push(updates.resolved_at ?? null); }
+        if ('levels_traversed' in updates) { fields.push('levels_traversed = ?'); values.push(updates.levels_traversed); }
+        if (fields.length === 0) return false;
+        values.push(id);
+        return this.db.prepare(`UPDATE escalation_chains SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    private rowToEscalationChain(row: Record<string, unknown>): EscalationChain {
+        return {
+            id: row.id as string, tree_root_id: row.tree_root_id as string,
+            originating_node_id: row.originating_node_id as string,
+            current_node_id: row.current_node_id as string,
+            question: row.question as string, status: row.status as EscalationChainStatus,
+            answer: (row.answer as string) ?? null,
+            levels_traversed: row.levels_traversed as string,
+            resolved_at_level: row.resolved_at_level != null ? row.resolved_at_level as AgentLevel : null,
+            ticket_id: (row.ticket_id as string) ?? null,
+            context: (row.context as string) ?? null,
+            created_at: row.created_at as string,
+            resolved_at: (row.resolved_at as string) ?? null,
+        };
+    }
+
+    // ==================== v9.0: MODEL ASSIGNMENTS ====================
+
+    createModelAssignment(data: { agent_type: string; capability: ModelCapability; model_id: string; is_default?: boolean; priority?: number }): ModelAssignment {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO model_assignments (id, agent_type, capability, model_id, is_default, priority, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.agent_type, data.capability, data.model_id, data.is_default ? 1 : 0, data.priority ?? 0, now, now);
+        return this.getModelAssignment(id)!;
+    }
+
+    getModelAssignment(id: string): ModelAssignment | null {
+        const row = this.db.prepare('SELECT * FROM model_assignments WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToModelAssignment(row);
+    }
+
+    getModelAssignmentForAgent(agentType: string, capability?: ModelCapability): ModelAssignment | null {
+        let row: Record<string, unknown> | undefined;
+        if (capability) {
+            row = this.db.prepare('SELECT * FROM model_assignments WHERE agent_type = ? AND capability = ? ORDER BY priority ASC LIMIT 1').get(agentType, capability) as Record<string, unknown> | undefined;
+        }
+        if (!row) {
+            row = this.db.prepare('SELECT * FROM model_assignments WHERE agent_type = ? AND is_default = 1 ORDER BY priority ASC LIMIT 1').get(agentType) as Record<string, unknown> | undefined;
+        }
+        if (!row) return null;
+        return this.rowToModelAssignment(row);
+    }
+
+    getAllModelAssignments(): ModelAssignment[] {
+        return (this.db.prepare('SELECT * FROM model_assignments ORDER BY agent_type ASC, priority ASC').all() as Record<string, unknown>[]).map(r => this.rowToModelAssignment(r));
+    }
+
+    updateModelAssignment(id: string, updates: Partial<ModelAssignment>): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('model_id' in updates) { fields.push('model_id = ?'); values.push(updates.model_id); }
+        if ('capability' in updates) { fields.push('capability = ?'); values.push(updates.capability); }
+        if ('is_default' in updates) { fields.push('is_default = ?'); values.push(updates.is_default ? 1 : 0); }
+        if ('priority' in updates) { fields.push('priority = ?'); values.push(updates.priority); }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE model_assignments SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    deleteModelAssignment(id: string): boolean {
+        return this.db.prepare('DELETE FROM model_assignments WHERE id = ?').run(id).changes > 0;
+    }
+
+    private rowToModelAssignment(row: Record<string, unknown>): ModelAssignment {
+        return {
+            id: row.id as string, agent_type: row.agent_type as string,
+            capability: row.capability as ModelCapability, model_id: row.model_id as string,
+            is_default: !!(row.is_default as number), priority: row.priority as number,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
+        };
+    }
+
+    // ==================== v9.0: MCP CONFIRMATIONS ====================
+
+    createMCPConfirmation(data: { tool_name: string; agent_name: string; description: string; arguments_preview: string; expires_at: string }): MCPConfirmation {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        this.db.prepare(`
+            INSERT INTO mcp_confirmations (id, tool_name, agent_name, description, arguments_preview, status, expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        `).run(id, data.tool_name, data.agent_name, data.description, data.arguments_preview, data.expires_at, now, now);
+        return this.getMCPConfirmation(id)!;
+    }
+
+    getMCPConfirmation(id: string): MCPConfirmation | null {
+        const row = this.db.prepare('SELECT * FROM mcp_confirmations WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToMCPConfirmation(row);
+    }
+
+    getActiveMCPConfirmations(): MCPConfirmation[] {
+        return (this.db.prepare("SELECT * FROM mcp_confirmations WHERE status = 'pending' AND datetime(expires_at) > datetime('now') ORDER BY created_at DESC").all() as Record<string, unknown>[]).map(r => this.rowToMCPConfirmation(r));
+    }
+
+    updateMCPConfirmation(id: string, updates: { status?: MCPConfirmationStatus; user_response?: string }): boolean {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if ('status' in updates) { fields.push('status = ?'); values.push(updates.status); }
+        if ('user_response' in updates) { fields.push('user_response = ?'); values.push(updates.user_response ?? null); }
+        if (fields.length === 0) return false;
+        fields.push("updated_at = datetime('now')");
+        values.push(id);
+        return this.db.prepare(`UPDATE mcp_confirmations SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
+    }
+
+    expireOldMCPConfirmations(): number {
+        return Number(this.db.prepare("UPDATE mcp_confirmations SET status = 'expired', updated_at = datetime('now') WHERE status = 'pending' AND datetime(expires_at) <= datetime('now')").run().changes);
+    }
+
+    private rowToMCPConfirmation(row: Record<string, unknown>): MCPConfirmation {
+        return {
+            id: row.id as string, tool_name: row.tool_name as string,
+            agent_name: row.agent_name as string, description: row.description as string,
+            arguments_preview: row.arguments_preview as string,
+            status: row.status as MCPConfirmationStatus,
+            expires_at: row.expires_at as string,
+            user_response: (row.user_response as string) ?? null,
+            created_at: row.created_at as string, updated_at: row.updated_at as string,
         };
     }
 

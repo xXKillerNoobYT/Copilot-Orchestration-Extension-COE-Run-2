@@ -4,7 +4,7 @@ import { Database } from '../core/database';
 import { ConfigManager } from '../core/config';
 import { Orchestrator } from '../agents/orchestrator';
 import { CodingAgentService } from '../core/coding-agent';
-import { AgentContext, TaskStatus, TicketPriority, TaskPriority } from '../types';
+import { AgentContext, TaskStatus, TicketPriority, TaskPriority, MCPConfirmationStatus } from '../types';
 import { handleApiRequest } from '../webapp/api';
 import { getAppHtml } from '../webapp/app';
 import { TicketProcessorService } from '../core/ticket-processor';
@@ -27,6 +27,7 @@ export class MCPServer {
     private tools: Map<string, MCPToolDefinition> = new Map();
     private handlers: Map<string, (args: Record<string, unknown>) => Promise<unknown>> = new Map();
     private ticketProcessor: TicketProcessorService | null = null;
+    private confirmationEnabled = false;
 
     constructor(
         private orchestrator: Orchestrator,
@@ -35,6 +36,16 @@ export class MCPServer {
         private outputChannel: vscode.OutputChannel,
         private codingAgentService?: CodingAgentService
     ) {}
+
+    /**
+     * v9.0: Enable or disable MCP confirmation stage for callCOEAgent.
+     * When enabled, first call returns agent description + confirmation ID,
+     * second call with confirmation_id executes.
+     */
+    setConfirmationEnabled(enabled: boolean): void {
+        this.confirmationEnabled = enabled;
+        this.outputChannel.appendLine(`MCP Server: Confirmation stage ${enabled ? 'enabled' : 'disabled'}`);
+    }
 
     /**
      * Wire the TicketProcessorService for task queue integration.
@@ -318,21 +329,25 @@ export class MCPServer {
             };
         });
 
-        // Tool 5: callCOEAgent
+        // Tool 5: callCOEAgent (v9.0: with optional confirmation stage)
         this.registerTool({
             name: 'callCOEAgent',
-            description: 'Call a specific COE agent directly for specialized assistance',
+            description: 'Call a specific COE agent directly for specialized assistance. When confirmation is enabled, first call returns agent description + confirmation_id; pass confirmation_id to execute.',
             inputSchema: {
                 type: 'object',
                 properties: {
                     agent_name: {
                         type: 'string',
-                        description: 'Name of the agent: planning, answer, verification, research, clarity, boss, or a custom agent name',
+                        description: 'Name of the agent: planning, answer, verification, research, clarity, boss, review, design_architect, backend_architect, gap_hunter, design_hardener, decision_memory, coding_director, user_communication, or a custom agent name',
                     },
                     message: { type: 'string', description: 'The message to send to the agent' },
                     context: {
                         type: 'object',
                         description: 'Additional context (optional)',
+                    },
+                    confirmation_id: {
+                        type: 'string',
+                        description: 'v9.0: Confirmation ID from a previous call (when confirmation stage is enabled)',
                     },
                 },
                 required: ['agent_name', 'message'],
@@ -340,6 +355,55 @@ export class MCPServer {
         }, async (args) => {
             const agentName = args.agent_name as string;
             const message = args.message as string;
+            const confirmationId = args.confirmation_id as string | undefined;
+
+            // v9.0: Confirmation stage
+            if (this.confirmationEnabled && !confirmationId) {
+                // Step 1: Create confirmation — return agent description, don't execute yet
+                const description = this.getAgentDescription(agentName);
+                const confirmation = this.database.createMCPConfirmation({
+                    tool_name: 'callCOEAgent',
+                    agent_name: agentName,
+                    description: description.description,
+                    arguments_preview: JSON.stringify({ agent_name: agentName, message: message.substring(0, 200) }),
+                    expires_at: new Date(Date.now() + (this.config.getConfig().mcpConfirmationTimeoutMs ?? 60000)).toISOString(),
+                });
+
+                return {
+                    success: true,
+                    confirmation_required: true,
+                    data: {
+                        confirmation_id: confirmation.id,
+                        agent: agentName,
+                        agent_description: description,
+                        message_preview: message.substring(0, 200),
+                        expires_at: confirmation.expires_at,
+                        instructions: 'Call callCOEAgent again with the confirmation_id to execute.',
+                    },
+                };
+            }
+
+            // v9.0: Validate confirmation if provided
+            if (this.confirmationEnabled && confirmationId) {
+                const confirmation = this.database.getMCPConfirmation(confirmationId);
+                if (!confirmation) {
+                    return { success: false, error: `Confirmation not found: ${confirmationId}` };
+                }
+                if (confirmation.status !== MCPConfirmationStatus.Pending) {
+                    return { success: false, error: `Confirmation already ${confirmation.status}` };
+                }
+                if (new Date(confirmation.expires_at) < new Date()) {
+                    this.database.updateMCPConfirmation(confirmationId, {
+                        status: MCPConfirmationStatus.Expired,
+                    });
+                    return { success: false, error: 'Confirmation has expired. Please try again.' };
+                }
+                // Mark as approved
+                this.database.updateMCPConfirmation(confirmationId, {
+                    status: MCPConfirmationStatus.Approved,
+                    user_response: 'auto-confirmed via confirmation_id',
+                });
+            }
 
             const agentContext: AgentContext = {
                 conversationHistory: [],
@@ -422,7 +486,71 @@ export class MCPServer {
             };
         });
 
-        // Tool 7: getTicketHistory (v4.1 — WS1A)
+        // Tool 7: getAgentDescriptions (v9.0)
+        this.registerTool({
+            name: 'getAgentDescriptions',
+            description: 'Get descriptions of all available COE agents. Use this to understand which agent to call.',
+            inputSchema: {
+                type: 'object',
+                properties: {},
+                required: [],
+            },
+        }, async () => {
+            return {
+                success: true,
+                data: {
+                    agents: this.getAllAgentDescriptions(),
+                },
+            };
+        });
+
+        // Tool 8: confirmAgentCall (v9.0)
+        this.registerTool({
+            name: 'confirmAgentCall',
+            description: 'Approve or reject a pending MCP agent call confirmation.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    confirmation_id: { type: 'string', description: 'The confirmation ID to approve or reject' },
+                    approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false)' },
+                    notes: { type: 'string', description: 'Optional notes about the decision' },
+                },
+                required: ['confirmation_id', 'approved'],
+            },
+        }, async (args) => {
+            const confirmationId = args.confirmation_id as string;
+            const approved = args.approved as boolean;
+            const notes = args.notes as string | undefined;
+
+            const confirmation = this.database.getMCPConfirmation(confirmationId);
+            if (!confirmation) {
+                return { success: false, error: `Confirmation not found: ${confirmationId}` };
+            }
+            if (confirmation.status !== MCPConfirmationStatus.Pending) {
+                return { success: false, error: `Confirmation already ${confirmation.status}` };
+            }
+            if (new Date(confirmation.expires_at) < new Date()) {
+                this.database.updateMCPConfirmation(confirmationId, {
+                    status: MCPConfirmationStatus.Expired,
+                });
+                return { success: false, error: 'Confirmation has expired.' };
+            }
+
+            this.database.updateMCPConfirmation(confirmationId, {
+                status: approved ? MCPConfirmationStatus.Approved : MCPConfirmationStatus.Rejected,
+                user_response: notes ?? (approved ? 'approved' : 'rejected'),
+            });
+
+            return {
+                success: true,
+                data: {
+                    confirmation_id: confirmationId,
+                    status: approved ? 'approved' : 'rejected',
+                },
+            };
+        });
+
+        // Tool 9: getTicketHistory (v4.1 — WS1A)
         this.registerTool({
             name: 'getTicketHistory',
             description: 'Get the processing run history for a ticket. Returns all run logs so the AI can learn from previous failures.',
@@ -792,6 +920,103 @@ export class MCPServer {
 
     getToolDefinitions(): MCPToolDefinition[] {
         return Array.from(this.tools.values());
+    }
+
+    // ==================== v9.0: AGENT DESCRIPTIONS ====================
+
+    private getAgentDescription(agentName: string): { name: string; description: string; capabilities: string[] } {
+        const descriptions: Record<string, { description: string; capabilities: string[] }> = {
+            planning: {
+                description: 'Creates structured plans, breaks requirements into 15-45 min atomic tasks',
+                capabilities: ['plan_creation', 'task_decomposition', 'requirement_analysis', 'roadmap'],
+            },
+            verification: {
+                description: 'Validates completed work against acceptance criteria using real test results',
+                capabilities: ['test_validation', 'acceptance_checking', 'quality_verification'],
+            },
+            answer: {
+                description: 'Evidence-based answers to coding/design questions with source citations',
+                capabilities: ['question_answering', 'code_explanation', 'documentation_lookup'],
+            },
+            research: {
+                description: 'Deep investigation, comparison, benchmarking, trade-off evaluation',
+                capabilities: ['investigation', 'comparison', 'benchmarking', 'best_practices'],
+            },
+            clarity: {
+                description: 'Reviews messages for clarity, scores 0-100, requests clarifications',
+                capabilities: ['clarity_scoring', 'message_review', 'requirement_clarification'],
+            },
+            boss: {
+                description: 'Top-level manager. Monitors health, manages queues, allocates resources',
+                capabilities: ['system_health', 'queue_management', 'resource_allocation', 'priority_setting'],
+            },
+            review: {
+                description: 'Auto-reviews deliverables. Simple >=70%, moderate >=85%, complex -> user',
+                capabilities: ['deliverable_review', 'quality_scoring', 'auto_approval'],
+            },
+            design_architect: {
+                description: 'Frontend design review. 6-category scoring (0-100)',
+                capabilities: ['design_review', 'page_hierarchy', 'design_scoring'],
+            },
+            frontend_architect: {
+                description: 'Frontend design review. 6-category scoring (0-100)',
+                capabilities: ['design_review', 'page_hierarchy', 'design_scoring'],
+            },
+            backend_architect: {
+                description: 'Backend architecture review. 8-category scoring. 3 modes (auto_generate, scaffold, suggest)',
+                capabilities: ['backend_review', 'api_design', 'schema_review', 'code_generation'],
+            },
+            gap_hunter: {
+                description: 'Finds missing components and coverage gaps. 15 FE + 5 BE checks',
+                capabilities: ['gap_analysis', 'completeness_check', 'coverage_analysis'],
+            },
+            design_hardener: {
+                description: 'Creates draft proposals for missing elements',
+                capabilities: ['draft_creation', 'gap_filling', 'component_proposals'],
+            },
+            decision_memory: {
+                description: 'Tracks decisions in 13 categories. Deduplicates, auto-answers',
+                capabilities: ['decision_tracking', 'conflict_detection', 'auto_answer'],
+            },
+            coding_director: {
+                description: 'Interfaces with external coding agents. Manages task handoff',
+                capabilities: ['code_generation', 'task_handoff', 'coding_queue'],
+            },
+            ui_testing: {
+                description: 'Visual/layout/component/e2e tests',
+                capabilities: ['ui_testing', 'visual_testing', 'layout_testing', 'e2e_testing'],
+            },
+            observation: {
+                description: 'System health, improvement detection, tech debt patterns',
+                capabilities: ['system_review', 'improvement_detection', 'pattern_detection'],
+            },
+            custom: {
+                description: 'User-created specialized agents (read-only)',
+                capabilities: ['custom_processing'],
+            },
+            user_communication: {
+                description: 'Mediates ALL system-to-user messages. Rewrites for user level, routes through profile preferences',
+                capabilities: ['message_routing', 'question_rewriting', 'profile_based_filtering'],
+            },
+        };
+
+        const info = descriptions[agentName.toLowerCase()];
+        return {
+            name: agentName,
+            description: info?.description ?? `Custom agent: ${agentName}`,
+            capabilities: info?.capabilities ?? ['custom_processing'],
+        };
+    }
+
+    private getAllAgentDescriptions(): Array<{ name: string; description: string; capabilities: string[] }> {
+        const agentNames = [
+            'planning', 'answer', 'verification', 'research', 'clarity',
+            'boss', 'review', 'design_architect', 'backend_architect',
+            'gap_hunter', 'design_hardener', 'decision_memory',
+            'coding_director', 'ui_testing', 'observation', 'custom',
+            'user_communication',
+        ];
+        return agentNames.map(name => this.getAgentDescription(name));
     }
 
     dispose(): void {

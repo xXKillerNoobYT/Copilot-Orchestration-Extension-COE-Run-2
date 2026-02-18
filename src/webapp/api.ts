@@ -4,7 +4,7 @@ import { Orchestrator } from '../agents/orchestrator';
 import { ConfigManager } from '../core/config';
 import { CodingAgentService } from '../core/coding-agent';
 import { getEventBus } from '../core/event-bus';
-import { AgentContext, DesignComponent, LeadAgentQueue, PlanStatus, TaskPriority, TicketPriority, TicketStatus } from '../types';
+import { AgentContext, DesignComponent, LeadAgentQueue, ModelCapability, PlanStatus, TaskPriority, TicketPriority, TicketStatus, TreeNodeStatus, UserProgrammingLevel, WorkflowExecutionStatus, WorkflowStatus, WorkflowStepType } from '../types';
 
 /** Shared no-op output channel for inline service construction */
 export const noopOutputChannel = { appendLine(_msg: string) {} } as any;
@@ -5213,6 +5213,519 @@ Only return the JSON array.`;
                 }
                 return true;
             }
+        }
+
+        // ==================== v9.0: WORKFLOW DESIGNER ENDPOINTS ====================
+
+        // GET /api/v9/workflows — list all workflows
+        if (route === 'v9/workflows' && method === 'GET') {
+            const workflows = database.getWorkflowsByPlan(null);
+            json(res, { success: true, data: workflows });
+            return true;
+        }
+
+        // POST /api/v9/workflows — create a workflow
+        if (route === 'v9/workflows' && method === 'POST') {
+            const body = await parseBody(req);
+            const workflow = database.createWorkflowDefinition({
+                plan_id: (body.plan_id as string) || null,
+                name: body.name as string,
+                description: (body.description as string) || '',
+                mermaid_source: (body.mermaid_source as string) || '',
+                status: WorkflowStatus.Draft,
+                version: 1,
+                is_template: !!body.is_template,
+            });
+            json(res, { success: true, data: workflow }, 201);
+            return true;
+        }
+
+        // GET /api/v9/workflow-templates — list workflow templates
+        if (route === 'v9/workflow-templates' && method === 'GET') {
+            const templates = database.getWorkflowTemplates();
+            json(res, { success: true, data: templates });
+            return true;
+        }
+
+        // Parameterized workflow endpoints
+        {
+            // GET/PUT/DELETE /api/v9/workflows/:id
+            const wfId = extractParam(route, 'v9/workflows/:id');
+            if (wfId && !route.includes('/steps') && !route.includes('/connect') && !route.includes('/validate') && !route.includes('/execute') && !route.includes('/executions') && !route.includes('/mermaid') && !route.includes('/clone')) {
+                if (method === 'GET') {
+                    const wf = database.getWorkflowDefinition(wfId);
+                    if (!wf) { json(res, { error: 'Workflow not found' }, 404); return true; }
+                    const steps = database.getWorkflowSteps(wfId);
+                    json(res, { success: true, data: { ...wf, steps } });
+                    return true;
+                }
+                if (method === 'PUT') {
+                    const body = await parseBody(req);
+                    database.updateWorkflowDefinition(wfId, body as any);
+                    json(res, { success: true });
+                    return true;
+                }
+                if (method === 'DELETE') {
+                    database.deleteWorkflowDefinition(wfId);
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+
+            // POST /api/v9/workflows/:id/steps
+            const stepsWfId = extractParam(route, 'v9/workflows/:id/steps');
+            if (stepsWfId && method === 'POST') {
+                const body = await parseBody(req);
+                const step = database.createWorkflowStep({
+                    workflow_id: stepsWfId,
+                    step_type: body.step_type as WorkflowStepType,
+                    label: (body.label as string) || '',
+                    agent_type: (body.agent_type as string) || null,
+                    agent_prompt: (body.agent_prompt as string) || null,
+                    condition_expression: (body.condition_expression as string) || null,
+                    tools_unlocked: (body.tools_unlocked as string[]) || [],
+                    acceptance_criteria: (body.acceptance_criteria as string) || null,
+                    max_retries: (body.max_retries as number) ?? 0,
+                    retry_delay_ms: (body.retry_delay_ms as number) ?? 0,
+                    escalation_step_id: (body.escalation_step_id as string) || null,
+                    next_step_id: (body.next_step_id as string) || null,
+                    true_branch_step_id: (body.true_branch_step_id as string) || null,
+                    false_branch_step_id: (body.false_branch_step_id as string) || null,
+                    parallel_step_ids: (body.parallel_step_ids as string[]) || [],
+                    model_preference: (body.model_preference as any) || null,
+                    x: (body.x as number) ?? 0,
+                    y: (body.y as number) ?? 0,
+                    sort_order: (body.sort_order as number) ?? 0,
+                });
+                json(res, { success: true, data: step }, 201);
+                return true;
+            }
+
+            // GET /api/v9/workflows/:id/mermaid
+            const mermaidWfId = extractParam(route, 'v9/workflows/:id/mermaid');
+            if (mermaidWfId && method === 'GET') {
+                const steps = database.getWorkflowSteps(mermaidWfId);
+                // Simple mermaid generation from steps
+                let mermaid = 'graph TD\n';
+                for (const step of steps) {
+                    mermaid += `  ${step.id}["${step.label || step.step_type}"]\n`;
+                    if (step.next_step_id) {
+                        mermaid += `  ${step.id} --> ${step.next_step_id}\n`;
+                    }
+                    if (step.true_branch_step_id) {
+                        mermaid += `  ${step.id} -->|true| ${step.true_branch_step_id}\n`;
+                    }
+                    if (step.false_branch_step_id) {
+                        mermaid += `  ${step.id} -->|false| ${step.false_branch_step_id}\n`;
+                    }
+                }
+                json(res, { success: true, data: { mermaid } });
+                return true;
+            }
+
+            // POST /api/v9/workflows/:id/validate
+            const validateWfId = extractParam(route, 'v9/workflows/:id/validate');
+            if (validateWfId && method === 'POST') {
+                const steps = database.getWorkflowSteps(validateWfId);
+                const errors: string[] = [];
+                if (steps.length === 0) errors.push('Workflow has no steps');
+                // Check for unreachable steps
+                const reachableIds = new Set<string>();
+                if (steps.length > 0) {
+                    reachableIds.add(steps[0].id);
+                    for (const s of steps) {
+                        if (s.next_step_id) reachableIds.add(s.next_step_id);
+                        if (s.true_branch_step_id) reachableIds.add(s.true_branch_step_id);
+                        if (s.false_branch_step_id) reachableIds.add(s.false_branch_step_id);
+                    }
+                    for (const s of steps) {
+                        if (!reachableIds.has(s.id) && s !== steps[0]) {
+                            errors.push(`Step "${s.label || s.id}" is unreachable`);
+                        }
+                    }
+                }
+                json(res, { success: true, data: { valid: errors.length === 0, errors } });
+                return true;
+            }
+
+            // POST /api/v9/workflows/:id/execute
+            const execWfId = extractParam(route, 'v9/workflows/:id/execute');
+            if (execWfId && method === 'POST') {
+                const body = await parseBody(req);
+                const execution = database.createWorkflowExecution({
+                    workflow_id: execWfId,
+                    ticket_id: (body.ticket_id as string) || undefined,
+                    task_id: (body.task_id as string) || undefined,
+                    variables: body.variables as Record<string, unknown> || {},
+                });
+                json(res, { success: true, data: execution }, 201);
+                return true;
+            }
+
+            // GET /api/v9/workflows/:id/executions
+            const execsWfId = extractParam(route, 'v9/workflows/:id/executions');
+            if (execsWfId && method === 'GET') {
+                const executions = database.getWorkflowExecutionsByWorkflow(execsWfId);
+                json(res, { success: true, data: executions });
+                return true;
+            }
+
+            // POST /api/v9/workflows/:id/clone
+            const cloneWfId = extractParam(route, 'v9/workflows/:id/clone');
+            if (cloneWfId && method === 'POST') {
+                const body = await parseBody(req);
+                const original = database.getWorkflowDefinition(cloneWfId);
+                if (!original) { json(res, { error: 'Workflow not found' }, 404); return true; }
+                const cloned = database.createWorkflowDefinition({
+                    plan_id: (body.plan_id as string) || original.plan_id,
+                    name: (body.name as string) || `${original.name} (copy)`,
+                    description: original.description,
+                    mermaid_source: original.mermaid_source,
+                    status: WorkflowStatus.Draft,
+                    version: 1,
+                    is_template: !!body.is_template,
+                });
+                // Clone steps
+                const steps = database.getWorkflowSteps(cloneWfId);
+                const idMap: Record<string, string> = {};
+                for (const step of steps) {
+                    const newStep = database.createWorkflowStep({
+                        ...step,
+                        id: undefined as any, // will be auto-generated
+                        workflow_id: cloned.id,
+                    });
+                    idMap[step.id] = newStep.id;
+                }
+                // Re-link cloned steps
+                for (const step of steps) {
+                    const newId = idMap[step.id];
+                    database.updateWorkflowStep(newId, {
+                        next_step_id: step.next_step_id ? idMap[step.next_step_id] || null : null,
+                        true_branch_step_id: step.true_branch_step_id ? idMap[step.true_branch_step_id] || null : null,
+                        false_branch_step_id: step.false_branch_step_id ? idMap[step.false_branch_step_id] || null : null,
+                        escalation_step_id: step.escalation_step_id ? idMap[step.escalation_step_id] || null : null,
+                    });
+                }
+                json(res, { success: true, data: cloned }, 201);
+                return true;
+            }
+        }
+
+        // PUT/DELETE /api/v9/workflows/:wfId/steps/:stepId
+        {
+            const stepMatch = route.match(/^v9\/workflows\/([^/]+)\/steps\/([^/]+)$/);
+            if (stepMatch) {
+                const [, , stepId] = stepMatch;
+                if (method === 'PUT') {
+                    const body = await parseBody(req);
+                    database.updateWorkflowStep(stepId, body as any);
+                    json(res, { success: true });
+                    return true;
+                }
+                if (method === 'DELETE') {
+                    database.deleteWorkflowStep(stepId);
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+        }
+
+        // ==================== v9.0: WORKFLOW EXECUTION ENDPOINTS ====================
+
+        {
+            // GET /api/v9/executions/:id
+            const execId = extractParam(route, 'v9/executions/:id');
+            if (execId && !route.includes('/approve') && !route.includes('/reject') && !route.includes('/pause') && !route.includes('/resume') && !route.includes('/cancel')) {
+                if (method === 'GET') {
+                    const exec = database.getWorkflowExecution(execId);
+                    if (!exec) { json(res, { error: 'Execution not found' }, 404); return true; }
+                    json(res, { success: true, data: exec });
+                    return true;
+                }
+            }
+
+            // POST /api/v9/executions/:id/approve|reject|pause|resume|cancel
+            for (const action of ['approve', 'reject', 'pause', 'resume', 'cancel'] as const) {
+                const actionId = extractParam(route, `v9/executions/:id/${action}`);
+                if (actionId && method === 'POST') {
+                    const body = await parseBody(req);
+                    const statusMap: Record<string, WorkflowExecutionStatus> = {
+                        approve: WorkflowExecutionStatus.Completed,
+                        reject: WorkflowExecutionStatus.Failed,
+                        pause: WorkflowExecutionStatus.Pending,
+                        resume: WorkflowExecutionStatus.Running,
+                        cancel: WorkflowExecutionStatus.Cancelled,
+                    };
+                    database.updateWorkflowExecution(actionId, {
+                        status: statusMap[action],
+                    });
+                    json(res, { success: true, data: { action, execution_id: actionId } });
+                    return true;
+                }
+            }
+        }
+
+        // ==================== v9.0: AGENT TREE ENDPOINTS ====================
+
+        // GET /api/v9/tree — get full tree for active plan
+        if (route === 'v9/tree' && method === 'GET') {
+            const plan = database.getActivePlan();
+            if (!plan) { json(res, { success: true, data: { nodes: [] } }); return true; }
+            const nodes = database.getTreeNodesByTask(plan.id);
+            json(res, { success: true, data: { plan_id: plan.id, nodes } });
+            return true;
+        }
+
+        // GET /api/v9/tree-templates — list tree templates
+        if (route === 'v9/tree-templates' && method === 'GET') {
+            const templates = database.getAllTreeTemplates();
+            json(res, { success: true, data: templates });
+            return true;
+        }
+
+        // POST /api/v9/tree/build/:planId — build tree for plan
+        {
+            const buildPlanId = extractParam(route, 'v9/tree/build/:id');
+            if (buildPlanId && method === 'POST') {
+                const boss = orchestrator.getBossAgent();
+                try {
+                    const result = await boss.spawnTree(buildPlanId);
+                    json(res, { success: true, data: result }, 201);
+                } catch (err) {
+                    json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+                }
+                return true;
+            }
+        }
+
+        {
+            // GET /api/v9/tree/:nodeId
+            const nodeId = extractParam(route, 'v9/tree/:id');
+            if (nodeId && !route.includes('/conversations') && !route.includes('/children') && !route.includes('/escalate')) {
+                if (method === 'GET') {
+                    const node = database.getTreeNode(nodeId);
+                    if (!node) { json(res, { error: 'Node not found' }, 404); return true; }
+                    json(res, { success: true, data: node });
+                    return true;
+                }
+                if (method === 'DELETE') {
+                    database.deleteTreeNode(nodeId);
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+
+            // GET /api/v9/tree/:nodeId/conversations
+            const convNodeId = extractParam(route, 'v9/tree/:id/conversations');
+            if (convNodeId && method === 'GET') {
+                const conversations = database.getAgentConversationsByNode(convNodeId);
+                json(res, { success: true, data: conversations });
+                return true;
+            }
+
+            // GET /api/v9/tree/:nodeId/children
+            const childNodeId = extractParam(route, 'v9/tree/:id/children');
+            if (childNodeId && method === 'GET') {
+                const children = database.getTreeNodeChildren(childNodeId);
+                json(res, { success: true, data: children });
+                return true;
+            }
+
+            // POST /api/v9/tree/:nodeId/escalate
+            const escalateNodeId = extractParam(route, 'v9/tree/:id/escalate');
+            if (escalateNodeId && method === 'POST') {
+                const body = await parseBody(req);
+                const node = database.getTreeNode(escalateNodeId);
+                if (!node) { json(res, { error: 'Node not found' }, 404); return true; }
+                database.updateTreeNode(escalateNodeId, {
+                    status: TreeNodeStatus.Escalated,
+                    escalations: (node.escalations ?? 0) + 1,
+                });
+                json(res, { success: true, data: { node_id: escalateNodeId, reason: body.reason } });
+                return true;
+            }
+        }
+
+        // ==================== v9.0: NICHE AGENT ENDPOINTS ====================
+
+        // GET /api/v9/niche-agents — list niche agents
+        if (route === 'v9/niche-agents' && method === 'GET') {
+            const allNiche = database.getAllNicheAgentDefinitions();
+            json(res, { success: true, data: allNiche, count: allNiche.length });
+            return true;
+        }
+
+        {
+            // GET/PUT /api/v9/niche-agents/:id
+            const nicheId = extractParam(route, 'v9/niche-agents/:id');
+            if (nicheId) {
+                if (method === 'GET') {
+                    const def = database.getNicheAgentDefinition(nicheId);
+                    if (!def) { json(res, { error: 'Niche agent not found' }, 404); return true; }
+                    json(res, { success: true, data: def });
+                    return true;
+                }
+                if (method === 'PUT') {
+                    const body = await parseBody(req);
+                    database.updateNicheAgentDefinition(nicheId, body as any);
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+        }
+
+        // ==================== v9.0: PERMISSIONS ENDPOINTS ====================
+
+        {
+            // GET/PUT /api/v9/permissions/:agentType
+            const permAgent = extractParam(route, 'v9/permissions/:id');
+            if (permAgent) {
+                if (method === 'GET') {
+                    const perm = database.getPermissionSetByAgent(permAgent);
+                    json(res, { success: true, data: perm });
+                    return true;
+                }
+                if (method === 'PUT') {
+                    const body = await parseBody(req);
+                    const existing = database.getPermissionSetByAgent(permAgent);
+                    if (existing) {
+                        database.updatePermissionSet(existing.id, body as any);
+                    } else {
+                        database.createPermissionSet({
+                            agent_type: permAgent,
+                            agent_instance_id: null,
+                            permissions: (body.permissions as any[]) || [],
+                            allowed_tools: (body.allowed_tools as string[]) || [],
+                            blocked_tools: (body.blocked_tools as string[]) || [],
+                            can_spawn: body.can_spawn !== false,
+                            max_llm_calls: (body.max_llm_calls as number) ?? 100,
+                            max_time_minutes: (body.max_time_minutes as number) ?? 60,
+                        });
+                    }
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+        }
+
+        // ==================== v9.0: MODEL ASSIGNMENT ENDPOINTS ====================
+
+        // GET /api/v9/models — list available models
+        if (route === 'v9/models' && method === 'GET') {
+            const assignments = database.getAllModelAssignments();
+            json(res, { success: true, data: assignments });
+            return true;
+        }
+
+        // POST /api/v9/models/detect — detect LM Studio models
+        if (route === 'v9/models/detect' && method === 'POST') {
+            // This would normally call ModelRouter.detectModelCapabilities()
+            // For now return the current assignments
+            const assignments = database.getAllModelAssignments();
+            json(res, { success: true, data: { models: assignments, message: 'Use extension wiring to trigger full model detection' } });
+            return true;
+        }
+
+        {
+            // GET/PUT/DELETE /api/v9/model-assignments/:agentType
+            const modelAgent = extractParam(route, 'v9/model-assignments/:id');
+            if (modelAgent) {
+                if (method === 'GET') {
+                    const assignment = database.getModelAssignmentForAgent(modelAgent);
+                    json(res, { success: true, data: assignment });
+                    return true;
+                }
+                if (method === 'PUT') {
+                    const body = await parseBody(req);
+                    const existing = database.getModelAssignmentForAgent(modelAgent);
+                    if (existing) {
+                        database.updateModelAssignment(existing.id, body as any);
+                    } else {
+                        database.createModelAssignment({
+                            agent_type: modelAgent,
+                            capability: (body.capability as ModelCapability) || ModelCapability.General,
+                            model_id: body.model_id as string,
+                            is_default: !!body.is_default,
+                            priority: (body.priority as number) ?? 0,
+                        });
+                    }
+                    json(res, { success: true });
+                    return true;
+                }
+                if (method === 'DELETE') {
+                    const existing = database.getModelAssignmentForAgent(modelAgent);
+                    if (existing) database.deleteModelAssignment(existing.id);
+                    json(res, { success: true });
+                    return true;
+                }
+            }
+        }
+
+        // ==================== v9.0: USER PROFILE ENDPOINTS ====================
+
+        // GET/PUT /api/v9/user-profile
+        if (route === 'v9/user-profile' && method === 'GET') {
+            const profile = database.getDefaultUserProfile();
+            json(res, { success: true, data: profile });
+            return true;
+        }
+        if (route === 'v9/user-profile' && method === 'PUT') {
+            const body = await parseBody(req);
+            const profile = database.getDefaultUserProfile();
+            if (profile) {
+                database.updateUserProfile(profile.id, body as any);
+            } else {
+                database.createUserProfile(body as any);
+            }
+            json(res, { success: true });
+            return true;
+        }
+
+        // PUT /api/v9/user-profile/level
+        if (route === 'v9/user-profile/level' && method === 'PUT') {
+            const body = await parseBody(req);
+            const profile = database.getDefaultUserProfile();
+            if (profile) {
+                database.updateUserProfile(profile.id, { programming_level: body.level as UserProgrammingLevel });
+            }
+            json(res, { success: true });
+            return true;
+        }
+
+        // PUT /api/v9/user-profile/preferences
+        if (route === 'v9/user-profile/preferences' && method === 'PUT') {
+            const body = await parseBody(req);
+            const profile = database.getDefaultUserProfile();
+            if (profile) {
+                database.updateUserProfile(profile.id, {
+                    area_preferences: (body.preferences as any) || {},
+                });
+            }
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== v9.0: MCP CONFIRMATION ENDPOINTS ====================
+
+        // GET /api/v9/mcp-confirmations — list pending confirmations
+        if (route === 'v9/mcp-confirmations' && method === 'GET') {
+            const confirmations = database.getActiveMCPConfirmations();
+            json(res, { success: true, data: confirmations });
+            return true;
+        }
+
+        // POST /api/v9/mcp-confirmations — approve/reject a confirmation
+        if (route === 'v9/mcp-confirmations' && method === 'POST') {
+            const body = await parseBody(req);
+            const id = body.confirmation_id as string;
+            const approved = body.approved as boolean;
+            if (!id) { json(res, { error: 'confirmation_id required' }, 400); return true; }
+            database.updateMCPConfirmation(id, {
+                status: approved ? 'approved' as any : 'rejected' as any,
+                user_response: (body.notes as string) || undefined,
+            });
+            json(res, { success: true });
+            return true;
         }
 
         // Not found

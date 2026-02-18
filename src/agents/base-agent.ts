@@ -4,9 +4,13 @@ import { LLMService } from '../core/llm-service';
 import { ConfigManager } from '../core/config';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
+import type { AgentPermissionManager } from '../core/agent-permission-manager';
+import type { ModelRouter } from '../core/model-router';
+import type { AgentTreeManager } from '../core/agent-tree-manager';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
-    LLMMessage, ConversationRole, ContentType, ContextItem
+    LLMMessage, ConversationRole, ContentType, ContextItem,
+    AgentPermission,
 } from '../types';
 
 export abstract class BaseAgent {
@@ -15,9 +19,15 @@ export abstract class BaseAgent {
     protected config: ConfigManager;
     protected outputChannel: vscode.OutputChannel;
 
-    // New token management services (optional — backward-compatible)
+    // Token management services (optional — backward-compatible)
     protected budgetTracker: TokenBudgetTracker | null = null;
     protected contextFeeder: ContextFeeder | null = null;
+
+    // v9.0: Permission, model routing, and tree injection (optional — backward-compatible)
+    protected permissionManager: AgentPermissionManager | null = null;
+    protected modelRouter: ModelRouter | null = null;
+    protected agentTreeManager: AgentTreeManager | null = null;
+    protected treeNodeId: string | null = null;
 
     abstract readonly name: string;
     abstract readonly type: AgentType;
@@ -47,23 +57,71 @@ export abstract class BaseAgent {
         this.outputChannel.appendLine(`[${this.name}] Context services injected (TokenBudgetTracker + ContextFeeder)`);
     }
 
+    /**
+     * v9.0: Inject permission manager for enforcing agent permissions.
+     */
+    setPermissionManager(pm: AgentPermissionManager): void {
+        this.permissionManager = pm;
+    }
+
+    /**
+     * v9.0: Inject model router for multi-model support.
+     */
+    setModelRouter(mr: ModelRouter): void {
+        this.modelRouter = mr;
+    }
+
+    /**
+     * v9.0: Inject agent tree manager + optional node binding.
+     * When treeNodeId is set, this agent operates within the tree hierarchy.
+     */
+    setAgentTreeManager(atm: AgentTreeManager, nodeId?: string): void {
+        this.agentTreeManager = atm;
+        if (nodeId) this.treeNodeId = nodeId;
+    }
+
+    /**
+     * v9.0: Bind this agent to a specific tree node for tree-aware processing.
+     */
+    setTreeNodeId(nodeId: string | null): void {
+        this.treeNodeId = nodeId;
+    }
+
     async initialize(): Promise<void> {
         this.database.registerAgent(this.name, this.type);
         this.outputChannel.appendLine(`Agent initialized: ${this.name} (${this.type})`);
     }
 
     async processMessage(message: string, context: AgentContext): Promise<AgentResponse> {
+        // v9.0: Permission check — enforce that this agent can execute
+        if (this.permissionManager) {
+            this.permissionManager.enforcePermission(this.type, AgentPermission.Execute, undefined, this.treeNodeId ?? undefined);
+        }
+
         this.database.updateAgentStatus(this.name, AgentStatus.Working, context.task?.id);
         this.database.addAuditLog(this.name, 'process_message', `Processing: ${message.substring(0, 100)}...`);
 
         try {
-            const messages = this.buildMessages(message, context);
+            // v9.0: Tree-aware context slicing — enriches message with scoped context
+            let effectiveMessage = message;
+            if (this.treeNodeId && this.agentTreeManager) {
+                const sliced = this.agentTreeManager.sliceContext(this.treeNodeId, message);
+                if (sliced.matchedItems > 0) {
+                    effectiveMessage = `${message}\n\n[Scoped Context (${sliced.matchedItems} relevant items, scope: ${sliced.scopeKeywords.join(', ')})]\n${sliced.filteredContext}`;
+                }
+            }
+
+            const messages = this.buildMessages(effectiveMessage, context);
 
             // Estimate total input tokens for tracking
             const inputTokensEstimated = this.estimateMessagesTokens(messages);
 
+            // v9.0: Model selection via ModelRouter
+            const modelId = this.getModelForRequest();
+
             const response = await this.llm.chat(messages, {
                 maxTokens: this.config.getAgentContextLimit(this.type),
+                ...(modelId ? { model: modelId } : {}),
             });
 
             // Record usage for calibration when budgetTracker is available
@@ -75,6 +133,7 @@ export abstract class BaseAgent {
                 );
             }
 
+            // Standard conversation recording
             this.database.addConversation(
                 this.name,
                 ConversationRole.Agent,
@@ -83,6 +142,28 @@ export abstract class BaseAgent {
                 context.ticket?.id,
                 response.tokens_used
             );
+
+            // v9.0: Tree-aware conversation recording (isolated per node)
+            if (this.treeNodeId) {
+                const node = this.database.getTreeNode(this.treeNodeId);
+                if (node) {
+                    // Record the user message first, then the agent response
+                    this.database.createAgentConversation({
+                        tree_node_id: this.treeNodeId,
+                        level: node.level,
+                        role: ConversationRole.User,
+                        content: message,
+                        tokens_used: inputTokensEstimated,
+                    });
+                    this.database.createAgentConversation({
+                        tree_node_id: this.treeNodeId,
+                        level: node.level,
+                        role: ConversationRole.Agent,
+                        content: response.content,
+                        tokens_used: response.tokens_used,
+                    });
+                }
+            }
 
             const agentResponse = await this.parseResponse(response.content, context);
             this.database.updateAgentStatus(this.name, AgentStatus.Idle);
@@ -95,6 +176,15 @@ export abstract class BaseAgent {
             this.database.addAuditLog(this.name, 'error', msg);
             throw error;
         }
+    }
+
+    /**
+     * v9.0: Get the model ID for the current request via ModelRouter.
+     * Returns null to use the default model.
+     */
+    protected getModelForRequest(): string | null {
+        if (!this.modelRouter) return null;
+        return this.modelRouter.getModelForAgent(this.type);
     }
 
     /**

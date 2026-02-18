@@ -1,10 +1,10 @@
 # 03 — AI Agent Teams & Roles
 
-**Version**: 8.0
+**Version**: 9.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [01-Vision-and-Goals](01-Vision-and-Goals.md), [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [10-AI-Operating-Principles](10-AI-Operating-Principles.md)
-**Changelog**: v8.0 — 17 agents (added Backend Architect #17), renamed Design Architect display to Frontend Architect, 15 intent routing categories (added `backend_architect`), Back-End Designer system (9 element types, 3 operating modes, 8 QA scoring categories), Link Tree/Matrix system (4 link types, auto-detect, AI suggestions), Tag system (5 built-in + custom), unified Review Queue (drafts + suggestions), Filing system with source_type locking, Gap Hunter extended with 5 BE checks (#16-#20), Design Hardener extended for BE draft creation. v7.0 — 16 agents (added Coding Director), 4 team queues (Orchestrator, Planning, Verification, CodingDirector), lead vs support agent distinction, escalation mechanisms, support agent calls (sync/async), dynamic slot allocation, documentation system, file cleanup service. v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
+**Changelog**: v9.0 — 18 agents (added UserCommunicationAgent #18), 10-level corporate agent hierarchy (~230 niche agent definitions across L4-L9), lazy spawning (L0-L4 skeleton on plan start, L5-L9 on demand), question escalation chain (L9→L0→UserCommAgent→User), per-agent model selection (reasoning/vision/fast/tool_use/code/general), agent permission system (8 permission types + tool access + LLM call limits), 16 intent routing categories (added `user_communication`). v8.0 — 17 agents (added Backend Architect #17), renamed Design Architect display to Frontend Architect, 15 intent routing categories (added `backend_architect`), Back-End Designer system (9 element types, 3 operating modes, 8 QA scoring categories), Link Tree/Matrix system (4 link types, auto-detect, AI suggestions), Tag system (5 built-in + custom), unified Review Queue (drafts + suggestions), Filing system with source_type locking, Gap Hunter extended with 5 BE checks (#16-#20), Design Hardener extended for BE draft creation. v7.0 — 16 agents (added Coding Director), 4 team queues (Orchestrator, Planning, Verification, CodingDirector), lead vs support agent distinction, escalation mechanisms, support agent calls (sync/async), dynamic slot allocation, documentation system, file cleanup service. v4.0 — Added RACI matrix, User/Dev views, failure modes per agent, enforcement mechanisms, cross-agent communication patterns, decision trees, universal response format
 
 ---
 
@@ -14,13 +14,13 @@ This document describes every AI agent in the COE system — what it does, how i
 
 > **👤 User View**: You don't interact with individual agents directly — the Orchestrator handles routing automatically. But understanding the agents helps you know WHO is working on your project and WHY things happen the way they do. When COE creates a ticket asking you a question, this document tells you which agent asked and why.
 
-> **🔧 Developer View**: Every agent extends `BaseAgent` in `src/agents/base-agent.ts`, which provides LLM access, token management, and audit logging. Agent output must always be a structured `AgentResponse` object — agents never write files, execute code, or produce side effects directly. The Orchestrator in `src/agents/orchestrator.ts` routes to agents via keyword-based intent classification using `KEYWORD_MAP` and `INTENT_PRIORITY`.
+> **🔧 Developer View**: Every agent extends `BaseAgent` in `src/agents/base-agent.ts`, which provides LLM access, token management, and audit logging. Agent output must always be a structured `AgentResponse` object — agents never write files, execute code, or produce side effects directly. The Orchestrator in `src/agents/orchestrator.ts` routes to agents via keyword-based intent classification using `KEYWORD_MAP` and `INTENT_PRIORITY`. v9.0 adds a 10-level hierarchy below the 18 top-level agents, with lazy spawning, per-agent model selection, and a permission system. All system-to-user messages now route through `UserCommunicationAgent` (Agent #18).
 
 ---
 
 ## Overview
 
-COE uses a **multi-agent AI system** where specialized agents each handle one aspect of the development workflow. A central Orchestrator routes work to the right agent, and a Boss AI supervises the whole system.
+COE uses a **multi-agent AI system** where specialized agents each handle one aspect of the development workflow. A central Orchestrator routes work to the right agent, and a Boss AI supervises the whole system. In v9.0, the 18 top-level orchestration agents are backed by a 10-level corporate hierarchy of ~230 niche agents that handle fine-grained task decomposition and execution.
 
 Every agent's system prompt is designed to be **exhaustively explicit** — detailed enough that even a small, non-reasoning language model can follow the instructions and produce correctly formatted output every time.
 
@@ -75,15 +75,24 @@ Every agent's system prompt is designed to be **exhaustively explicit** — deta
                     │                       │  AGENT      │
                     │                       └─────────────┘
                     │
-           ┌────────▼──────────┐
-           │  REVIEW QUEUE     │
-           │  (Unified)        │
-           │  FE + BE drafts,  │
-           │  link suggestions │
-           └───────────────────┘
+           ┌────────▼──────────┐        ┌──────────────────────┐
+           │  REVIEW QUEUE     │        │  USER COMMUNICATION  │
+           │  (Unified)        │        │  AGENT (#18, v9.0)   │
+           │  FE + BE drafts,  │        │  All system→user     │
+           │  link suggestions │        │  messages routed     │
+           └───────────────────┘        │  through here        │
+                                        └──────────────────────┘
+                                                   │
+                                        ┌──────────▼──────────┐
+                                        │  10-LEVEL AGENT     │
+                                        │  HIERARCHY (v9.0)   │
+                                        │  L0 Boss → L9 Check │
+                                        │  ~230 niche agents  │
+                                        │  Lazy spawning      │
+                                        └─────────────────────┘
 ```
 
-**17 total agents** (13 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents).
+**18 total agents** (14 built-in specialist + 1 supervisor + 1 router + 1 processor + custom agents). Below the 18 top-level orchestration agents, a 10-level corporate hierarchy provides ~230 niche agent definitions (v9.0).
 
 ### Lead Agents vs Support Agents (v7.0)
 
@@ -100,6 +109,7 @@ In v7.0, agents are classified as either **Lead Agents** or **Support Agents**:
 | **FE QA Specialists** | Frontend Architect (renamed from Design Architect in v8.0), Gap Hunter, Hardener | Called during FE design pipeline |
 | **BE QA Specialist** | Backend Architect (v8.0, Agent #17) | Called during BE design pipeline |
 | **Quality Gate** | Review Agent | Called by Ticket Processor |
+| **Communication Gate** | UserCommunicationAgent (v9.0, Agent #18) | Intercepts all system-to-user messages |
 
 ### 4 Team Queues (v7.0)
 
@@ -231,12 +241,13 @@ Stage 1 (Fast, No LLM): Count keyword matches per category. The category with th
 | `planning` | plan, create, break down, decompose, task, feature, requirement, roadmap, schedule, build, implement, design, architect, structure, organize, timeline |
 | `question` | how, what, why, should, which, where, when, clarify, explain, confused, can, does, tell me, meaning, define |
 | `research` | investigate, analyze, research, deep dive, explore, study, compare, benchmark, tradeoff, alternative, option, evaluate, pros and cons |
+| `user_communication` | notify user, message user, user alert, user notification, communicate, inform user, user message, present to user |
 | `custom` | custom agent, my agent, specialized, domain |
 | `general` | (fallback when no keywords match) |
 
-**15 routing categories** (v8.0: added `backend_architect`).
+**16 routing categories** (v9.0: added `user_communication`; v8.0: added `backend_architect`).
 
-**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
+**Tie-Breaking Rule**: When two categories have the same keyword count, use this priority order: verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > user_communication > coding_director > planning > question > research > custom > general.
 
 Stage 2 (LLM Fallback): If zero keywords match, ask the LLM to classify. If the LLM is offline, default to `general`.
 
@@ -998,6 +1009,71 @@ New method `hardenBackendDesign(planId, gapAnalysis)`:
 
 ---
 
+## Team 13: UserCommunicationAgent (v9.0 — Agent #18)
+
+**Role**: Intercepts ALL system-to-user messages and routes them through a user-profile-aware 5-step pipeline. The single gateway between COE's internal agent system and the human user.
+
+**File**: `src/agents/user-communication-agent.ts` (class: `UserCommunicationAgent`)
+
+> **User View**: Every message the system sends you passes through the UserCommunicationAgent first. It checks whether you've already seen similar information, classifies the message urgency and type, adapts the tone and detail level to your profile preferences, and decides whether you need to see it now, later, or at all. If you've told COE you prefer brief updates, the agent trims verbose agent output. If you've set "AI auto-mode" for certain categories, the agent may suppress informational messages entirely and only surface decisions that require your input.
+
+> **Developer View**: `UserCommunicationAgent` extends `BaseAgent`. Registered as `AgentType.UserCommunication`. Routed via `user_communication` intent category. All other agents that previously emitted user-facing messages (tickets, escalations, notifications) now route through this agent. The 5-step pipeline runs synchronously for each message. The agent maintains a short-term message cache (LRU, 100 entries) for deduplication. User profile preferences are loaded from the `user_profile` config section.
+
+**5-Step Pipeline**:
+
+```
+STEP 1: Cache Check
+    → LRU cache (100 entries) keyed by message hash
+    → If duplicate within TTL (default 5 min) → suppress, log as "deduplicated"
+
+STEP 2: Classify
+    → Message type: notification | question | escalation | status_update | error | decision_request
+    → Urgency: critical | high | normal | low | informational
+    → Source agent + hierarchy level
+
+STEP 3: Profile Routing
+    → Load user communication preferences from config
+    → Apply verbosity filter (brief | normal | detailed)
+    → Apply channel preference (inline | ticket | toast | silent_log)
+    → Apply category filters (user can mute specific message types)
+
+STEP 4: AI Mode Gate
+    → Check if user has enabled "auto-mode" for this message category
+    → If auto-mode ON and message is informational → suppress, log only
+    → If auto-mode ON and message requires decision → present with auto-recommendation
+    → If auto-mode OFF → always present to user
+
+STEP 5: Present to User
+    → Format message per profile preferences
+    → Route to appropriate UI channel (ticket panel, toast, chat, notification badge)
+    → Log in audit_log with full pipeline metadata
+```
+
+**Output Format**:
+```json
+{
+  "action": "present | suppress | defer",
+  "channel": "ticket | toast | chat | notification | silent_log",
+  "formatted_message": "The user-facing message text",
+  "urgency": "critical | high | normal | low | informational",
+  "source_agent": "AgentType that originated this message",
+  "pipeline_metadata": {
+    "cache_hit": false,
+    "classification": "question",
+    "profile_applied": true,
+    "ai_mode_active": false
+  }
+}
+```
+
+**Key Constraints**:
+- This agent NEVER generates content — it only filters, formats, and routes messages from other agents
+- All `decision_request` messages MUST be presented to the user (cannot be suppressed by AI mode)
+- All `critical` urgency messages bypass cache check and profile filters
+- The agent does not intercept user-to-system messages (only system-to-user)
+
+---
+
 ## The Coding AI (External — Not Part of COE)
 
 **Important**: The actual coding agent (GitHub Copilot) is **not a COE agent** — it's an external tool that COE coordinates.
@@ -1112,6 +1188,11 @@ This matrix defines WHO is Responsible, Accountable, Consulted, and Informed for
 | Inter-agent conflict resolution | Boss AI | Boss AI | Affected agents | User (if critical) |
 | Custom agent creation | User (YAML config) | Orchestrator | — | Boss AI |
 | Stuck task detection | Orchestrator | Orchestrator | Research Agent (investigation) | Boss AI |
+| System-to-user message delivery (v9.0) | UserCommunicationAgent | UserCommunicationAgent | User profile config | User |
+| Question escalation through hierarchy (v9.0) | Each level agent (L9-L0) | BossAgent (L0) | Decision Memory, sibling agents | UserCommunicationAgent |
+| Hierarchy agent spawning (v9.0) | Parent agent (L0-L7) | Parent agent | — | GlobalOrchestrator (L1) |
+| Hierarchy agent pruning (v9.0) | GlobalOrchestrator | BossAgent | — | — |
+| Per-agent model assignment (v9.0) | L0-L2 (configure permission) | BossAgent | — | Affected agent |
 
 > **👤 User View**: You are the final authority. When you see "User" in the Accountable column, that means YOU make the call. When you see "User" in the Consulted column, COE will ask you before proceeding. Everything else happens automatically.
 
@@ -1178,6 +1259,12 @@ Every agent can fail. This table documents what happens when each agent fails an
 | **Link Manager** | Auto-detect finds spurious links | Low confidence score | Add to review queue as suggestion (not auto-approved) | User reviews and rejects false links |
 | **Link Manager** | Matrix/tree data too large | Element count > 500 | Paginate or summarize results | Warn user about large dataset, suggest filtering by plan |
 | **Tag Manager** | Attempt to delete builtin tag | `is_builtin` check in deleteTag() | Block deletion, return error | User informed that built-in tags cannot be removed |
+| **UserCommunicationAgent** | Pipeline suppresses critical message | `critical` urgency bypass check | Critical messages always bypass pipeline filters | If bypass fails, log error and deliver raw message directly |
+| **UserCommunicationAgent** | Cache dedup incorrectly suppresses unique message | Hash collision in LRU cache | Reduce TTL, increase cache key specificity | Non-fatal -- message lost. User can check audit_log for suppressed messages. |
+| **Hierarchy Agent (L4-L9)** | Spawn fails (memory/resource limit) | Spawn returns error | Parent agent handles task directly (no delegation) | Log resource warning, alert L1 GlobalOrchestrator |
+| **Hierarchy Agent (L4-L9)** | Agent exceeds LLM call limit | Call counter in permission system | Task incomplete, escalate to parent with partial results | Parent can grant temporary limit increase or reassign |
+| **Hierarchy Agent (L4-L9)** | Question escalation loop (circular) | Depth counter exceeds 10 levels | Break loop, route directly to BossAgent (L0) | Log loop pattern for investigation |
+| **Hierarchy Agent (L4-L9)** | Permission denied for required action | Permission check in action handler | Block action, escalate to parent | Parent grants elevation or performs action itself |
 
 > **👤 User View**: When an agent fails, COE tries to fix it automatically. You only get notified when the system can't self-recover — usually via a ticket in the Ticket Panel. The ticket explains what went wrong in plain language and tells you what (if anything) you need to do.
 
@@ -1472,6 +1559,7 @@ These are the GATES that prevent bad work from flowing through the system. Each 
 | Clarity Agent | 70% | Request clarification (up to 5 rounds) |
 | Frontend Architect | 80% (configurable, min 50) | Block FE phase advancement, require design revision |
 | Backend Architect (v8.0) | 80% (configurable, min 50) | Block BE phase advancement, require architecture revision |
+| UserCommunicationAgent (v9.0) | N/A (pipeline-based, not confidence-scored) | N/A — uses 5-step pipeline with profile routing |
 | Verification Agent | N/A (uses met/not_met/unclear, not confidence) | N/A |
 
 ### Gate 3: Clarity Gate
@@ -1729,11 +1817,364 @@ Backend Architect Agent (suggest mode)
     ▼ User approves/rejects in Review Queue
 ```
 
+### Pattern 4: Hierarchy Question Escalation (v9.0)
+
+```
+L9 Checker (e.g., JWT Checker)
+    │
+    ▼ "Is RS256 or HS256 required for JWT signing?"
+    │
+    ▼ Check own task context (acceptance criteria, test output)
+    │   → No mention of algorithm preference
+    │
+    ▼ Check Decision Memory (scoped: auth, security, jwt)
+    │   → No matching decision
+    │
+    ▼ Escalate to L8 Worker (JWT Worker)
+    │   → Check task description + file context
+    │   → No algorithm specified
+    │
+    ▼ Escalate to L7 WorkerGroup (Token+Session)
+    │   → Check sibling worker context (Session Worker)
+    │   → Session Worker uses HS256 → POTENTIAL MATCH
+    │   → Confidence: 60% (sibling, not authoritative)
+    │   → Not confident enough, continue escalating
+    │
+    ▼ Escalate to L6 TeamLead (Sprint 1 Auth Lead)
+    │   → Check sprint plan, cross-group context
+    │   → Sprint plan says "industry standard JWT"
+    │   → Still ambiguous
+    │
+    ▼ Escalate to L5 SubManager (Auth Feature Lead)
+    │   → Check feature requirements doc
+    │   → Feature spec says: "JWT with RS256 for production APIs"
+    │   → RESOLVED at L5
+    │
+    ▼ Answer propagates back down: L5 → L6 → L7 → L8 → L9
+    │
+    ▼ Stored in Decision Memory: { topic: "JWT signing algorithm", decision: "RS256", category: "security" }
+```
+
+**Key Properties of Pattern 4**:
+- Each level tries its own context FIRST (zero LLM cost if the answer is in local scope)
+- Decision Memory is checked at the originating level, not repeated at every level
+- When resolved at an intermediate level, the answer propagates back DOWN through all levels that escalated
+- The resolved answer is stored in Decision Memory so the same question never escalates again
+- If the question reaches L0 unresolved, it routes through UserCommunicationAgent to the user
+
+### Pattern 5: System-to-User Message Flow (v9.0)
+
+```
+Any Agent (e.g., Verification Agent, Boss AI, Ticket Processor)
+    │
+    ▼ Produces user-facing message (escalation, notification, question)
+    │
+    ▼ Route to UserCommunicationAgent (Agent #18)
+    │
+    ▼ STEP 1: Cache Check
+    │   → Hash message content
+    │   → Check LRU cache (100 entries, 5 min TTL)
+    │   ├── CACHE HIT → Suppress (duplicate within window), log "deduplicated"
+    │   └── CACHE MISS → Continue
+    │
+    ▼ STEP 2: Classify
+    │   → Type: notification | question | escalation | status_update | error | decision_request
+    │   → Urgency: critical | high | normal | low | informational
+    │
+    ▼ STEP 3: Profile Routing
+    │   → Load user preferences (verbosity, channel, muted categories)
+    │   → Apply filters
+    │   ├── User prefers "brief" → Trim verbose output
+    │   ├── User muted "status_update" → Check if this is muted
+    │   └── User prefers "toast" channel → Route to toast notification
+    │
+    ▼ STEP 4: AI Mode Gate
+    │   ├── Auto-mode ON + informational → Suppress (log only)
+    │   ├── Auto-mode ON + decision_request → Present WITH auto-recommendation
+    │   └── Auto-mode OFF → Always present
+    │
+    ▼ STEP 5: Present to User
+        → Format per profile
+        → Route to UI channel (ticket panel / toast / chat / notification badge)
+        → Log full pipeline metadata in audit_log
+```
+
+---
+
+## v9.0: Agent Hierarchy and Communication
+
+### 10-Level Corporate Agent Hierarchy
+
+The 18 top-level orchestration agents (described in the sections above) serve as the entry point for all work. Below them, v9.0 introduces a full 10-level corporate hierarchy that provides fine-grained task decomposition and execution. Each level has a clear span of control, escalation path, and responsibility boundary.
+
+```
+L0: BossAgent (1)                  ← Ultimate decider, system-wide authority
+ └─ L1: GlobalOrchestrator (1)     ← Project-wide coordination, cross-domain routing
+     └─ L2: DomainOrchestrators (4)
+     │   ├── Code Domain
+     │   ├── Design Domain
+     │   ├── Data Domain
+     │   └── Docs Domain
+     │
+     └─ L3: AreaOrchestrators (12-16)
+         ├── Frontend        ├── UIDesign       ├── Schema
+         ├── Backend         ├── UXDesign       ├── Migration
+         ├── Testing         ├── Visual         ├── UserDocs
+         ├── Infra           ├── Interaction    ├── APIDocs
+         │                   │                  ├── InternalDocs
+         │                   │                  └── ...
+         └─ L4-L9: Execution Hierarchy (~230 niche agents)
+             L4: Managers           ← Domain-area strategy, work distribution
+             L5: SubManagers        ← Feature-level coordination
+             L6: TeamLeads          ← Sprint/batch-level planning
+             L7: WorkerGroups       ← Parallel task clusters
+             L8: Workers            ← Individual task execution
+             L9: Checkers           ← Verification, validation, review
+```
+
+**Level Details**:
+
+| Level | Role | Count | Scope | Model Default |
+|-------|------|-------|-------|---------------|
+| L0 | BossAgent | 1 | System-wide | `reasoning` |
+| L1 | GlobalOrchestrator | 1 | All projects, all domains | `reasoning` |
+| L2 | DomainOrchestrators | 4 | Code, Design, Data, Docs | `reasoning` |
+| L3 | AreaOrchestrators | 12-16 | Frontend, Backend, Testing, Infra, UIDesign, UXDesign, Schema, Migration, etc. | `general` |
+| L4 | Managers | ~20-30 | Sub-area strategy (e.g., React Manager, API Manager) | `general` |
+| L5 | SubManagers | ~30-40 | Feature coordination (e.g., Auth Feature Lead, Cart Feature Lead) | `general` |
+| L6 | TeamLeads | ~40-50 | Sprint/batch-level (e.g., Sprint 3 Auth Lead) | `fast` |
+| L7 | WorkerGroups | ~30-40 | Parallel clusters (e.g., "Login+Register" cluster) | `fast` |
+| L8 | Workers | ~40-50 | Individual atomic tasks | `fast` |
+| L9 | Checkers | ~20-30 | Per-task verification and validation | `reasoning` |
+
+**Total**: ~230 niche agent definitions across L4-L9. Exact count depends on project scope and domain coverage.
+
+### Lazy Spawning
+
+The full hierarchy is NOT instantiated at startup. Lazy spawning minimizes resource usage:
+
+1. **Plan Start**: L0-L4 skeleton (~50 nodes) is created. These define the structural framework: BossAgent, GlobalOrchestrator, 4 DomainOrchestrators, 12-16 AreaOrchestrators, and the initial Manager nodes.
+
+2. **On Demand (L5-L9)**: When work reaches a domain/area that requires deeper decomposition, the relevant L5-L9 branches are spawned:
+   - A Manager (L4) receives a task that requires feature-level coordination -> spawns SubManagers (L5)
+   - A SubManager receives sprint-level work -> spawns TeamLeads (L6)
+   - A TeamLead identifies parallel work -> spawns WorkerGroups (L7) and Workers (L8)
+   - A Worker completes a task -> spawns a Checker (L9) for verification
+
+3. **Pruning**: After a branch completes all its work:
+   - L8-L9 nodes are pruned immediately (ephemeral)
+   - L6-L7 nodes are pruned after 30 minutes of inactivity
+   - L4-L5 nodes persist for the session (may be needed again)
+   - L0-L3 nodes persist for the lifetime of the plan
+
+```
+Plan created
+    │
+    ▼ Spawn L0-L4 skeleton (~50 nodes)
+    │
+    ▼ Task enters Code Domain → Backend Area
+    │
+    ▼ Backend Manager (L4) receives "Implement Auth"
+    │
+    ▼ Spawns Auth SubManager (L5)
+    │   └── Spawns Sprint 1 Auth Lead (L6)
+    │       ├── Spawns Login+Register WorkerGroup (L7)
+    │       │   ├── Login Worker (L8) → Login Checker (L9)
+    │       │   └── Register Worker (L8) → Register Checker (L9)
+    │       └── Spawns Token+Session WorkerGroup (L7)
+    │           ├── JWT Worker (L8) → JWT Checker (L9)
+    │           └── Session Worker (L8) → Session Checker (L9)
+    │
+    ▼ All auth tasks complete
+    │
+    ▼ Prune L8-L9 immediately
+    ▼ Prune L6-L7 after 30 min idle
+    ▼ L5 Auth SubManager persists (may have more sprints)
+```
+
+### UserCommunicationAgent (Agent #18)
+
+See **Team 13** section above for full details. The UserCommunicationAgent is the sole gateway for all system-to-user communication. In the v9.0 hierarchy, it sits outside the L0-L9 tree and intercepts messages that bubble up from any level before they reach the user.
+
+**Integration with Hierarchy**: When a question escalates from L9 all the way to L0 without resolution, the BossAgent routes it through the UserCommunicationAgent for final presentation. The UserCommunicationAgent applies its 5-step pipeline (cache check, classify, profile routing, AI mode gate, present) to ensure the user receives a clean, deduplicated, appropriately-formatted message.
+
+### Question Escalation Chain (v9.0)
+
+In v9.0, questions bubble UP through the hierarchy. At each level, the agent attempts to resolve the question using its own context before escalating further. Most questions are resolved well before reaching the user.
+
+```
+L9: Checker has a question
+    │
+    ▼ Check own task context → RESOLVED? → Answer directly, done
+    │                           NO ↓
+    ▼ Check Decision Memory (scoped to this task) → RESOLVED? → Answer, done
+    │                                                 NO ↓
+L8: Worker (parent)
+    │
+    ▼ Check own task context + sibling worker conversations → RESOLVED?
+    │                                                          NO ↓
+L7: WorkerGroup
+    │
+    ▼ Check group-scoped context + parallel task results → RESOLVED?
+    │                                                       NO ↓
+L6: TeamLead
+    │
+    ▼ Check sprint/batch context + cross-group patterns → RESOLVED?
+    │                                                      NO ↓
+L5: SubManager
+    │
+    ▼ Check feature-level context + related feature decisions → RESOLVED?
+    │                                                            NO ↓
+L4: Manager
+    │
+    ▼ Check domain-area strategy + historical decisions → RESOLVED?
+    │                                                      NO ↓
+L3: AreaOrchestrator
+    │
+    ▼ Check area-wide context + cross-manager patterns → RESOLVED?
+    │                                                     NO ↓
+L2: DomainOrchestrator
+    │
+    ▼ Check domain-wide context + cross-area decisions → RESOLVED?
+    │                                                     NO ↓
+L1: GlobalOrchestrator
+    │
+    ▼ Check project-wide context + cross-domain decisions → RESOLVED?
+    │                                                        NO ↓
+L0: BossAgent
+    │
+    ▼ Final system-level check + Decision Memory (global) → RESOLVED?
+    │                                                        NO ↓
+    ▼ Route to UserCommunicationAgent
+    │
+    ▼ UserCommAgent 5-step pipeline
+    │
+    ▼ Present to User
+    │
+    ▼ User answers → stored in Decision Memory → propagated back down chain
+```
+
+**Resolution Sources at Each Level**:
+
+| Level | Context Available | Typical Resolution Rate |
+|-------|-------------------|------------------------|
+| L9 | Task acceptance criteria, test output | ~10% |
+| L8 | Task description, file context, sibling results | ~15% |
+| L7 | Group-level patterns, parallel task data | ~10% |
+| L6 | Sprint plan, cross-group context | ~10% |
+| L5 | Feature requirements, related feature decisions | ~15% |
+| L4 | Domain strategy, historical patterns | ~10% |
+| L3 | Area-wide design docs, cross-manager context | ~10% |
+| L2 | Domain architecture, cross-area decisions | ~5% |
+| L1 | Project plan, global architecture decisions | ~5% |
+| L0 | Decision Memory (full), system-level context | ~5% |
+| User | Human judgment | ~5% (only truly novel questions) |
+
+**Key Property**: With a cumulative ~95% resolution rate before reaching the user, the hierarchy dramatically reduces user interruptions. Only genuinely novel, ambiguous, or high-stakes decisions reach the human.
+
+### Per-Agent Model Selection (v9.0)
+
+Each agent in the hierarchy can be assigned a specific LLM model based on the capabilities required for its role. This enables cost-effective execution where simple workers use fast models and critical decision-makers use reasoning models.
+
+**Model Capability Categories**:
+
+| Category | Use Case | Example Assignment |
+|----------|----------|-------------------|
+| `reasoning` | Complex decisions, scoring, architecture review | L0 BossAgent, L9 Checkers, Backend Architect |
+| `vision` | UI testing, screenshot analysis, visual QA | UI Testing Agent, Visual AreaOrchestrator |
+| `fast` | Simple task execution, code generation, formatting | L8 Workers, L6 TeamLeads, L7 WorkerGroups |
+| `tool_use` | Tool-heavy operations, MCP calls, file operations | Coding Director, L8 Workers with tool access |
+| `code` | Code generation, refactoring, analysis | Coding Agent, Code Domain workers |
+| `general` | Balanced capability, routing, classification | Orchestrator, L3-L5 management layers |
+
+**Default Model Assignments**:
+
+```
+L0 BossAgent           → reasoning
+L1 GlobalOrchestrator  → reasoning
+L2 DomainOrchestrators → reasoning
+L3 AreaOrchestrators   → general
+L4 Managers            → general
+L5 SubManagers         → general
+L6 TeamLeads           → fast
+L7 WorkerGroups        → fast
+L8 Workers             → fast (overridable: code, tool_use)
+L9 Checkers            → reasoning
+```
+
+**Override Mechanism**: Model assignments can be overridden per-agent via configuration. For example, a Worker in the Code Domain may be assigned `code` instead of `fast` when the task requires complex refactoring. The override is specified in the agent's spawn configuration:
+
+```json
+{
+  "agent_id": "worker-auth-login-001",
+  "level": 8,
+  "model_preference": "code",
+  "model_fallback": "fast"
+}
+```
+
+If the preferred model is unavailable, the agent falls back to its `model_fallback` (or the level default if no fallback is specified).
+
+### Agent Permission System (v9.0)
+
+Every agent in the hierarchy operates under a permission system that controls what actions it can take, what tools it can access, and how many LLM calls it can make.
+
+**8 Permission Types**:
+
+| Permission | Description | Default by Level |
+|------------|-------------|-----------------|
+| `read` | Read files, database records, plan context | All levels |
+| `write` | Create/modify files, database records | L0-L5 only |
+| `execute` | Run commands, tests, scripts | L0, L4 (Managers), L8 (Workers with tool_use) |
+| `escalate` | Escalate to parent level or UserCommAgent | All levels |
+| `spawn` | Create child agents at the next level | L0-L7 only |
+| `configure` | Modify agent configuration, model assignment | L0-L2 only |
+| `approve` | Approve/reject drafts, review queue items | L0-L4, L9 (Checkers) |
+| `delete` | Remove tasks, agents, or records | L0-L1 only |
+
+**Tool Access Control**:
+
+Each agent has a whitelist of tools it can invoke. Tools are grouped by category:
+
+| Tool Group | Tools | Access |
+|------------|-------|--------|
+| `file_tools` | readFile, searchCode, listFiles | All levels |
+| `write_tools` | createFile, modifyFile, deleteFile | L0-L5 + authorized L8 Workers |
+| `db_tools` | queryDB, insertRecord, updateRecord | L0-L6 |
+| `mcp_tools` | getNextTask, reportTaskDone, askQuestion | L0-L4, Coding Director |
+| `spawn_tools` | spawnAgent, pruneAgent, reassignAgent | L0-L7 |
+| `system_tools` | modifyConfig, restartService, healthCheck | L0-L1 only |
+
+**LLM Call Limits**:
+
+Each agent level has a maximum number of LLM calls per task to prevent runaway costs:
+
+| Level | Max LLM Calls/Task | Max Total Tokens/Task | Timeout |
+|-------|--------------------|-----------------------|---------|
+| L0 | 20 | 50,000 | 10 min |
+| L1 | 15 | 40,000 | 8 min |
+| L2 | 10 | 30,000 | 6 min |
+| L3 | 10 | 25,000 | 5 min |
+| L4 | 8 | 20,000 | 5 min |
+| L5 | 6 | 15,000 | 4 min |
+| L6 | 5 | 10,000 | 3 min |
+| L7 | 4 | 8,000 | 3 min |
+| L8 | 3 | 5,000 | 2 min |
+| L9 | 5 | 10,000 | 3 min |
+
+**Permission Inheritance**: Child agents inherit a SUBSET of their parent's permissions. A parent cannot grant permissions it does not itself hold. The `configure` and `delete` permissions are never inherited -- they must be explicitly granted by L0 or L1.
+
+**Permission Violation Handling**:
+1. Agent attempts an action it lacks permission for
+2. Action is blocked, logged to `audit_log` with `severity: 'warning'`
+3. If the action is critical to the task, agent escalates to parent with `permission_denied` reason
+4. Parent can either: (a) grant temporary permission elevation, (b) perform the action itself, or (c) escalate further
+
 ---
 
 ## Agent Implementation Checklist
 
-When adding a new agent to COE, follow this checklist. Missing any step will cause routing failures, type errors, or silent drops. (Current count: **17 agents** as of v8.0)
+When adding a new agent to COE, follow this checklist. Missing any step will cause routing failures, type errors, or silent drops. (Current count: **18 top-level agents** as of v9.0, plus ~230 hierarchy agents at L4-L9)
 
 ### Required Steps
 

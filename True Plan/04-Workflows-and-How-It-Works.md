@@ -1,10 +1,10 @@
 # 04 — Workflows & How It All Works
 
-**Version**: 8.0
+**Version**: 9.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [03-Agent-Teams-and-Roles](03-Agent-Teams-and-Roles.md)
-**Changelog**: v8.0 — Added Back-End Design QA Pipeline (Workflow 24), Element Link Discovery workflow (Workflow 25), Unified Review Queue workflow (Workflow 26), Tag Classification workflow (Workflow 27), Document Source Control workflow (Workflow 28). v7.0 — Added 4-team queue workflow, round-robin slot allocation, support agent call patterns (sync/async), lead agent escalation-to-boss flow, cancelled ticket re-engagement, documentation system workflow, file cleanup workflow, Coding Director handoff workflow. v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
+**Changelog**: v9.0 — Added Workflow Designer visual editor (Workflow 29), Workflow Template Cloning (Workflow 30), Workflow Execution & Monitoring (Workflow 31), Agent Tree Build for Plan (Workflow 32), Question Escalation Chain Processing (Workflow 33), User Profile-Based Message Routing (Workflow 34), MCP Agent Call Confirmation (Workflow 35), Multi-Model Routing & Capability Detection (Workflow 36). Total workflows: ~36. v8.0 — Added Back-End Design QA Pipeline (Workflow 24), Element Link Discovery workflow (Workflow 25), Unified Review Queue workflow (Workflow 26), Tag Classification workflow (Workflow 27), Document Source Control workflow (Workflow 28). v7.0 — Added 4-team queue workflow, round-robin slot allocation, support agent call patterns (sync/async), lead agent escalation-to-boss flow, cancelled ticket re-engagement, documentation system workflow, file cleanup workflow, Coding Director handoff workflow. v4.0 — Added User/Dev views, error recovery workflow, plan change sync, coordination patterns, queue state management, drift detection, handoff/handback formats, complete pipeline reference, timing estimates per workflow
 
 ---
 
@@ -1620,6 +1620,638 @@ Document Created
 
 ---
 
+## v9.0: Workflow Designer and Agent Tree Execution
+
+Version 9.0 introduces two major subsystems: the **Workflow Designer** (visual editor for creating and executing multi-step workflows) and the **Agent Tree** (10-level hierarchical agent execution with lazy spawning, context slicing, and escalation chains). Both integrate with the existing ticket system — workflows define HOW work gets done; the agent tree defines WHO does it and at what level of detail.
+
+### Workflow Designer Overview
+
+The Workflow Designer is a visual editor for creating multi-step workflows. Workflows are stored as definitions in SQLite and rendered as Mermaid diagrams. Each workflow consists of ordered steps connected by edges, with support for branching, parallelism, and user gates.
+
+**Step Types and Mermaid Mapping**:
+
+| Step Type | Mermaid Shape | Purpose |
+|-----------|--------------|---------|
+| `agent_call` | Rectangle `[ ]` | Call a specific agent with a prompt and acceptance criteria |
+| `condition` | Diamond `{ }` | Evaluate an expression and branch true/false |
+| `parallel_branch` | Par block `[/ \]` | Execute multiple steps concurrently, aggregate results |
+| `user_approval` | Hexagon `{{ }}` | Gate execution until user approves or rejects |
+| `escalation` | Red rectangle (styled) | Trigger escalation event and log |
+| `tool_unlock` | Annotated edge `([ ])` | Unlock specific tools for downstream steps |
+| `wait` | Stadium `([ ])` | Timer delay (capped at 5 minutes) |
+| `loop` | Trapezoid `[/ /]` | Re-execute steps while condition is true (max 100 iterations) |
+| `sub_workflow` | Subroutine `[[ ]]` | Execute another workflow definition as a nested step |
+
+### Workflow Scope
+
+Workflows exist in two scopes:
+
+- **Global reusable templates** (`plan_id = null, is_template = true`): Reusable across all plans. Created once, cloned to customize per-plan. Examples: "Standard QA Pipeline", "Code Review Flow", "Deployment Checklist".
+- **Per-plan customization** (`plan_id = <planId>, is_template = false`): Cloned from a template, then modified for the specific plan's needs. Changes to the clone do not affect the original template.
+
+> **🔧 Developer View**: `WorkflowDesigner` (`src/core/workflow-designer.ts`) manages CRUD for definitions and steps. Templates are retrieved via `getTemplates()`. Cloning via `cloneWorkflow(workflowId, newPlanId)` creates a deep copy with remapped step IDs and connections. Export/import uses JSON with sort_order-based indices for portability.
+
+### Workflow Execution Flow
+
+The `WorkflowEngine` (`src/core/workflow-engine.ts`) executes workflow definitions step by step. The core execution loop:
+
+```
+Load Step → Check Preconditions → Slice Context → Call Agent → Check Acceptance → Pass/Fail → Retry or Advance
+```
+
+Detailed flow:
+
+```mermaid
+flowchart TB
+    START([Execution Started]) --> LOAD[Load Current Step]
+    LOAD --> SAFETY{Safety Checks}
+    SAFETY -->|Step count >= 1000| FAIL_MAX[Fail: Max Steps Exceeded]
+    SAFETY -->|Step visited > 10 times| FAIL_LOOP[Fail: Loop Detected]
+    SAFETY -->|OK| EXEC[Execute Step by Type]
+
+    EXEC -->|agent_call| AGENT[Interpolate Variables in Prompt<br/>Call AgentCallExecutor<br/>Store $result, $tokens]
+    EXEC -->|condition| COND[Parse Expression to AST<br/>Evaluate Against Variables<br/>Store $conditionResult]
+    EXEC -->|parallel_branch| PAR[Fork: Execute All Branches<br/>Each Gets Variable Copy<br/>Aggregate Results]
+    EXEC -->|user_approval| GATE[Emit Approval Request<br/>Status: WaitingApproval<br/>Pause Execution]
+    EXEC -->|escalation| ESC[Emit Escalation Event<br/>Log Variables State]
+    EXEC -->|tool_unlock| UNLOCK[Add Tools to $unlockedTools<br/>Emit tool_unlocked Event]
+    EXEC -->|wait| TIMER[Delay capped 5 min]
+    EXEC -->|loop| LOOP[Check Loop Condition<br/>Max 100 Iterations<br/>Increment Counter]
+    EXEC -->|sub_workflow| SUB[Start Child Execution<br/>Run to Completion<br/>Store $subWorkflowResult]
+
+    AGENT --> ACCEPT{Acceptance Criteria?}
+    ACCEPT -->|Met| NEXT[Determine Next Step]
+    ACCEPT -->|Not Met| RETRY_CHECK{Retries Remaining?}
+
+    RETRY_CHECK -->|Yes| EXEC
+    RETRY_CHECK -->|No + Escalation Step| ESC_STEP[Jump to Escalation Step]
+    RETRY_CHECK -->|No + No Escalation| FAIL_STEP[Fail Execution]
+
+    COND --> BRANCH{$conditionResult}
+    BRANCH -->|true| TRUE_STEP[Follow true_branch_step_id]
+    BRANCH -->|false| FALSE_STEP[Follow false_branch_step_id]
+
+    NEXT --> MORE{Next Step Exists?}
+    MORE -->|Yes| LOAD
+    MORE -->|No| COMPLETE([Execution Completed])
+
+    GATE -->|User Approves| NEXT
+    GATE -->|User Rejects| FAIL_STEP
+```
+
+### Safe Condition Evaluator
+
+The condition evaluator uses a recursive descent parser that produces an AST, which is then evaluated recursively. **Zero use of `Function()` constructor or any dynamic code execution.**
+
+**Supported operators**:
+| Category | Operators |
+|----------|----------|
+| Comparison | `>`, `<`, `>=`, `<=`, `==`, `!=` |
+| Logical | `&&`, `\|\|`, `!` |
+| String methods | `.contains()`, `.startsWith()`, `.endsWith()` |
+| Grouping | `()` parenthesized expressions |
+
+**Available variables** (from execution context):
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `$result` | Last agent_call response | The text content returned by the agent |
+| `$score` | Numeric extraction from result | Score value if present in result |
+| `$status` | Execution status | Current workflow execution status |
+| `$tokens` | Token counter | Tokens consumed by last agent call |
+| `$retries` | Retry counter | Number of retries for current step |
+| `$userApproved` | Approval gate | Boolean from last user_approval step |
+| `$conditionResult` | Last condition | Boolean result of last condition evaluation |
+| `$parallelResults` | Parallel branch | Array of results from parallel execution |
+| `$subWorkflowResult` | Sub-workflow | Status of last sub-workflow execution |
+| `$unlockedTools` | Tool unlock accumulator | List of all unlocked tools |
+| `$variables.*` | Custom | User-defined workflow variables |
+
+**Examples**:
+```
+$score > 80 && $status == 'completed'
+$result.contains('success') || $retries >= 3
+!$userApproved
+$tokens < 5000 && $result.startsWith('PASS')
+```
+
+### Crash Recovery
+
+Execution state is persisted to SQLite after every step transition. On startup, the engine scans for interrupted executions and resumes them.
+
+```
+Extension Activates
+        |
+        v
+WorkflowEngine.recoverPendingExecutions()
+        |
+        v Scan workflow_executions table
+        |   WHERE status = 'running'
+        |
+        v For each interrupted execution:
+        |   - Log recovery attempt
+        |   - Resume from current_step_id
+        |   - Run to completion (or until blocked)
+        |   - If recovery fails: mark execution Failed
+        |
+        v Report: "Recovered N interrupted executions"
+```
+
+### Safety Limits
+
+| Limit | Value | Enforced By |
+|-------|-------|-------------|
+| Max steps per execution | 1,000 | `MAX_STEPS_PER_EXECUTION` constant |
+| Loop detection threshold | 10 visits to same step | `__visited_steps` array tracking |
+| Max loop iterations | 100 per loop step | `__loop_{stepId}` counter |
+| Wait cap | 5 minutes (300,000ms) | `Math.min(delayMs, 300000)` |
+| Condition evaluator | AST-based, no dynamic code execution | Recursive descent parser |
+| Parallel branch isolation | Each branch gets variable copy | Spread operator on variables |
+
+### Agent Tree Execution
+
+The Agent Tree provides hierarchical agent execution through 10 levels (L0-L9). It works WITH the existing ticket system — Boss AI still picks tickets and routes them INTO the tree. The tree processes through levels, and questions that reach the user create tickets in the existing system.
+
+**Core workflow**: Ticket --> BossAgent (L0) --> AgentTree (L0-->L1-->...-->L9) --> Result
+
+```
+Ticket arrives at Boss AI (L0)
+        |
+        v
+  Route into Agent Tree
+        |
+        v
+  L0 Boss --> L1 Global Orchestrator
+        |
+        v
+  L2 Domain Orchestrator (Code/Design/Data/Docs)
+        |
+        v
+  L3 Area Orchestrator (Frontend/Backend/Testing/etc.)
+        |
+        v
+  L4 Manager (ComponentManager, APIManager, etc.)
+        |
+        v [Lazy spawn below L4 when work reaches this domain]
+  L5 Sub-Manager --> L6 Lead --> L7 Senior --> L8 Worker --> L9 Checker
+        |
+        v
+  Result bubbles UP through tree --> Ticket resolved
+```
+
+**Key behaviors**:
+- **Same ticket, same queue, same lifecycle**: The tree does not replace the ticket system — it processes work within it
+- **Lazy spawning**: L0-L4 skeleton (~50 nodes) built upfront. L5-L9 branches spawn only when work reaches that domain/area
+- **Context slicing**: Each node sees only context relevant to its scope keywords (configurable via `context_isolation`)
+- **Escalation chains**: Questions bubble UP through ancestors; answers flow DOWN through all traversed levels
+- **Delegation**: Work flows DOWN; parents delegate to the most relevant children based on keyword matching
+- **Telemetry**: Tokens consumed, retries, and escalations tracked per node
+- **Pruning**: Completed L5+ branches are pruned to keep the tree lean
+
+> **🔧 Developer View**: `AgentTreeManager` (`src/core/agent-tree-manager.ts`) manages tree lifecycle. `buildSkeletonForPlan()` creates L0-L4 from templates. `spawnBranch()` lazily extends to L5-L9 using `NicheAgentDefinition` matching. `sliceContext()` filters context by scope keywords. `startEscalationChain()` / `escalateQuestion()` handle the question chain. `quickLocalSearch()` checks Decision Memory, design elements, support documents, and sibling conversations before escalating to the user.
+
+---
+
+## Workflow 29: Workflow Creation and Editing (v9.0) — IMPLEMENTED
+
+How workflows are created, edited, and validated in the Workflow Designer.
+
+```
+User opens Workflow Designer
+        |
+        v
+   Create New Workflow
+   |-- Name + Description
+   |-- is_template? (global reusable or plan-specific)
+   +-- plan_id (null for global, planId for plan-specific)
+        |
+        v
+   Add Steps (drag and drop in UI)
+   |-- agent_call: Select agent type, write prompt, set acceptance criteria
+   |-- condition: Write safe expression ($score > 80)
+   |-- parallel_branch: Select steps to run concurrently
+   |-- user_approval: Set approval description
+   |-- escalation: Configure escalation target
+   |-- tool_unlock: Select tools to unlock
+   |-- wait: Set delay duration
+   |-- loop: Set condition + body steps
+   +-- sub_workflow: Select existing workflow to embed
+        |
+        v
+   Connect Steps (edges in diagram)
+   |-- connectSteps(fromId, toId) — normal flow
+   |-- connectSteps(fromId, toId, 'true') — true branch
+   +-- connectSteps(fromId, toId, 'false') — false branch
+        |
+        v
+   Validate Workflow
+   |-- All agent_call steps have agent_type?
+   |-- All condition steps have expression?
+   |-- All condition steps have at least one branch?
+   |-- All step references point to existing steps?
+   |-- No unreachable steps? (BFS from first step)
+   +-- No disconnected steps? (warning-level)
+        |
+        v
+   Activate (status: Draft --> Active)
+   +-- Only possible if validation passes (0 errors)
+        |
+        v
+   Mermaid diagram auto-generated on every step change
+   +-- Stored in workflow_definitions.mermaid_source
+```
+
+> **🔧 Developer View**: `WorkflowDesigner.createWorkflow()` --> `addStep()` --> `connectSteps()` --> `validateWorkflow()` --> `activateWorkflow()`. Validation is strict: any `severity: 'error'` blocks activation. Warnings (disconnected steps, unreachable steps) are reported but do not block. `regenerateMermaid()` is called automatically on every step add/update/remove. Events: `workflow:created`, `workflow:updated`, `workflow:deleted`.
+
+---
+
+## Workflow 30: Workflow Template Cloning (v9.0) — IMPLEMENTED
+
+How global templates are cloned and customized for specific plans.
+
+```
+Global Template Exists
+   (is_template=true, plan_id=null)
+        |
+        v
+   User clicks "Use Template" on a plan
+        |
+        v
+   WorkflowDesigner.cloneWorkflow(templateId, planId)
+        |
+        |-- Create new WorkflowDefinition
+        |   name: "{template.name} (copy)"
+        |   plan_id: planId
+        |   is_template: false
+        |   status: Draft
+        |
+        |-- First Pass: Clone all steps
+        |   For each step in template:
+        |     Create new step with same config
+        |     Record oldId --> newId mapping
+        |
+        +-- Second Pass: Remap connections
+            For each cloned step:
+              Remap next_step_id, true_branch_step_id,
+              false_branch_step_id, escalation_step_id,
+              parallel_step_ids using oldId --> newId map
+        |
+        v
+   Regenerate Mermaid for clone
+        |
+        v
+   User customizes the clone:
+   |-- Add/remove steps
+   |-- Change agent prompts
+   |-- Modify conditions
+   +-- Adjust retry counts
+        |
+        v
+   Activate when ready
+```
+
+> **🔧 Developer View**: `cloneWorkflow()` performs a two-pass deep copy. First pass creates all steps with fresh IDs. Second pass uses the `idMap` to remap all cross-references. The clone is independent — changes do not affect the original template. Export (`exportWorkflow()`) serializes to JSON with sort_order-based indices for portability between instances. Import (`importWorkflow()`) reverses the process.
+
+---
+
+## Workflow 31: Workflow Execution and Monitoring (v9.0) — IMPLEMENTED
+
+How workflows are executed, monitored, and recovered after crashes.
+
+```mermaid
+flowchart TB
+    TRIGGER[Ticket or Task Triggers Workflow] --> START[WorkflowEngine.startExecution]
+    START --> VALIDATE{Workflow Active?}
+
+    VALIDATE -->|No| REJECT[Reject: Workflow Not Active]
+    VALIDATE -->|Yes| FIRST[Find First Step<br/>Lowest sort_order]
+
+    FIRST --> EXEC_RECORD[Create Execution Record<br/>Status: Running<br/>current_step_id: first step]
+
+    EXEC_RECORD --> LOOP[executeNextStep Loop]
+
+    LOOP --> SAFETY{Safety Checks}
+    SAFETY -->|Steps >= 1000| FAIL_MAX[Fail: Max Steps]
+    SAFETY -->|Same step > 10x| FAIL_LOOP[Fail: Loop Detected]
+    SAFETY -->|Pass| EXEC_STEP[Execute Step by Type]
+
+    EXEC_STEP --> RESULT{Step Result?}
+    RESULT -->|Completed| NEXT[Determine Next Step]
+    RESULT -->|WaitingApproval| PAUSE[Pause Execution<br/>Wait for User]
+    RESULT -->|Failed + Retries Left| RETRY[Retry Same Step]
+    RESULT -->|Failed + Escalation Step| ESC[Jump to Escalation Step]
+    RESULT -->|Failed + No Escalation| FAIL[Fail Execution]
+
+    NEXT --> PERSIST[Persist State to SQLite<br/>Update variables, tokens]
+    PERSIST --> MORE{Next Step Exists?}
+    MORE -->|Yes| LOOP
+    MORE -->|No| DONE([Execution Completed])
+
+    PAUSE -->|User Approves| RESUME[Resume to Next Step]
+    PAUSE -->|User Rejects| FAIL
+    RESUME --> LOOP
+```
+
+**Monitoring capabilities**:
+- `getExecutionState(executionId)` returns execution record + all steps + all step results
+- `pauseExecution()` / `resumeExecution()` for manual control
+- `cancelExecution()` for aborting with reason
+- Events emitted at every state change: `workflow:execution_started`, `workflow:step_started`, `workflow:step_completed`, `workflow:step_failed`, `workflow:execution_completed`, `workflow:execution_failed`, `workflow:user_approval_requested`, `workflow:escalation_triggered`, `workflow:condition_evaluated`, `workflow:branch_taken`, `workflow:tool_unlocked`
+
+**Crash recovery on startup**:
+```
+WorkflowEngine.recoverPendingExecutions()
+  --> SELECT * FROM workflow_executions WHERE status = 'running'
+  --> For each: resume runToCompletion()
+  --> Failed recoveries marked as Failed with error
+```
+
+> **🔧 Developer View**: `WorkflowEngine.startExecution()` creates the execution record. `executeNextStep()` is the main loop body — called repeatedly by `runToCompletion()`. State persisted via `database.updateWorkflowExecution()` after every step. Step results stored in `workflow_step_results` table. Variables serialized as JSON. `handleApproval()` resumes or rejects waiting executions.
+
+---
+
+## Workflow 32: Agent Tree Build for Plan (v9.0) — IMPLEMENTED
+
+How the agent tree is built and populated when a plan begins execution.
+
+```
+Plan Enters Coding Phase
+        |
+        v
+   AgentTreeManager.buildSkeletonForPlan(taskId, templateName)
+        |
+        v
+   Load Template (DB or built-in 'standard')
+        |
+        |-- Built-in 'standard' template: ~50 nodes
+        |   L0: BossAgent (1)
+        |   L1: GlobalOrchestrator (1)
+        |   L2: Domain Orchestrators (4)
+        |       |-- Code Domain
+        |       |-- Design Domain
+        |       |-- Data Domain
+        |       +-- Docs Domain
+        |   L3: Area Orchestrators (~14)
+        |       |-- Frontend, Backend, Testing, Infra
+        |       |-- UI Design, UX Design, Brand
+        |       |-- Schema, Migration, Seed, Query
+        |       +-- API Docs, User Docs, Internal Docs
+        |   L4: Managers (~28)
+        |       |-- ComponentManager, PageManager, StyleManager
+        |       |-- APIManager, DatabaseManager, ServiceManager, AuthManager
+        |       |-- UnitTestManager, IntegrationTestManager, E2ETestManager
+        |       +-- ...more domain-specific managers
+        |
+        +-- Only L0-L4 spawned upfront
+        |
+        v
+   For each node (level order, parents first):
+        |-- Create tree node in DB
+        |-- Set scope keywords for context slicing
+        |-- Set permissions (Read, Execute, Escalate, Spawn)
+        |-- Set escalation_target_id --> parent
+        +-- Set context_isolation + history_isolation
+        |
+        v
+   Tree ready for work delegation
+        |
+        v
+   When work reaches an L4 Manager:
+        |-- Does the domain need deeper processing?
+        |-- If yes --> spawnBranch(managerId, targetLevel)
+        |   |-- Find NicheAgentDefinitions matching scope keywords
+        |   |-- Respect max_fanout limits per parent
+        |   +-- Create L5-L9 nodes as needed
+        +-- If no --> L4 Manager handles directly
+```
+
+**Node properties set during skeleton build**:
+| Property | Description |
+|----------|-------------|
+| `scope` | Comma-separated keywords for context filtering |
+| `max_fanout` | Max children per node (prevents tree explosion) |
+| `max_depth_below` | Max levels spawnable below this node |
+| `escalation_threshold` | Failures before escalating to parent |
+| `context_isolation` | Whether to filter context by scope (true for L2+) |
+| `history_isolation` | Whether conversation history is private to this node |
+| `permissions` | Read, Execute, Escalate, Spawn, Configure, Approve, Delete |
+
+> **🔧 Developer View**: `buildSkeletonForPlan()` iterates levels L0 to L4 in order (ensures parents exist before children). Each node is created via `spawnNode()` which inserts into the `agent_tree_nodes` table. The `nameToId` map tracks template names to DB IDs for parent resolution. `spawnBranch()` is called lazily — it finds `NicheAgentDefinition` rows matching the parent's scope and creates child nodes up to `max_fanout`. Events: `tree:skeleton_built`, `tree:node_spawned`, `tree:branch_spawned`.
+
+---
+
+## Workflow 33: Question Escalation Chain Processing (v9.0) — IMPLEMENTED
+
+How questions from deep in the agent tree bubble up through the hierarchy and answers flow back down.
+
+```
+L7 Senior Agent has a question
+        |
+        v
+   AgentTreeManager.startEscalationChain(nodeId, question, context)
+        |
+        v
+   Create EscalationChain record
+   (status: Escalating, originating_node_id: L7)
+        |
+        v
+   escalateQuestion(chainId) — REPEAT at each level:
+        |
+        v
+   At current node, check (in order):
+   |-- 1. Own conversation history
+   |   (60%+ keyword overlap with previous agent responses?)
+   |   --> If YES: resolve chain with cached answer
+   |
+   |-- 2. Decision Memory
+   |   (search decisions table by topic keywords)
+   |   (50%+ keyword overlap with existing decision?)
+   |   --> If YES: resolve chain with "[Decision Memory] answer"
+   |
+   |-- 3. Scoped context (plan/design keywords)
+   |   (70%+ overlap signals right domain — flagged, not auto-answered)
+   |
+   +-- 4. Sibling conversations
+       (peer agents at same level — 60%+ keyword overlap?)
+       --> If YES: resolve chain with "[From sibling] answer"
+        |
+        v
+   Not answered? --> Escalate to parent (escalation_target_id)
+   |-- Record escalation in conversation log
+   |-- Increment node's escalation counter
+   |-- Update chain's current_node_id to parent
+   |-- Add current node to levels_traversed
+   +-- Continue loop at parent level
+        |
+        v
+   Reached L0 Boss with no answer?
+        |
+        v
+   Boss AI calls quickLocalSearch(chainId, taskId)
+   |-- Search Decision Memory (all topics)
+   |-- Search design pages (name, route, requirements)
+   |-- Search support documents (keyword match)
+   |-- Search ALL agent conversations in tree
+   +-- Search plan configuration
+        |
+        v
+   Still no answer? --> Create Ghost Ticket for user
+        |
+        v
+   User answers --> resolveEscalationChain(chainId, answer, level, source)
+        |
+        v
+   Answer flows DOWN:
+   |-- Record in originating node's conversation
+   |-- Record in each traversed level's conversation
+   +-- Chain status --> Answered
+```
+
+> **🔧 Developer View**: `startEscalationChain()` creates the chain record and logs the question. `escalateQuestion()` is the main loop — it calls `checkNodeCanAnswer()` at each level. If no answer is found, it moves `current_node_id` to the parent. `quickLocalSearch()` is the last-resort sweep before creating a user ticket — it searches across 5 data sources. `resolveEscalationChain()` distributes the answer back through all `levels_traversed`. Events: `escalation:chain_started`, `tree:question_escalated`, `tree:question_answered`.
+
+---
+
+## Workflow 34: User Profile-Based Message Routing (v9.0) — IMPLEMENTED
+
+How the system adapts communication style based on user profiles and ticket context.
+
+```
+Message Generated for User
+        |
+        v
+   Determine User Profile
+   |-- AI Level setting (manual/suggestions/smart/hybrid)
+   |-- Question history (how many dismissed? how detailed are answers?)
+   +-- Plan complexity (feature count, task count)
+        |
+        v
+   Route Message by Profile
+        |
+        |-- Novice Profile (AI Level: manual/suggestions)
+        |   |-- Ghost Tickets: noob-friendly top section
+        |   |-- Collapsible technical details
+        |   |-- Link to relevant page/designer
+        |   +-- Simple yes/no questions preferred
+        |
+        |-- Standard Profile (AI Level: smart)
+        |   |-- Full context in question popup
+        |   |-- Technical details visible
+        |   |-- Multiple-choice when appropriate
+        |   +-- Navigate button to relevant ticket/page
+        |
+        +-- Expert Profile (AI Level: hybrid)
+            |-- Minimal wrapper, raw context
+            |-- Batch questions when possible
+            |-- Higher auto-decision threshold
+            +-- Decision Memory auto-answers more aggressively
+        |
+        v
+   Apply to User Communication Queue
+   |-- Sort by queue_priority (P1 first), then created_at
+   |-- P1 questions pulse red badge
+   +-- 3-strike dismiss rule: AI proceeds with assumption
+```
+
+> **🔧 Developer View**: Message routing uses the existing `ConfigManager.getConfig().aiLevel` and `User Communication Queue` (Workflow 5b). The profile is not a separate entity — it is derived from configuration and behavior patterns. Ghost Tickets already support dual-section format (noob-friendly + technical). The escalation chain (Workflow 33) feeds into this — questions that reach the user get formatted based on profile before entering the queue.
+
+---
+
+## Workflow 35: MCP Agent Call Confirmation (v9.0) — IMPLEMENTED
+
+How external agent calls via MCP are confirmed and tracked through the workflow system.
+
+```
+External Coding Agent calls MCP tool
+        |
+        |-- getNextTask --> CodingDirector prepares task
+        |   --> Workflow step: agent_call to CodingDirector
+        |   --> Context sliced by task scope
+        |   --> Return PreparedCodingTask
+        |
+        |-- reportTaskDone --> Verification pipeline triggered
+        |   --> Workflow step: agent_call to VerificationAgent
+        |   --> 60s stability delay (wait step)
+        |   --> Acceptance criteria check (condition step)
+        |   --> Pass/fail determines next workflow step
+        |
+        |-- askQuestion --> Answer Agent responds
+        |   --> If in agent tree: start escalation chain
+        |   --> If standalone: direct Answer Agent call
+        |   --> Confidence check (condition step)
+        |
+        |-- callCOEAgent --> Direct agent invocation
+        |   --> user_approval gate if agent has side effects
+        |   --> Result logged in audit_log
+        |   --> Event emitted for tracking
+        |
+        +-- scanCodeBase --> Research Agent scans
+            --> tool_unlock step for file system read
+            --> Results stored as support documents
+            --> Event emitted
+        |
+        v
+   All MCP calls logged to audit_log
+   with: tool name, parameters, result, duration, tokens
+```
+
+> **🔧 Developer View**: MCP calls go through `src/mcp/server.ts` which delegates to the appropriate service. When a workflow is active for the current task, MCP calls can be mapped to workflow steps — the `WorkflowEngine` tracks which step triggered the MCP call and records the result. The `AgentCallExecutor` callback is how the workflow engine invokes agents without direct coupling.
+
+---
+
+## Workflow 36: Multi-Model Routing and Capability Detection (v9.0) — IMPLEMENTED
+
+How the system detects available models and routes work to the most appropriate one based on capabilities.
+
+```
+Agent Tree Node Needs LLM Call
+        |
+        v
+   Check Node's model_preference
+        |
+        |-- model_preference set?
+        |   --> Use specified model if available
+        |   --> Fall back to default if unavailable
+        |
+        +-- model_preference null?
+            --> Use system default from config
+        |
+        v
+   Check NicheAgentDefinition.required_capability
+   (If node has niche_definition_id)
+        |
+        |-- ModelCapability values:
+        |   |-- reasoning: Complex logic, multi-step analysis
+        |   |-- coding: Code generation, refactoring
+        |   |-- creative: Content generation, naming
+        |   |-- fast: Quick lookups, classifications
+        |   |-- vision: Image/screenshot analysis
+        |   +-- large_context: Documents > 100K tokens
+        |
+        +-- Match capability to available model
+        |
+        v
+   LLMService routes to appropriate endpoint
+        |
+        |-- Primary: config.llmEndpoint (LM Studio)
+        |   Model: mistralai/ministral-3-14b-reasoning
+        |   Capabilities: reasoning, coding, fast
+        |
+        |-- Fallback: secondary endpoints (if configured)
+        |   Different models for different capabilities
+        |
+        +-- Offline: keyword-only routing (no LLM tasks)
+            Deferred LLM tasks queued for when model is available
+        |
+        v
+   Response tracked per-node
+   |-- tokens_consumed incremented
+   |-- model used logged
+   +-- Capability match quality tracked for evolution
+```
+
+> **🔧 Developer View**: `ModelCapability` enum defined in `src/types/index.ts`. `NicheAgentDefinition.required_capability` specifies what a niche agent needs. `AgentTreeNode.model_preference` allows per-node override. The `LLMService` health check runs periodically — if the primary endpoint is down, the system falls back to keyword-only routing and defers LLM-dependent tasks. Multi-model routing is configuration-driven: future versions will support multiple endpoints with capability tagging.
+
+---
+
 ## Workflow Timing Summary
 
 Quick reference for how long each workflow takes.
@@ -1644,6 +2276,14 @@ Quick reference for how long each workflow takes.
 | Element Link Discovery | 5–15 seconds | Auto-detect scan scope |
 | Review Queue Processing | User-dependent | User review speed |
 | Tag Classification | <1 second | Deterministic (instant) |
+| Workflow Creation & Editing | User-dependent + <1s (validation) | User design time |
+| Workflow Template Cloning | 1-3 seconds | Step count in template |
+| Workflow Execution | 10 seconds – 30 minutes | Step count x agent call time |
+| Agent Tree Build (skeleton) | 2-5 seconds | ~50 node insertions |
+| Agent Tree Branch Spawn | 1-3 seconds | Niche agent matching |
+| Escalation Chain Processing | 1-10 seconds per level | Decision Memory search + keyword matching |
+| Quick Local Search | 2-5 seconds | 5 data source sweeps |
+| Multi-Model Routing | <1 second | Model availability check |
 
 ---
 

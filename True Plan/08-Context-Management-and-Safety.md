@@ -1,10 +1,10 @@
 # 08 — Context Management & Safety Systems
 
-**Version**: 8.0
+**Version**: 9.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [07-Program-Lifecycle-and-Evolution](07-Program-Lifecycle-and-Evolution.md)
-**Changelog**: v8.0 — Added Document Source Control safety (user vs system ownership, locked documents), Unified Review Queue safety rules (approval dispatch, batch safety), Link Management safety (auto-detect confidence thresholds, approval gates), Tag System safety (built-in immutability), Backend Architect scoring safety (8-category independent scoring) | v7.0 — Added Documentation & Reference System (support documents, folder organization, context injection), Agent File Cleanup safety rules, support document context injection into pipeline, per-team queue safety considerations | v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
+**Changelog**: v9.0 — Added Permission System Safety (8 per-agent permissions, enforcePermission(), inheritance from parent), Agent Tree Limits (max depth 10, max fanout 5, context isolation per branch, spawn validation), Workflow Execution Safety (safe AST-based condition evaluator, max 1000 steps, loop detection, execution timeout, zero dynamic code execution), MCP Confirmation Stage (2-step confirm flow, configurable expiry, one-time use, scope binding), Question Escalation Safety (10-level bubble-up, per-level resolution checks, Decision Memory integration, audit logging) | v8.0 — Added Document Source Control safety (user vs system ownership, locked documents), Unified Review Queue safety rules (approval dispatch, batch safety), Link Management safety (auto-detect confidence thresholds, approval gates), Tag System safety (built-in immutability), Backend Architect scoring safety (8-category independent scoring) | v7.0 — Added Documentation & Reference System (support documents, folder organization, context injection), Agent File Cleanup safety rules, support document context injection into pipeline, per-team queue safety considerations | v3.0 — Standardized header, added User/Dev views throughout, expanded Security section from old SECURITY-AUTHENTICATION-SPEC.md (authentication, data protection, OWASP rules, threat model, retention policy, access control, network security), added context config reference, added cross-references
 
 ---
 
@@ -1114,6 +1114,153 @@ For reference, the context management system is configured via `.coe/config.json
 | `retry.maxAttempts` | 3 | 1-10 | Max retry attempts per LLM call |
 | `retry.backoffBase` | 5 seconds | 1-30 | Exponential backoff base |
 | `retry.maxDelay` | 60 seconds | 10-300 | Maximum retry delay |
+
+---
+
+## v9.0: Safety Additions
+
+### Permission System Safety — PLANNED (v9.0)
+
+Each agent in the v9.0 hierarchy has a per-agent permission set controlling what actions it may perform:
+
+| Permission | Description |
+|-----------|-------------|
+| `read` | Read files, database records, context data |
+| `write` | Create or modify files, database records |
+| `execute` | Run commands, trigger builds, invoke tools |
+| `escalate` | Pass work or questions up the agent tree |
+| `spawn` | Create child agents (niche agents on demand) |
+| `configure` | Modify agent settings, prompts, parameters |
+| `approve` | Approve drafts, review queue items, gate checks |
+| `delete` | Remove files, records, agents, queue items |
+
+**Default behavior**: All existing agents (pre-v9.0) receive full access to all permissions for backward compatibility. Niche agents spawned at runtime inherit their parent's permission set by default — the parent cannot grant permissions it does not itself hold.
+
+**Enforcement**: `enforcePermission(agentId, permission)` is called before every controlled action. If the agent lacks the required permission, the call throws a `PermissionDeniedError` with the agent ID, attempted permission, and a list of permissions the agent does hold. The error is logged to the audit trail and the agent's parent is notified via the event bus.
+
+**Permission matrix UI**: A Settings panel tab allows viewing and editing per-agent permissions. Changes require confirmation and are logged.
+
+---
+
+### Agent Tree Limits — PLANNED (v9.0)
+
+The 10-level agent hierarchy introduces new depth and breadth constraints to prevent runaway spawning and unbounded resource consumption:
+
+| Limit | Default | Configurable? | Purpose |
+|-------|---------|--------------|---------|
+| **Max depth** | 10 levels (L0-L9) | No (hardcoded) | Prevents infinitely deep agent chains |
+| **Max fanout** | 5 children per node | Yes (per node) | Prevents single agent from spawning too many children |
+| **Escalation threshold** | Configurable per level | Yes | Controls when an agent stops trying and passes up |
+| **Context isolation** | Per branch | No (architectural) | Each tree branch gets scoped context — siblings cannot read each other's context |
+
+**Context isolation**: Each node in the agent tree receives a scoped context object. A node can read its own context, its parent's context (for escalation), and its children's results — but never a sibling's context or a cousin's context. This prevents information leakage across unrelated work streams and keeps token budgets per-branch rather than shared.
+
+**Spawn validation**: Before spawning a child agent, the parent must pass three checks:
+1. Current depth < 10
+2. Current fanout < configured max for this node
+3. Parent holds the `spawn` permission
+
+If any check fails, the spawn is rejected and the parent receives an error response with the specific limit that was hit.
+
+---
+
+### Workflow Execution Safety — PLANNED (v9.0)
+
+The visual workflow designer executes multi-step workflows with strict safety controls:
+
+| Guard | Value | Purpose |
+|-------|-------|---------|
+| **Max steps per execution** | 1,000 | Prevents infinite or runaway workflows |
+| **Loop detection** | Visited-step tracking | If a step is visited more than the configured loop limit, execution halts |
+| **Execution timeout** | Configurable (default: 5 minutes) | Hard timeout on entire workflow execution |
+| **Condition evaluation** | Safe AST-based evaluator only | Condition evaluation NEVER uses dynamic code execution mechanisms |
+
+**Safe AST-based condition evaluator**: All `condition` steps in workflows are evaluated through a secure pipeline:
+
+1. **Tokenizer** — Lexes the condition string into typed tokens (numbers, strings, operators, variables, function calls)
+2. **Recursive descent parser** — Builds an Abstract Syntax Tree (AST) from tokens. Rejects any syntax not in the allowed grammar.
+3. **Recursive evaluator** — Walks the AST and evaluates each node against the workflow's runtime context. No string-to-code conversion at any stage.
+
+**Allowed operators and functions**:
+
+| Category | Allowed |
+|----------|---------|
+| Comparison | `>`, `<`, `>=`, `<=`, `==`, `!=` |
+| Logical | `&&`, `\|\|`, `!` |
+| String methods | `.contains()`, `.startsWith()`, `.endsWith()` |
+| Variables | `$result`, `$score`, `$status`, `$tokens`, `$retries` |
+
+Any expression containing syntax outside this grammar is rejected at parse time with a descriptive error. There is **zero use of dynamic code execution** anywhere in the workflow engine — no string-to-code conversion, no runtime code generation, no JavaScript execution of user-provided strings. All condition logic runs through the safe AST evaluator exclusively.
+
+---
+
+### MCP Confirmation Stage — PLANNED (v9.0)
+
+External agent calls via MCP now support an optional 2-step confirmation flow to prevent accidental or unauthorized agent execution:
+
+**Flow**:
+1. **Step 1 — Describe**: Client calls `callCOEAgent` with `confirm: true`. COE returns the agent's full description (name, capabilities, permissions, estimated cost) and a `confirmation_id` (UUID). No agent execution occurs.
+2. **Step 2 — Execute**: Client calls `callCOEAgent` again with the `confirmation_id`. COE validates the confirmation ID, checks it has not expired, and executes the agent call.
+
+**Safety rules**:
+
+| Rule | Value |
+|------|-------|
+| Confirmation ID expiry | Configurable (default: 60 seconds) |
+| One-time use | Each `confirmation_id` can only be used once |
+| Scope binding | The `confirmation_id` is bound to the specific agent + input that was described — cannot be reused for a different agent |
+| Configurable enforcement | The confirmation stage can be enabled/disabled globally or per-agent in settings |
+
+If the confirmation ID has expired or been used, the second call returns error `-32001` with message `"Confirmation expired or already used"`.
+
+---
+
+### Question Escalation Safety — PLANNED (v9.0)
+
+In the 10-level agent hierarchy, questions bubble up through all levels before reaching the user. At each level, the agent performs a structured resolution attempt:
+
+```
+Question originates at Level N (e.g., L9 worker)
+         |
+         v
+   L9: Check own context for answer
+   |-- Found -> Resolve locally, log to audit
+   |-- Not found
+         |
+         v
+   L8: Check own context + Decision Memory
+   |-- Found -> Resolve, notify L9
+   |-- Not found
+         |
+         v
+   L7-L1: At each level:
+   |-- Check scoped context (own branch)
+   |-- Check Decision Memory (semantic match)
+   |-- Check sibling conversation history
+   |-- Check support documents (keyword match)
+   |-- Found -> Resolve, propagate answer down
+   |-- Not found -> Pass up to parent
+         |
+         v
+   L0 (Boss AI): Final internal check
+   |-- Check cross-branch context (limited)
+   |-- Check full Decision Memory
+   |-- Found -> Resolve, propagate down
+   |-- Not found
+         |
+         v
+   User Communication Orchestrator (Agent #18)
+   |-- Profile-based rewriting
+   |-- Cache check (repeat answer detection)
+   |-- Present to user
+```
+
+**Safety properties**:
+- Most questions are resolved without reaching the user — each level adds context that may contain the answer
+- Decision Memory lookups use confidence thresholds: exact match (>0.8) auto-answers, partial match (>0.5) includes context but still escalates
+- Questions that reach the user are rewritten by the User Communication Orchestrator to match the user's programming level and communication preferences
+- The escalation chain is logged end-to-end: which levels attempted resolution, what context was checked, why each level passed the question up
+- Maximum escalation depth matches the agent tree depth (10 levels) — there is no way for a question to loop or escalate beyond the User Communication Orchestrator
 
 ---
 

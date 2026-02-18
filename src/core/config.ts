@@ -86,6 +86,15 @@ const DEFAULT_CONFIG: COEConfig = {
     },
     cancelledTicketReviewIntervalMs: 1800000,   // 30 minutes — Boss reviews cancelled tickets for re-engagement
     maxSupportAgentSyncTimeoutMs: 60000,        // 60 seconds — max time for sync support agent call
+    // v9.0: Agent Hierarchy, Workflow Designer, User Communication
+    maxAgentTreeDepth: 10,                       // Full 10-level tree for all plans
+    defaultMaxFanout: 5,                         // Max children per tree node
+    mcpConfirmationRequired: true,               // Require confirmation before calling agents via MCP
+    mcpConfirmationTimeoutMs: 60000,             // 60 seconds before MCP confirmation expires
+    userProgrammingLevel: 'good',                // Default user programming level
+    workflowDesignerEnabled: true,               // Workflow Designer enabled by default
+    userCommInterceptAll: true,                  // ALL messages go through UserCommAgent
+    defaultTreeTemplate: 'standard',             // Default tree template for new plans
 };
 
 export class ConfigManager {
@@ -182,6 +191,16 @@ export class ConfigManager {
             teamSlotAllocation: loaded.teamSlotAllocation ?? DEFAULT_CONFIG.teamSlotAllocation,
             cancelledTicketReviewIntervalMs: loaded.cancelledTicketReviewIntervalMs ?? DEFAULT_CONFIG.cancelledTicketReviewIntervalMs,
             maxSupportAgentSyncTimeoutMs: loaded.maxSupportAgentSyncTimeoutMs ?? DEFAULT_CONFIG.maxSupportAgentSyncTimeoutMs,
+            // v9.0: Agent Hierarchy, Workflow Designer, User Communication
+            maxAgentTreeDepth: loaded.maxAgentTreeDepth ?? DEFAULT_CONFIG.maxAgentTreeDepth,
+            defaultMaxFanout: loaded.defaultMaxFanout ?? DEFAULT_CONFIG.defaultMaxFanout,
+            mcpConfirmationRequired: loaded.mcpConfirmationRequired ?? DEFAULT_CONFIG.mcpConfirmationRequired,
+            mcpConfirmationTimeoutMs: loaded.mcpConfirmationTimeoutMs ?? DEFAULT_CONFIG.mcpConfirmationTimeoutMs,
+            userProgrammingLevel: loaded.userProgrammingLevel ?? DEFAULT_CONFIG.userProgrammingLevel,
+            workflowDesignerEnabled: loaded.workflowDesignerEnabled ?? DEFAULT_CONFIG.workflowDesignerEnabled,
+            userCommInterceptAll: loaded.userCommInterceptAll ?? DEFAULT_CONFIG.userCommInterceptAll,
+            agentModelAssignments: loaded.agentModelAssignments,
+            defaultTreeTemplate: loaded.defaultTreeTemplate ?? DEFAULT_CONFIG.defaultTreeTemplate,
         };
     }
 

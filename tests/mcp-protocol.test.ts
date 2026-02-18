@@ -203,7 +203,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
 
         const tools = body.result.tools;
         expect(Array.isArray(tools)).toBe(true);
-        expect(tools.length).toBe(7);
+        expect(tools.length).toBe(9);
 
         // Verify each tool has the required MCP fields
         const expectedToolNames = [
@@ -214,6 +214,8 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             'callCOEAgent',
             'scanCodeBase',
             'getTicketHistory',
+            'getAgentDescriptions',
+            'confirmAgentCall',
         ];
 
         const toolNames = tools.map((t: any) => t.name);

@@ -55,7 +55,8 @@ export enum AgentType {
     DecisionMemory = 'decision_memory',
     Review = 'review',
     CodingDirector = 'coding_director',  // v7.0: Interface to external coding agent
-    BackendArchitect = 'backend_architect'  // v8.0: Deep BE-specific QA and architecture generation
+    BackendArchitect = 'backend_architect',  // v8.0: Deep BE-specific QA and architecture generation
+    UserCommunication = 'user_communication'  // v9.0: Mediates ALL system-to-user messages
 }
 
 export enum AgentStatus {
@@ -347,6 +348,8 @@ export interface LLMRequest {
     max_tokens?: number;
     temperature?: number;
     stream?: boolean;
+    /** v9.0: Override model ID for this specific request (multi-model routing) */
+    model?: string;
 }
 
 export interface LLMResponse {
@@ -504,6 +507,25 @@ export interface COEConfig {
     cancelledTicketReviewIntervalMs?: number;
     /** v7.0: Max time for a synchronous support agent call (ms). Default: 60s. */
     maxSupportAgentSyncTimeoutMs?: number;
+    // v9.0: Agent Hierarchy, Workflow Designer, User Communication
+    /** v9.0: Maximum depth for agent tree (always 10). */
+    maxAgentTreeDepth?: number;
+    /** v9.0: Default max fanout (children) per tree node. Default: 5. */
+    defaultMaxFanout?: number;
+    /** v9.0: Whether MCP confirmation is required before calling agents externally. */
+    mcpConfirmationRequired?: boolean;
+    /** v9.0: Timeout for MCP confirmation before expiry (ms). Default: 60000. */
+    mcpConfirmationTimeoutMs?: number;
+    /** v9.0: User's self-reported programming level. Default: 'good'. */
+    userProgrammingLevel?: string;
+    /** v9.0: Whether the Workflow Designer is enabled. Default: true. */
+    workflowDesignerEnabled?: boolean;
+    /** v9.0: Whether ALL user-facing messages go through UserCommAgent. Default: true. */
+    userCommInterceptAll?: boolean;
+    /** v9.0: Per-agent model assignments (key=agent type, value=model config). */
+    agentModelAssignments?: Record<string, { model_id: string; capability: string }>;
+    /** v9.0: Which tree template to use for new plans. Default: 'standard'. */
+    defaultTreeTemplate?: string;
 }
 
 // --- Agent Framework Types ---
@@ -2297,3 +2319,563 @@ export interface BackendQAScore {
 
 /** Backend Architect operating mode */
 export type BackendArchitectMode = 'auto_generate' | 'scaffold' | 'suggest';
+
+// ============================================================
+// v9.0: Agent Hierarchy, Workflow Designer, User Communication
+// ============================================================
+
+// --- v9.0 Enums ---
+
+/** 10-level agent hierarchy — from Boss (L0) through niche Checkers (L9) */
+export enum AgentLevel {
+    L0_Boss = 0,
+    L1_GlobalOrchestrator = 1,
+    L2_DomainOrchestrator = 2,
+    L3_AreaOrchestrator = 3,
+    L4_Manager = 4,
+    L5_SubManager = 5,
+    L6_TeamLead = 6,
+    L7_WorkerGroup = 7,
+    L8_Worker = 8,
+    L9_Checker = 9
+}
+
+/** Permissions that can be granted to agents in the hierarchy */
+export enum AgentPermission {
+    Read = 'read',
+    Write = 'write',
+    Execute = 'execute',
+    Escalate = 'escalate',
+    Spawn = 'spawn',
+    Configure = 'configure',
+    Approve = 'approve',
+    Delete = 'delete'
+}
+
+/** Model capabilities for multi-model routing */
+export enum ModelCapability {
+    Reasoning = 'reasoning',
+    Vision = 'vision',
+    Fast = 'fast',
+    ToolUse = 'tool_use',
+    Code = 'code',
+    General = 'general'
+}
+
+/** Step types for workflow definitions */
+export enum WorkflowStepType {
+    AgentCall = 'agent_call',
+    Condition = 'condition',
+    ParallelBranch = 'parallel_branch',
+    UserApproval = 'user_approval',
+    Escalation = 'escalation',
+    ToolUnlock = 'tool_unlock',
+    Wait = 'wait',
+    Loop = 'loop',
+    SubWorkflow = 'sub_workflow'
+}
+
+/** Workflow definition lifecycle status */
+export enum WorkflowStatus {
+    Draft = 'draft',
+    Active = 'active',
+    Running = 'running',
+    Paused = 'paused',
+    Completed = 'completed',
+    Failed = 'failed',
+    Archived = 'archived'
+}
+
+/** Runtime execution status for workflow steps and executions */
+export enum WorkflowExecutionStatus {
+    Pending = 'pending',
+    Running = 'running',
+    WaitingApproval = 'waiting_approval',
+    WaitingCondition = 'waiting_condition',
+    Completed = 'completed',
+    Failed = 'failed',
+    Skipped = 'skipped',
+    Cancelled = 'cancelled'
+}
+
+/** User programming proficiency level — affects how UserCommAgent communicates */
+export enum UserProgrammingLevel {
+    Noob = 'noob',
+    New = 'new',
+    GettingAround = 'getting_around',
+    Good = 'good',
+    ReallyGood = 'really_good',
+    Expert = 'expert'
+}
+
+/** Per-area preference action — how the system should handle decisions in an area */
+export enum UserPreferenceAction {
+    AlwaysDecide = 'always_decide',
+    AlwaysRecommend = 'always_recommend',
+    NeverTouch = 'never_touch',
+    AskMe = 'ask_me'
+}
+
+/** Status of a question escalation chain as it bubbles up the agent tree */
+export enum EscalationChainStatus {
+    Escalating = 'escalating',
+    Answered = 'answered',
+    Blocked = 'blocked',
+    Paused = 'paused',
+    TimedOut = 'timed_out'
+}
+
+/** Tree node runtime status */
+export enum TreeNodeStatus {
+    Idle = 'idle',
+    Active = 'active',
+    Working = 'working',
+    WaitingChild = 'waiting_child',
+    Escalated = 'escalated',
+    Completed = 'completed',
+    Failed = 'failed',
+    Pruned = 'pruned'
+}
+
+/** MCP confirmation status */
+export enum MCPConfirmationStatus {
+    Pending = 'pending',
+    Approved = 'approved',
+    Rejected = 'rejected',
+    Expired = 'expired'
+}
+
+// --- v9.0 Interfaces ---
+
+/** A node in the 10-level agent hierarchy tree */
+export interface AgentTreeNode {
+    id: string;
+    /** Unique instance ID for this specific tree instantiation */
+    instance_id: string;
+    /** The agent type this node represents */
+    agent_type: string;
+    /** Display name (e.g., "ComponentManager", "ButtonLead") */
+    name: string;
+    /** Hierarchy level (0-9) */
+    level: AgentLevel;
+    /** Parent node ID (null for L0 Boss) */
+    parent_id: string | null;
+    /** Task/plan this tree is processing */
+    task_id: string | null;
+    /** Workflow execution this node belongs to (if any) */
+    workflow_execution_id: string | null;
+    /** Scope keywords for context slicing (e.g., "frontend", "react", "buttons") */
+    scope: string;
+    /** Permissions granted to this node */
+    permissions: AgentPermission[];
+    /** Model preference for this node */
+    model_preference: ModelPreference | null;
+    /** Max children this node can spawn */
+    max_fanout: number;
+    /** Max depth below this node */
+    max_depth_below: number;
+    /** Number of escalations before auto-escalating to parent */
+    escalation_threshold: number;
+    /** ID of the node to escalate to (usually parent, but can be configured) */
+    escalation_target_id: string | null;
+    /** Whether context is isolated to this node's scope */
+    context_isolation: boolean;
+    /** Whether conversation history is isolated per-node */
+    history_isolation: boolean;
+    /** Current runtime status */
+    status: TreeNodeStatus;
+    /** Number of retries this node has attempted */
+    retries: number;
+    /** Number of escalations this node has triggered */
+    escalations: number;
+    /** Total tokens consumed by this node */
+    tokens_consumed: number;
+    /** JSON schema of expected input */
+    input_contract: string | null;
+    /** JSON schema of expected output */
+    output_contract: string | null;
+    /** Niche agent definition ID (for L4-L9 niche agents) */
+    niche_definition_id: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Predefined tree structure template */
+export interface AgentTreeTemplate {
+    id: string;
+    name: string;
+    description: string;
+    /** JSON array of template node definitions (no instance IDs — those are generated on spawn) */
+    nodes_json: string;
+    /** Whether this is the default template for new plans */
+    is_default: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Per-agent model configuration */
+export interface ModelPreference {
+    model_id: string;
+    capability: ModelCapability;
+    fallback_model_id: string | null;
+    temperature: number;
+    max_output_tokens: number;
+}
+
+/** Workflow definition — a template for multi-step processes */
+export interface WorkflowDefinition {
+    id: string;
+    /** Plan ID (null = global reusable template) */
+    plan_id: string | null;
+    name: string;
+    description: string;
+    /** Mermaid source for visual rendering */
+    mermaid_source: string;
+    status: WorkflowStatus;
+    /** Who created this workflow */
+    created_by: string;
+    /** Version number for tracking changes */
+    version: number;
+    /** Acceptance criteria for the workflow as a whole */
+    acceptance_criteria: string;
+    /** Tags for categorization */
+    tags: string[];
+    /** Whether this is a reusable template */
+    is_template: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+/** A step within a workflow definition */
+export interface WorkflowStep {
+    id: string;
+    workflow_id: string;
+    step_type: WorkflowStepType;
+    /** Display label in the visual editor */
+    label: string;
+    /** Agent type to invoke (for agent_call steps) */
+    agent_type: string | null;
+    /** Prompt to send to the agent */
+    agent_prompt: string | null;
+    /** Condition expression (for condition steps) — evaluated via safe AST parser */
+    condition_expression: string | null;
+    /** Tools to unlock at this step (for tool_unlock steps) */
+    tools_unlocked: string[];
+    /** Acceptance criteria for this specific step */
+    acceptance_criteria: string | null;
+    /** Max retries before escalation */
+    max_retries: number;
+    /** Delay between retries in ms */
+    retry_delay_ms: number;
+    /** Step ID to escalate to on failure */
+    escalation_step_id: string | null;
+    /** Next step ID (for linear flow) */
+    next_step_id: string | null;
+    /** Step ID for true branch (for condition steps) */
+    true_branch_step_id: string | null;
+    /** Step ID for false branch (for condition steps) */
+    false_branch_step_id: string | null;
+    /** Step IDs for parallel execution */
+    parallel_step_ids: string[];
+    /** Model preference for this step's agent call */
+    model_preference: ModelPreference | null;
+    /** Visual x position in workflow designer */
+    x: number;
+    /** Visual y position in workflow designer */
+    y: number;
+    /** Sort order for execution sequence */
+    sort_order: number;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Runtime execution state for a workflow */
+export interface WorkflowExecution {
+    id: string;
+    workflow_id: string;
+    /** Ticket being processed through this workflow (if any) */
+    ticket_id: string | null;
+    /** Task being processed (if any) */
+    task_id: string | null;
+    /** Current step being executed */
+    current_step_id: string | null;
+    status: WorkflowExecutionStatus;
+    /** JSON map of step ID -> WorkflowStepResult */
+    step_results_json: string;
+    /** JSON map of workflow variables ($result, $score, etc.) */
+    variables_json: string;
+    /** Total tokens consumed */
+    tokens_consumed: number;
+    started_at: string;
+    completed_at: string | null;
+}
+
+/** Result of executing a single workflow step */
+export interface WorkflowStepResult {
+    step_id: string;
+    status: WorkflowExecutionStatus;
+    /** Agent response content */
+    agent_response: string | null;
+    /** Whether acceptance criteria were met */
+    acceptance_check: boolean | null;
+    /** Number of retries consumed */
+    retries: number;
+    /** Duration in milliseconds */
+    duration_ms: number;
+    /** Tokens consumed for this step */
+    tokens_used: number;
+    /** Error message (if failed) */
+    error: string | null;
+}
+
+/** Permission configuration for an agent */
+export interface AgentPermissionSet {
+    id: string;
+    /** Agent type this permission set applies to */
+    agent_type: string;
+    /** Specific instance ID (null = applies to all instances of this type) */
+    agent_instance_id: string | null;
+    /** Granted permissions */
+    permissions: AgentPermission[];
+    /** Tools this agent is allowed to use */
+    allowed_tools: string[];
+    /** Tools this agent is explicitly blocked from using */
+    blocked_tools: string[];
+    /** Whether this agent can spawn child agents */
+    can_spawn: boolean;
+    /** Maximum LLM calls per processing cycle */
+    max_llm_calls: number;
+    /** Maximum time in minutes before timeout */
+    max_time_minutes: number;
+    created_at: string;
+    updated_at: string;
+}
+
+/** User profile — programming level, preferences, communication style */
+export interface UserProfile {
+    id: string;
+    /** User's programming proficiency level */
+    programming_level: UserProgrammingLevel;
+    /** Areas the user is strong in */
+    strengths: string[];
+    /** Areas the user is weak in */
+    weaknesses: string[];
+    /** Technical areas the user knows well */
+    known_areas: string[];
+    /** Technical areas the user is unfamiliar with */
+    unknown_areas: string[];
+    /** Per-area action preferences */
+    area_preferences: Record<string, UserPreferenceAction>;
+    /** Cached repeat answers for common questions */
+    repeat_answers: Record<string, string>;
+    /** Communication style preference */
+    communication_style: 'technical' | 'simple' | 'balanced';
+    /** Free-form notes about user preferences */
+    notes: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Per-level conversation in the agent tree (isolated per node) */
+export interface AgentConversation {
+    id: string;
+    /** Which tree node this conversation belongs to */
+    tree_node_id: string;
+    /** Level in the hierarchy */
+    level: AgentLevel;
+    /** Parent conversation ID (for threading) */
+    parent_conversation_id: string | null;
+    /** Message role */
+    role: ConversationRole;
+    /** Message content */
+    content: string;
+    /** Tokens consumed */
+    tokens_used: number;
+    /** Link to escalation chain question (if this message is part of a chain) */
+    question_id: string | null;
+    created_at: string;
+}
+
+/** Tracks a question as it escalates up the agent tree */
+export interface EscalationChain {
+    id: string;
+    /** Root node of the tree this chain belongs to */
+    tree_root_id: string;
+    /** Node that originated the question (usually an L8 worker) */
+    originating_node_id: string;
+    /** Node currently processing the question */
+    current_node_id: string;
+    /** The original question */
+    question: string;
+    /** Current status of the escalation */
+    status: EscalationChainStatus;
+    /** The answer (once resolved) */
+    answer: string | null;
+    /** JSON array of node IDs this question has visited */
+    levels_traversed: string;
+    /** Level at which the question was finally answered (null if unresolved) */
+    resolved_at_level: AgentLevel | null;
+    /** If the question caused a new ticket, the ticket ID */
+    ticket_id: string | null;
+    /** Additional context for the question */
+    context: string | null;
+    created_at: string;
+    resolved_at: string | null;
+}
+
+/** Agent-to-model mapping for multi-model routing */
+export interface ModelAssignment {
+    id: string;
+    /** Agent type or specific niche agent name */
+    agent_type: string;
+    /** Which capability this assignment is for */
+    capability: ModelCapability;
+    /** The model ID to use */
+    model_id: string;
+    /** Whether this is the default for this agent type */
+    is_default: boolean;
+    /** Priority for selection (lower = higher priority) */
+    priority: number;
+    created_at: string;
+    updated_at: string;
+}
+
+/** MCP confirmation stage — before calling agents externally */
+export interface MCPConfirmation {
+    id: string;
+    /** The MCP tool being called */
+    tool_name: string;
+    /** Agent name being invoked */
+    agent_name: string;
+    /** Human-readable description of what will happen */
+    description: string;
+    /** Preview of arguments being passed */
+    arguments_preview: string;
+    /** Current status */
+    status: MCPConfirmationStatus;
+    /** When this confirmation expires */
+    expires_at: string;
+    /** User's response (if any) */
+    user_response: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Agent description for MCP tool display */
+export interface AgentDescription {
+    agent_type: string;
+    name: string;
+    description: string;
+    capabilities: string[];
+    accepts_input: string;
+    produces_output: string;
+}
+
+/** Safe expression AST node — uses recursive descent parser, never arbitrary code execution */
+export interface ConditionNode {
+    type: 'comparison' | 'logical' | 'string_op' | 'literal' | 'variable' | 'not';
+    /** For comparison: '>', '<', '>=', '<=', '==', '!=' */
+    operator?: string;
+    /** For logical: '&&', '||' */
+    logical_op?: string;
+    /** For string_op: 'contains', 'startsWith', 'endsWith' */
+    string_op?: string;
+    /** For literal: the actual value */
+    value?: string | number | boolean;
+    /** For variable: the variable name (e.g., '$result', '$score') */
+    variable?: string;
+    /** For comparison/logical: left operand */
+    left?: ConditionNode;
+    /** For comparison/logical: right operand */
+    right?: ConditionNode;
+    /** For not: inner expression */
+    operand?: ConditionNode;
+}
+
+/** Niche agent definition — template for L4-L9 leaf agents (~230 total) */
+export interface NicheAgentDefinition {
+    id: string;
+    /** Display name (e.g., "InputFieldWorker", "RouteChecker") */
+    name: string;
+    /** Hierarchy level this agent operates at */
+    level: AgentLevel;
+    /** Domain specialty (e.g., "frontend.components.input", "backend.routes.crud") */
+    specialty: string;
+    /** Domain group (e.g., "code", "design", "data", "docs") */
+    domain: string;
+    /** Area within domain (e.g., "frontend", "backend", "testing", "infra") */
+    area: string;
+    /** System prompt template — {{scope}}, {{parentContext}} replaced at spawn time */
+    system_prompt_template: string;
+    /** Parent level this agent reports to */
+    parent_level: AgentLevel;
+    /** Required model capability for this agent */
+    required_capability: ModelCapability;
+    /** Default model capability to use if no specific assignment */
+    default_model_capability: ModelCapability;
+    /** JSON schema of expected input */
+    input_contract: string | null;
+    /** JSON schema of expected output */
+    output_contract: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Model info as detected from LM Studio /v1/models endpoint */
+export interface DetectedModelInfo {
+    id: string;
+    name: string;
+    capabilities: ModelCapability[];
+    context_window: number;
+    max_output_tokens: number;
+    is_loaded: boolean;
+}
+
+/** Question box options presented to user via UserCommAgent */
+export interface UserQuestionBox {
+    id: string;
+    /** Question title — rewritten for user's programming level */
+    title: string;
+    /** Context explanation — why this question matters */
+    context: string;
+    /** A/B/C options with pros/cons */
+    options: UserQuestionOption[];
+    /** Index of the recommended option */
+    recommended_index: number;
+    /** Whether to show "Other" free text input */
+    show_other: boolean;
+    /** Whether to show "I Don't Know" button */
+    show_idk: boolean;
+    /** Whether to show "Don't Care / You Decide" button */
+    show_dont_care: boolean;
+    /** The escalation chain ID this question belongs to */
+    escalation_chain_id: string | null;
+    /** The ticket ID this question is about */
+    ticket_id: string | null;
+    /** Technical area classification */
+    technical_area: string;
+    /** Question type classification */
+    question_type: 'preference' | 'technical' | 'design' | 'architecture' | 'config';
+    created_at: string;
+}
+
+/** A single option in a UserQuestionBox */
+export interface UserQuestionOption {
+    label: string;
+    description: string;
+    pros: string[];
+    cons: string[];
+}
+
+/** Profile suggestion from UserCommAgent — auto-detect patterns in user behavior */
+export interface ProfileSuggestion {
+    id: string;
+    suggestion_type: 'add_known_area' | 'add_strength' | 'update_level' | 'add_preference';
+    area: string;
+    reason: string;
+    /** Evidence (e.g., "You've answered 5 auth questions confidently") */
+    evidence: string;
+    /** Whether the user has responded */
+    status: 'pending' | 'accepted' | 'dismissed';
+    created_at: string;
+}

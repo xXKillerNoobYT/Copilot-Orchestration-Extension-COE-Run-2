@@ -1,10 +1,10 @@
 # 09 — Features & Capabilities
 
-**Version**: 8.0
+**Version**: 9.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [04-Workflows-and-How-It-Works](04-Workflows-and-How-It-Works.md)
-**Changelog**: v8.0 — Added Category 13 (Back-End Design System), Category 14 (Link Tree & Tag System), Category 15 (Review Queue & Filing System), Backend Architect Agent #17, renamed Frontend Architect, updated agent count (17), 15 routing categories, updated test count (2,770+), v8.0 compliance section | v7.0 — Added Category 11 (Team Queue System), Category 12 (Documentation & File Management), Coding Director Agent, updated agent count (16), updated test count (2,770+), v7.0 compliance section | v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
+**Changelog**: v9.0 — Added v9.0 Features section: 10-Level Agent Hierarchy (~230 niche agents, lazy spawning), Visual Workflow Designer (Mermaid-based, 9 step types, global templates), User Communication Orchestrator (Agent #18, message interception, profile-based routing), Question Escalation Chain (10-level bubble-up), Per-Agent Model Selection, Agent Permission System (8 permissions, tool access, LLM call limits), User Profile System (6 programming tiers, per-area action preferences), MCP Confirmation Stage, Niche Agent Browser, 7 new core services, 13 new DB tables, ~43 new API endpoints, 5 new UI panels, ~280 new tests | v8.0 — Added Category 13 (Back-End Design System), Category 14 (Link Tree & Tag System), Category 15 (Review Queue & Filing System), Backend Architect Agent #17, renamed Frontend Architect, updated agent count (17), 15 routing categories, updated test count (2,770+), v8.0 compliance section | v7.0 — Added Category 11 (Team Queue System), Category 12 (Documentation & File Management), Coding Director Agent, updated agent count (16), updated test count (2,770+), v7.0 compliance section | v3.0 — Standardized header, added User/Dev views, expanded feature descriptions, added dependency graph, added cross-references
 
 ---
 
@@ -728,6 +728,149 @@ flowchart TB
 - **Test suites**: 53+
 - **Total tests**: 2,770+
 - **Coverage target**: 100% (enforced in jest.config.js)
+
+### v9.0 Features (February 2026)
+
+#### 10-Level Agent Hierarchy — PLANNED (v9.0)
+
+Full corporate-style hierarchy with approximately 230 niche agents across 4 domains:
+
+| Domain | Approximate Agent Count | Examples |
+|--------|------------------------|---------|
+| **Code** | ~100 | Language-specific workers, test writers, refactorers, linters, build specialists |
+| **Design** | ~60 | Component designers, layout specialists, accessibility checkers, theme workers |
+| **Data** | ~40 | Schema designers, migration writers, query optimizers, seed data generators |
+| **Docs** | ~30 | API doc writers, README generators, changelog maintainers, tutorial builders |
+
+**Lazy spawning**: Levels L0-L4 (Boss AI, Directors, Senior Managers, Managers, Team Leads) are created as a skeleton structure on plan creation. Levels L5-L9 (Senior Specialists, Specialists, Workers, Junior Workers, Interns) are spawned on demand when work arrives that requires them. Despawned after configurable idle timeout to conserve resources.
+
+**Files**: `src/core/agent-tree-manager.ts` (hierarchy management, spawn/despawn, depth/fanout enforcement)
+
+#### Visual Workflow Designer — PLANNED (v9.0)
+
+Mermaid-based diagram editor for designing and executing multi-step agent workflows. Users draw flowcharts; COE executes them.
+
+**Step types**:
+
+| Step Type | Description |
+|-----------|-------------|
+| `agent_call` | Invoke a specific agent with parameters |
+| `condition` | Branch based on expression (safe AST evaluator) |
+| `parallel_branch` | Execute multiple paths concurrently |
+| `user_approval` | Pause workflow, present to user for approval |
+| `escalation` | Escalate to parent agent or user |
+| `tool_unlock` | Grant temporary tool access to an agent |
+| `wait` | Pause for duration or until event |
+| `loop` | Repeat steps with configurable exit condition |
+| `sub_workflow` | Embed another workflow as a single step |
+
+**Template system**: Global workflow templates (e.g., "Standard Code Review", "Full QA Pipeline") ship with COE. Per-plan customization allows overriding steps without modifying the global template. Templates stored in `workflow_templates` table.
+
+**Files**: `src/core/workflow-engine.ts` (execution), `src/core/workflow-designer.ts` (Mermaid rendering + editing)
+
+#### User Communication Orchestrator (Agent #18) — PLANNED (v9.0)
+
+Intercepts ALL system-to-user messages. No agent communicates directly with the user — everything routes through this agent.
+
+**Processing pipeline**:
+1. **Cache check** — Has this exact question been answered before? If yes, auto-answer.
+2. **Classify** — Is this informational, a question, an approval request, or an error report?
+3. **Profile routing** — Match user's programming level (6 tiers: Beginner, Junior, Intermediate, Senior, Expert, Architect) and communication preferences.
+4. **AI mode gate** — In `manual` mode, all decisions presented. In `smart` mode, only high-impact items shown.
+5. **Rewrite** — Reword the message for the user's level. A beginner gets plain English explanations; an expert gets technical shorthand.
+6. **Present** — Route to appropriate UI: question popup, notification, sidebar badge, or silent log.
+
+**Files**: `src/agents/user-comm-orchestrator-agent.ts`
+
+#### Question Escalation Chain — PLANNED (v9.0)
+
+Questions bubble up through the agent tree: L9 -> L8 -> ... -> L1 -> L0 (Boss AI) -> User Communication Orchestrator -> User.
+
+At each level, the agent checks:
+- Own scoped context
+- Decision Memory (semantic match against `user_decisions` table)
+- Sibling conversation history (within same branch only)
+- Support documents (keyword match)
+
+Most questions are resolved before reaching the user. Only genuinely novel questions that no agent at any level can answer reach the User Communication Orchestrator for user presentation.
+
+#### Per-Agent Model Selection — PLANNED (v9.0)
+
+Multiple LLM models can be configured per agent based on the agent's capability requirements:
+
+| Agent Role | Default Model Tier | Rationale |
+|-----------|-------------------|-----------|
+| Workers (L7-L9) | Fast (small, quick) | High throughput, simple tasks |
+| Checkers/Verifiers | Reasoning (medium, careful) | Accuracy matters more than speed |
+| Directors (L1-L2) | Reasoning (medium, careful) | Strategic decisions |
+| Boss AI (L0) | Best available | Critical orchestration decisions |
+
+Model assignment is configurable per agent via the Settings UI. Each agent's model can be changed independently. The `LLMService` routes calls to the correct model endpoint based on the calling agent's configuration.
+
+#### Agent Permission System — PLANNED (v9.0)
+
+Per-agent permissions with 8 permission types: `read`, `write`, `execute`, `escalate`, `spawn`, `configure`, `approve`, `delete`.
+
+**Tool access control**: Each agent has a whitelist of MCP tools it may invoke. Workers cannot call `scanCodeBase`; only Directors and above can call `callCOEAgent` to invoke other agents.
+
+**LLM call limits**: Per-agent configurable limits on LLM calls per task (default: 10 for workers, 25 for leads, 50 for directors). Prevents runaway token consumption.
+
+**Permission matrix UI**: New Settings tab showing a grid of agents x permissions with toggle switches. Changes logged to audit trail.
+
+#### User Profile System — PLANNED (v9.0)
+
+Persistent user profile that shapes how COE communicates and what decisions it makes autonomously:
+
+| Profile Field | Values | Purpose |
+|--------------|--------|---------|
+| **Programming level** | Beginner, Junior, Intermediate, Senior, Expert, Architect | Controls message complexity |
+| **Strengths** | Free-text list (e.g., "React, TypeScript, testing") | Agent avoids explaining these |
+| **Weaknesses** | Free-text list (e.g., "CSS, database design") | Agent provides more detail here |
+| **Known areas** | Per-topic familiarity flags | Skips explanations for known topics |
+| **Unknown areas** | Per-topic unfamiliarity flags | Adds extra context for unfamiliar topics |
+| **Per-area action preferences** | `always_decide`, `always_recommend`, `never_touch`, `ask_me` | Controls autonomy per domain |
+| **Repeat answer cache** | Auto-populated from Decision Memory | Prevents re-asking answered questions |
+| **Communication style** | Terse, Normal, Verbose | Controls response length |
+
+**Profile storage**: `user_profile` table in SQLite. Profile fields editable via Settings page. Profile is loaded into User Communication Orchestrator context on every message.
+
+#### MCP Confirmation Stage — PLANNED (v9.0)
+
+2-step confirmation for external agent calls via MCP:
+
+1. Client calls `callCOEAgent` with `confirm: true` — receives agent description + `confirmation_id`
+2. Client calls again with `confirmation_id` — agent executes
+
+Confirmations expire after configurable timeout (default: 60 seconds). One-time use. Scope-bound to specific agent + input. Can be enabled/disabled globally or per-agent.
+
+#### Niche Agent Browser — PLANNED (v9.0)
+
+New webapp panel for exploring the ~230 niche agent definitions:
+
+- **Browse** — Expandable tree view organized by domain (Code/Design/Data/Docs) and level (L0-L9)
+- **Search** — Full-text search across agent names, descriptions, and system prompt templates
+- **Edit** — Modify system prompt templates for any niche agent (changes apply to future spawns only, not currently active instances)
+- **View spawned** — See which niche agents are currently active for the selected plan, their status, and resource usage
+- **Spawn/despawn** — Manually spawn or despawn niche agents outside the automatic lifecycle
+
+**Files**: Webapp panel in `src/webapp/app.ts` (agent browser section). API endpoints at `/api/agents/niche/*`.
+
+#### v9.0 New Files Summary
+
+| Category | Files | Description |
+|----------|-------|-------------|
+| **Core services** | `src/core/agent-tree-manager.ts` | 10-level hierarchy management, spawn/despawn, depth/fanout |
+| | `src/core/workflow-engine.ts` | Workflow execution, step processing, safe condition evaluator |
+| | `src/core/workflow-designer.ts` | Mermaid diagram rendering and editing |
+| | `src/core/user-profile-service.ts` | User profile CRUD, preference resolution |
+| | `src/core/permission-service.ts` | Permission enforcement, matrix management |
+| | `src/core/model-router.ts` | Per-agent LLM model routing |
+| | `src/core/escalation-chain.ts` | Question escalation logic, level-by-level resolution |
+| **Agents** | `src/agents/user-comm-orchestrator-agent.ts` | Agent #18 — message interception, profile-based routing, rewriting |
+| **Database** | 13 new tables | `agent_tree_nodes`, `niche_agent_definitions`, `agent_permissions`, `agent_tool_access`, `workflow_templates`, `workflow_instances`, `workflow_steps`, `workflow_executions`, `user_profile`, `model_assignments`, `mcp_confirmations`, `escalation_log`, `agent_llm_limits` |
+| **API** | ~43 new endpoints | Agent tree CRUD, workflow CRUD + execute, user profile CRUD, permission matrix CRUD, model assignment CRUD, niche agent browse/search, escalation history, MCP confirmation |
+| **UI** | 5 new panels | Workflow Designer, Niche Agent Browser, Permission Matrix (Settings), User Profile (Settings), Escalation History |
+| **Tests** | ~280 new tests | Agent tree (40), workflow engine (50), permissions (30), user profile (25), model router (20), escalation chain (35), user comm orchestrator (30), workflow designer (25), integration (25) |
 
 ### Remaining Gaps (Planned)
 

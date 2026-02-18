@@ -29,6 +29,14 @@ import { AgentFileCleanupService } from './core/agent-file-cleanup';
 import { LinkManagerService } from './core/link-manager';
 import { TagManagerService } from './core/tag-manager';
 import { ReviewQueueManagerService } from './core/review-queue-manager';
+// v9.0 services
+import { AgentPermissionManager } from './core/agent-permission-manager';
+import { ModelRouter } from './core/model-router';
+import { UserProfileManager } from './core/user-profile-manager';
+import { NicheAgentFactory } from './core/niche-agent-factory';
+import { AgentTreeManager } from './core/agent-tree-manager';
+import { WorkflowDesigner } from './core/workflow-designer';
+import { WorkflowEngine } from './core/workflow-engine';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -250,6 +258,53 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const reviewQueueManager = new ReviewQueueManagerService(database, eventBus, outputChannel);
         outputChannel.appendLine('ReviewQueueManagerService initialized.');
+
+        // Phase 3e: Initialize v9.0 services
+        const agentPermissionManager = new AgentPermissionManager(database);
+        outputChannel.appendLine('AgentPermissionManager initialized.');
+
+        const modelRouter = new ModelRouter(database, configManager.getLLMConfig());
+        try {
+            await modelRouter.detectModelCapabilities();
+            outputChannel.appendLine('ModelRouter initialized with capability detection.');
+        } catch {
+            outputChannel.appendLine('ModelRouter initialized (capability detection unavailable).');
+        }
+
+        const userProfileManager = new UserProfileManager(database);
+        userProfileManager.getProfile(); // Auto-creates default profile on first run
+        outputChannel.appendLine('UserProfileManager initialized.');
+
+        const nicheAgentFactory = new NicheAgentFactory(database);
+        nicheAgentFactory.seedDefaultDefinitions();
+        outputChannel.appendLine('NicheAgentFactory initialized with default niche agent definitions seeded.');
+
+        const agentTreeManager = new AgentTreeManager(database, eventBus, configManager, outputChannel);
+        outputChannel.appendLine('AgentTreeManager initialized.');
+
+        const workflowDesigner = new WorkflowDesigner(database, eventBus, outputChannel);
+        outputChannel.appendLine('WorkflowDesigner initialized.');
+
+        const workflowEngine = new WorkflowEngine(database, eventBus, configManager, outputChannel);
+        outputChannel.appendLine('WorkflowEngine initialized.');
+
+        // v9.0: Inject services into orchestrator and agents
+        orchestrator.injectPermissionManager(agentPermissionManager);
+        orchestrator.injectModelRouter(modelRouter);
+        orchestrator.injectAgentTreeManager(agentTreeManager);
+        orchestrator.injectUserProfileManager(userProfileManager);
+        outputChannel.appendLine('v9.0 services injected into Orchestrator.');
+
+        // v9.0: Wire tree + workflow into BossAgent
+        const bossAgent = orchestrator.getBossAgent();
+        bossAgent.setTreeManager(agentTreeManager);
+        bossAgent.setWorkflowEngine(workflowEngine);
+        outputChannel.appendLine('AgentTreeManager and WorkflowEngine wired into BossAgent.');
+
+        // v9.0: Wire MCP confirmation
+        const mcpConfirmEnabled = configManager.getConfig().mcpConfirmationRequired !== false;
+        mcpServer.setConfirmationEnabled(mcpConfirmEnabled);
+        outputChannel.appendLine(`MCP confirmation stage: ${mcpConfirmEnabled ? 'enabled' : 'disabled'}.`);
 
         // Phase 4: Initialize UI — single status view (full app opens in browser)
         const statusView = new StatusViewProvider(database, mcpServer);

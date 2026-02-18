@@ -54,7 +54,7 @@ export class LLMService {
         this.maxRetries = config.maxRequestRetries ?? 5;
     }
 
-    async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean; priority?: LLMPriority }): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean; priority?: LLMPriority; model?: string }): Promise<LLMResponse> {
         // Check cache first (only for non-streaming, deterministic requests)
         const cacheKey = this.computeCacheKey(messages, options);
         const cached = this.getCachedResponse(cacheKey);
@@ -72,6 +72,7 @@ export class LLMService {
             max_tokens: options?.maxTokens ?? this.config.maxTokens,
             temperature: options?.temperature ?? 0.7,
             stream: options?.stream ?? true,
+            model: options?.model,
         };
 
         const priority: LLMPriority = options?.priority ?? 'normal';
@@ -271,7 +272,7 @@ export class LLMService {
 
         try {
             const body = JSON.stringify({
-                model: this.config.model,
+                model: request.model ?? this.config.model,
                 messages: request.messages,
                 max_tokens: request.max_tokens,
                 temperature: request.temperature,
@@ -399,7 +400,7 @@ export class LLMService {
 
         try {
             const body = JSON.stringify({
-                model: this.config.model,
+                model: request.model ?? this.config.model,
                 messages: request.messages,
                 max_tokens: request.max_tokens,
                 temperature: request.temperature,

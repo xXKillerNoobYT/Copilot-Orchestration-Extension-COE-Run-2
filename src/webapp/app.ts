@@ -759,6 +759,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <button class="tab" data-page="tickets">Tickets<span class="tab-badge red" id="badge-tickets"></span></button>
         <button class="tab" data-page="planning">Planning & Design<span class="tab-badge" id="badge-planning"></span></button>
         <button class="tab" data-page="agents">Agents<span class="tab-badge" id="badge-agents"></span></button>
+        <button class="tab" data-page="workflows">Workflows<span class="tab-badge" id="badge-workflows"></span></button>
         <button class="tab" data-page="coding">Coding<span class="tab-badge" id="badge-coding"></span></button>
         <button class="tab" data-page="github">GitHub<span class="tab-badge" id="badge-github"></span></button>
         <button class="tab" data-page="settings">Settings<span class="tab-badge" id="badge-settings"></span></button>
@@ -1543,7 +1544,115 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 <div class="page" id="page-agents">
     <h1>Agents</h1>
     <p class="subtitle">AI agents registered in the orchestration system</p>
-    <div class="card-grid" id="agentCards"></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+        <button class="btn btn-sm btn-secondary agent-sub-tab active" data-agent-sub="cards" onclick="switchAgentSubTab('cards')">Agent Cards</button>
+        <button class="btn btn-sm btn-secondary agent-sub-tab" data-agent-sub="tree" onclick="switchAgentSubTab('tree')">Agent Tree</button>
+        <button class="btn btn-sm btn-secondary agent-sub-tab" data-agent-sub="niche" onclick="switchAgentSubTab('niche')">Niche Agents</button>
+    </div>
+    <div id="agentSubCards" class="agent-sub-panel">
+        <div class="card-grid" id="agentCards"></div>
+    </div>
+    <div id="agentSubTree" class="agent-sub-panel" style="display:none">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+            <select id="treeFilterLevel" onchange="loadAgentTree()" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                <option value="">All Levels</option>
+                <option value="0">L0 Boss</option>
+                <option value="1">L1 Global</option>
+                <option value="2">L2 Domain</option>
+                <option value="3">L3 Area</option>
+                <option value="4">L4 Manager</option>
+                <option value="5">L5 SubManager</option>
+                <option value="6">L6 TeamLead</option>
+                <option value="7">L7 WorkerGroup</option>
+                <option value="8">L8 Worker</option>
+                <option value="9">L9 Checker</option>
+            </select>
+            <select id="treeFilterStatus" onchange="loadAgentTree()" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                <option value="">All Statuses</option>
+                <option value="idle">Idle</option>
+                <option value="active">Active</option>
+                <option value="working">Working</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+            </select>
+            <button class="btn btn-sm btn-secondary" onclick="loadAgentTree()">Refresh</button>
+        </div>
+        <div id="agentTreeView" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;min-height:300px;overflow-x:auto"></div>
+        <div id="agentTreeDetail" style="margin-top:12px;display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px"></div>
+    </div>
+    <div id="agentSubNiche" class="agent-sub-panel" style="display:none">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="nicheSearch" placeholder="Search niche agents..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)" oninput="filterNicheAgents()">
+            <select id="nicheFilterLevel" onchange="loadNicheAgents()" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                <option value="">All Levels</option>
+                <option value="4">L4 Manager</option>
+                <option value="5">L5 SubManager</option>
+                <option value="6">L6 TeamLead</option>
+                <option value="7">L7 WorkerGroup</option>
+                <option value="8">L8 Worker</option>
+                <option value="9">L9 Checker</option>
+            </select>
+        </div>
+        <div id="nicheAgentsList" class="card-grid"></div>
+    </div>
+</div>
+
+<!-- ==================== WORKFLOWS (v9.0) ==================== -->
+<div class="page" id="page-workflows">
+    <h1>Workflow Designer</h1>
+    <p class="subtitle">Create, edit, and execute multi-step workflows with visual diagrams</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="createNewWorkflow()">+ New Workflow</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadWorkflowTemplates()">Templates</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadWorkflows()">Refresh</button>
+    </div>
+    <div style="display:flex;gap:12px;min-height:500px">
+        <div style="width:280px;flex-shrink:0">
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+                <div style="font-weight:600;margin-bottom:8px">Workflows</div>
+                <div id="workflowList" style="max-height:400px;overflow-y:auto"></div>
+            </div>
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-top:8px">
+                <div style="font-weight:600;margin-bottom:8px">Step Palette</div>
+                <div id="stepPalette" style="display:flex;flex-direction:column;gap:4px">
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('agent_call')" style="text-align:left">Agent Call</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('condition')" style="text-align:left">Condition</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('parallel_branch')" style="text-align:left">Parallel Branch</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('user_approval')" style="text-align:left">User Approval</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('escalation')" style="text-align:left">Escalation</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('tool_unlock')" style="text-align:left">Tool Unlock</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('wait')" style="text-align:left">Wait</button>
+                    <button class="btn btn-sm btn-secondary" onclick="addWorkflowStep('loop')" style="text-align:left">Loop</button>
+                </div>
+            </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-sm btn-secondary" onclick="validateWorkflow()">Validate</button>
+                <button class="btn btn-sm btn-primary" onclick="executeWorkflow()">Run</button>
+                <button class="btn btn-sm btn-secondary" onclick="cloneWorkflow()">Clone</button>
+                <button class="btn btn-sm btn-secondary" onclick="exportWorkflow()">Export</button>
+                <span id="wfValidationStatus" style="font-size:0.85em;color:var(--overlay)"></span>
+            </div>
+            <div id="workflowDiagram" style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;min-height:300px;overflow:auto">
+                <div class="empty">Select or create a workflow to view its diagram</div>
+            </div>
+        </div>
+        <div style="width:300px;flex-shrink:0">
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+                <div style="font-weight:600;margin-bottom:8px">Step Properties</div>
+                <div id="stepPropsPanel">
+                    <div class="empty" style="font-size:0.85em">Select a step to edit</div>
+                </div>
+            </div>
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-top:8px">
+                <div style="font-weight:600;margin-bottom:8px">Executions</div>
+                <div id="wfExecutionsList" style="max-height:200px;overflow-y:auto">
+                    <div class="empty" style="font-size:0.85em">No executions yet</div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- ==================== CODING WORKSTATION (v5.0) ==================== -->
@@ -2006,6 +2115,7 @@ function loadPage(page) {
             }
         }); break;
         case 'agents': loadAgents(); break;
+        case 'workflows': loadWorkflows(); break;
         case 'coding': loadCodingSessions(); break;
         case 'settings': loadSettings(); break;
         case 'github': loadGitHubIssues(); break;
@@ -5666,6 +5776,26 @@ function showSettingsSection(section) {
             '</div>';
         },
 
+        'agent-customization': () => {
+            return '<div class="settings-section"><h3>Agent Permissions & Models</h3>' +
+                '<p style="color:var(--overlay);font-size:0.85em;margin-bottom:12px">Configure per-agent permissions, model assignments, and tool access.</p>' +
+                '<div style="display:flex;gap:8px;margin-bottom:12px">' +
+                '<button class="btn btn-sm btn-secondary" onclick="loadPermissionsTable()">Load Permissions</button>' +
+                '<button class="btn btn-sm btn-secondary" onclick="loadModelAssignmentsTable()">Load Model Assignments</button>' +
+                '<button class="btn btn-sm btn-secondary" onclick="detectModels()">Detect Models</button>' +
+                '</div>' +
+                '<div id="permissionsTableContainer"></div>' +
+                '<div id="modelAssignmentsContainer" style="margin-top:16px"></div>' +
+                '</div>';
+        },
+
+        'user-profile': () => {
+            return '<div class="settings-section"><h3>User Profile</h3>' +
+                '<p style="color:var(--overlay);font-size:0.85em;margin-bottom:12px">Your programming level and preferences affect how the AI communicates with you.</p>' +
+                '<div id="userProfileContainer"></div>' +
+                '</div>';
+        },
+
         advanced: () => '<div class="settings-section"><h3>Advanced</h3>' +
             settingRow('Watcher Debounce (ms)', 'File change detection delay', '<input id="setting-advanced-debounce" type="number" value="' + (settingsConfig.watcher?.debounceMs || 2000) + '" onchange="updateSetting(\\'watcher.debounceMs\\', +this.value)">', 'setting-advanced-debounce') +
             settingRow('Database Path', 'SQLite database location', '<input id="setting-advanced-dbPath" value=".coe/tickets.db" disabled style="opacity:0.6">', 'setting-advanced-dbPath') +
@@ -5679,6 +5809,14 @@ function showSettingsSection(section) {
     // v4.3: Auto-load model list when LLM section is shown
     if (section === 'llm') {
         setTimeout(function() { refreshModelList(); }, 100);
+    }
+    // v9.0: Auto-load user profile when section is shown
+    if (section === 'user-profile') {
+        setTimeout(function() { loadUserProfile(); }, 50);
+    }
+    // v9.0: Auto-load permissions when section is shown
+    if (section === 'agent-customization') {
+        setTimeout(function() { loadPermissionsTable(); }, 50);
     }
 }
 
@@ -7503,11 +7641,15 @@ function loadSettingsPage() {
     var hasTicketProcessing = false;
     var hasBossAi = false;
     var hasClarity = false;
+    var hasAgentCustomization = false;
+    var hasUserProfile = false;
     existingItems.forEach(function(item) {
         if (item.dataset.settings === 'design-quality') hasDesignQuality = true;
         if (item.dataset.settings === 'ticket-processing') hasTicketProcessing = true;
         if (item.dataset.settings === 'boss-ai') hasBossAi = true;
         if (item.dataset.settings === 'clarity-agent') hasClarity = true;
+        if (item.dataset.settings === 'agent-customization') hasAgentCustomization = true;
+        if (item.dataset.settings === 'user-profile') hasUserProfile = true;
     });
 
     // Insert new nav items before Advanced
@@ -7543,6 +7685,570 @@ function loadSettingsPage() {
         cItem.textContent = 'Clarity Agent';
         cItem.onclick = function() { showSettingsSection('clarity-agent'); };
         nav.insertBefore(cItem, advancedItem);
+    }
+    if (!hasAgentCustomization && advancedItem) {
+        var acItem = document.createElement('div');
+        acItem.className = 'settings-nav-item';
+        acItem.dataset.settings = 'agent-customization';
+        acItem.textContent = 'Agent Permissions';
+        acItem.onclick = function() { showSettingsSection('agent-customization'); };
+        nav.insertBefore(acItem, advancedItem);
+    }
+    if (!hasUserProfile && advancedItem) {
+        var upItem = document.createElement('div');
+        upItem.className = 'settings-nav-item';
+        upItem.dataset.settings = 'user-profile';
+        upItem.textContent = 'User Profile';
+        upItem.onclick = function() { showSettingsSection('user-profile'); };
+        nav.insertBefore(upItem, advancedItem);
+    }
+}
+
+// ==================== v9.0: WORKFLOW DESIGNER ====================
+var currentWorkflowId = null;
+var currentWorkflowSteps = [];
+
+async function loadWorkflows() {
+    try {
+        var result = await api('v9/workflows');
+        var workflows = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        var container = document.getElementById('workflowList');
+        if (!container) return;
+        container.innerHTML = workflows.map(function(wf) {
+            var cls = wf.id === currentWorkflowId ? 'background:var(--surface0);' : '';
+            var statusColor = wf.status === 'running' ? 'var(--green)' : wf.status === 'failed' ? 'var(--red)' : 'var(--overlay)';
+            return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer;' + cls + '" onclick="selectWorkflow(\'' + wf.id + '\')">' +
+                '<div style="font-weight:500;font-size:0.9em">' + esc(wf.name) + '</div>' +
+                '<div style="font-size:0.8em;color:' + statusColor + '">' + esc(wf.status) + (wf.is_template ? ' (template)' : '') + '</div>' +
+                '</div>';
+        }).join('') || '<div class="empty" style="font-size:0.85em">No workflows yet</div>';
+    } catch (err) {
+        var container = document.getElementById('workflowList');
+        if (container) container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function loadWorkflowTemplates() {
+    try {
+        var result = await api('v9/workflow-templates');
+        var templates = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        var container = document.getElementById('workflowList');
+        if (!container) return;
+        container.innerHTML = '<div style="padding:6px 8px;font-size:0.85em;color:var(--overlay);border-bottom:1px solid var(--border)">Templates</div>' +
+            templates.map(function(t) {
+                return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectWorkflow(\'' + t.id + '\')">' +
+                    '<div style="font-weight:500;font-size:0.9em">' + esc(t.name) + '</div>' +
+                    '<div style="font-size:0.8em;color:var(--overlay)">Template</div>' +
+                    '</div>';
+            }).join('') || '<div class="empty" style="font-size:0.85em">No templates</div>';
+    } catch (err) {
+        showToast('Failed to load templates: ' + String(err), 'error');
+    }
+}
+
+async function createNewWorkflow() {
+    var name = prompt('Workflow name:');
+    if (!name) return;
+    try {
+        var result = await api('v9/workflows', { method: 'POST', body: { name: name, description: '' } });
+        if (result && result.data) {
+            currentWorkflowId = result.data.id;
+            showToast('Workflow created', 'info');
+        }
+        loadWorkflows();
+    } catch (err) {
+        showToast('Failed to create workflow: ' + String(err), 'error');
+    }
+}
+
+async function selectWorkflow(id) {
+    currentWorkflowId = id;
+    loadWorkflows();
+    try {
+        var mermaidResult = await api('v9/workflows/' + id + '/mermaid');
+        var diagram = document.getElementById('workflowDiagram');
+        if (diagram) {
+            var mermaidSrc = (mermaidResult && mermaidResult.data) ? mermaidResult.data.mermaid : '';
+            if (mermaidSrc) {
+                diagram.innerHTML = '<pre style="font-size:0.85em;white-space:pre-wrap;color:var(--text)">' + esc(mermaidSrc) + '</pre>';
+            } else {
+                diagram.innerHTML = '<div class="empty">No steps defined yet. Use the Step Palette to add steps.</div>';
+            }
+        }
+        // Load executions
+        var execResult = await api('v9/workflows/' + id + '/executions');
+        var executions = (execResult && execResult.data) ? execResult.data : [];
+        var execContainer = document.getElementById('wfExecutionsList');
+        if (execContainer) {
+            execContainer.innerHTML = executions.map(function(ex) {
+                var color = ex.status === 'completed' ? 'var(--green)' : ex.status === 'failed' ? 'var(--red)' : ex.status === 'running' ? 'var(--yellow)' : 'var(--overlay)';
+                return '<div style="padding:6px;border-bottom:1px solid var(--border);font-size:0.85em">' +
+                    '<span style="color:' + color + '">' + esc(ex.status) + '</span>' +
+                    (ex.started_at ? ' — ' + esc(new Date(ex.started_at).toLocaleString()) : '') +
+                    '</div>';
+            }).join('') || '<div class="empty" style="font-size:0.85em">No executions</div>';
+        }
+    } catch (err) {
+        showToast('Failed to load workflow: ' + String(err), 'error');
+    }
+}
+
+async function addWorkflowStep(stepType) {
+    if (!currentWorkflowId) { showToast('Select a workflow first', 'warning'); return; }
+    try {
+        var result = await api('v9/workflows/' + currentWorkflowId + '/steps', {
+            method: 'POST',
+            body: { step_type: stepType, label: stepType.replace(/_/g, ' ') }
+        });
+        showToast('Step added', 'info');
+        selectWorkflow(currentWorkflowId);
+    } catch (err) {
+        showToast('Failed to add step: ' + String(err), 'error');
+    }
+}
+
+async function validateWorkflow() {
+    if (!currentWorkflowId) { showToast('Select a workflow first', 'warning'); return; }
+    try {
+        var result = await api('v9/workflows/' + currentWorkflowId + '/validate', { method: 'POST' });
+        var status = document.getElementById('wfValidationStatus');
+        if (result && result.data && result.data.valid) {
+            if (status) status.innerHTML = '<span style="color:var(--green)">Valid</span>';
+            showToast('Workflow is valid', 'info');
+        } else {
+            var errors = (result && result.data && result.data.errors) || [];
+            if (status) status.innerHTML = '<span style="color:var(--red)">' + errors.length + ' issue(s)</span>';
+            showToast('Validation issues: ' + errors.join(', '), 'warning');
+        }
+    } catch (err) {
+        showToast('Validation failed: ' + String(err), 'error');
+    }
+}
+
+async function executeWorkflow() {
+    if (!currentWorkflowId) { showToast('Select a workflow first', 'warning'); return; }
+    try {
+        await api('v9/workflows/' + currentWorkflowId + '/execute', { method: 'POST', body: {} });
+        showToast('Workflow execution started', 'info');
+        selectWorkflow(currentWorkflowId);
+    } catch (err) {
+        showToast('Execution failed: ' + String(err), 'error');
+    }
+}
+
+async function cloneWorkflow() {
+    if (!currentWorkflowId) { showToast('Select a workflow first', 'warning'); return; }
+    var name = prompt('Name for cloned workflow:');
+    if (!name) return;
+    try {
+        var result = await api('v9/workflows/' + currentWorkflowId + '/clone', { method: 'POST', body: { name: name } });
+        showToast('Workflow cloned', 'info');
+        if (result && result.data) currentWorkflowId = result.data.id;
+        loadWorkflows();
+    } catch (err) {
+        showToast('Clone failed: ' + String(err), 'error');
+    }
+}
+
+function exportWorkflow() {
+    if (!currentWorkflowId) { showToast('Select a workflow first', 'warning'); return; }
+    api('v9/workflows/' + currentWorkflowId).then(function(result) {
+        var json = JSON.stringify(result && result.data || {}, null, 2);
+        var blob = new Blob([json], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'workflow-export.json'; a.click();
+        URL.revokeObjectURL(url);
+    }).catch(function(err) {
+        showToast('Export failed: ' + String(err), 'error');
+    });
+}
+
+// ==================== v9.0: AGENT TREE VIEWER ====================
+function switchAgentSubTab(sub) {
+    document.querySelectorAll('.agent-sub-tab').forEach(function(b) { b.classList.toggle('active', b.dataset.agentSub === sub); });
+    document.querySelectorAll('.agent-sub-panel').forEach(function(p) { p.style.display = 'none'; });
+    var panel = document.getElementById('agentSub' + sub.charAt(0).toUpperCase() + sub.slice(1));
+    if (panel) panel.style.display = '';
+    if (sub === 'tree') loadAgentTree();
+    if (sub === 'niche') loadNicheAgents();
+}
+
+async function loadAgentTree() {
+    var container = document.getElementById('agentTreeView');
+    if (!container) return;
+    try {
+        var result = await api('v9/tree');
+        var nodes = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        if (nodes.length === 0) {
+            container.innerHTML = '<div class="empty">No agent tree active. Build a tree from the Planning tab.</div>';
+            return;
+        }
+        // Filter
+        var levelFilter = document.getElementById('treeFilterLevel');
+        var statusFilter = document.getElementById('treeFilterStatus');
+        var filterLevel = levelFilter ? levelFilter.value : '';
+        var filterStatus = statusFilter ? statusFilter.value : '';
+        if (filterLevel) nodes = nodes.filter(function(n) { return String(n.level) === filterLevel || n.level === 'L' + filterLevel; });
+        if (filterStatus) nodes = nodes.filter(function(n) { return n.status === filterStatus; });
+
+        // Build tree display
+        var html = nodes.map(function(n) {
+            var levelNum = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
+            var indent = levelNum * 20;
+            var statusColors = { idle: 'var(--overlay)', active: 'var(--blue)', working: 'var(--yellow)', completed: 'var(--green)', failed: 'var(--red)', escalated: 'var(--orange)' };
+            var color = statusColors[n.status] || 'var(--overlay)';
+            var levelBadge = '<span style="display:inline-block;min-width:24px;padding:1px 4px;border-radius:3px;background:var(--surface0);color:var(--subtext);font-size:0.75em;text-align:center;margin-right:6px">L' + levelNum + '</span>';
+            return '<div style="padding:4px 8px;padding-left:' + (8 + indent) + 'px;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.9em" onclick="showTreeNodeDetail(\'' + n.id + '\')">' +
+                levelBadge + '<strong>' + esc(n.name || n.agent_type || 'Node') + '</strong>' +
+                '<span style="color:' + color + ';margin-left:8px;font-size:0.85em">' + esc(n.status || 'idle') + '</span>' +
+                (n.tokens_consumed ? '<span style="color:var(--overlay);margin-left:8px;font-size:0.8em">' + n.tokens_consumed + ' tokens</span>' : '') +
+                '</div>';
+        }).join('');
+        container.innerHTML = html || '<div class="empty">No nodes match filter</div>';
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function showTreeNodeDetail(nodeId) {
+    var detail = document.getElementById('agentTreeDetail');
+    if (!detail) return;
+    detail.style.display = '';
+    try {
+        var result = await api('v9/tree/' + nodeId);
+        var node = (result && result.data) ? result.data : result;
+        if (!node) { detail.innerHTML = '<div class="empty">Node not found</div>'; return; }
+
+        var convResult = await api('v9/tree/' + nodeId + '/conversations');
+        var conversations = (convResult && convResult.data) ? convResult.data : (Array.isArray(convResult) ? convResult : []);
+
+        detail.innerHTML =
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+            '<h3 style="margin:0">' + esc(node.name || node.agent_type) + '</h3>' +
+            '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\'agentTreeDetail\').style.display=\'none\'">Close</button>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85em;margin-bottom:12px">' +
+            '<div><strong>Level:</strong> ' + esc(String(node.level)) + '</div>' +
+            '<div><strong>Status:</strong> ' + esc(node.status) + '</div>' +
+            '<div><strong>Scope:</strong> ' + esc(node.scope || 'global') + '</div>' +
+            '<div><strong>Retries:</strong> ' + (node.retries || 0) + '</div>' +
+            '<div><strong>Escalations:</strong> ' + (node.escalations || 0) + '</div>' +
+            '<div><strong>Tokens:</strong> ' + (node.tokens_consumed || 0) + '</div>' +
+            '</div>' +
+            '<div style="font-weight:600;margin-bottom:4px">Conversations (' + conversations.length + ')</div>' +
+            '<div style="max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px">' +
+            (conversations.length > 0 ? conversations.map(function(c) {
+                var roleColor = c.role === 'agent' ? 'var(--blue)' : c.role === 'user' ? 'var(--green)' : 'var(--overlay)';
+                return '<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.85em">' +
+                    '<span style="color:' + roleColor + ';font-weight:500">' + esc(c.role) + ':</span> ' +
+                    esc((c.content || '').substring(0, 200)) +
+                    ((c.content || '').length > 200 ? '...' : '') +
+                    '</div>';
+            }).join('') : '<div class="empty" style="font-size:0.85em">No conversations recorded</div>') +
+            '</div>';
+    } catch (err) {
+        detail.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+// ==================== v9.0: NICHE AGENT BROWSER ====================
+var allNicheAgents = [];
+
+async function loadNicheAgents() {
+    var container = document.getElementById('nicheAgentsList');
+    if (!container) return;
+    try {
+        var levelFilter = document.getElementById('nicheFilterLevel');
+        var qs = 'v9/niche-agents';
+        if (levelFilter && levelFilter.value) qs += '?level=' + levelFilter.value;
+        var result = await api(qs);
+        allNicheAgents = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        renderNicheAgents(allNicheAgents);
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+function filterNicheAgents() {
+    var search = (document.getElementById('nicheSearch') || {}).value || '';
+    search = search.toLowerCase();
+    var filtered = allNicheAgents.filter(function(a) {
+        return !search || (a.name || '').toLowerCase().indexOf(search) >= 0 || (a.specialty || '').toLowerCase().indexOf(search) >= 0;
+    });
+    renderNicheAgents(filtered);
+}
+
+function renderNicheAgents(agents) {
+    var container = document.getElementById('nicheAgentsList');
+    if (!container) return;
+    container.innerHTML = agents.map(function(a) {
+        var capColor = a.required_capability === 'reasoning' ? 'var(--blue)' : a.required_capability === 'code' ? 'var(--green)' : a.required_capability === 'fast' ? 'var(--yellow)' : 'var(--overlay)';
+        return '<div class="card" style="cursor:pointer" onclick="editNicheAgent(\'' + a.id + '\')">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center">' +
+            '<strong style="font-size:0.9em">' + esc(a.name) + '</strong>' +
+            '<span style="font-size:0.75em;padding:2px 6px;border-radius:3px;background:var(--surface0);color:var(--subtext)">L' + (a.level || '?') + '</span>' +
+            '</div>' +
+            '<div style="font-size:0.8em;color:var(--overlay);margin-top:4px">' + esc(a.specialty || '') + '</div>' +
+            '<div style="font-size:0.75em;margin-top:4px"><span style="color:' + capColor + '">' + esc(a.required_capability || 'general') + '</span></div>' +
+            '</div>';
+    }).join('') || '<div class="empty">No niche agents found</div>';
+}
+
+async function editNicheAgent(id) {
+    try {
+        var result = await api('v9/niche-agents/' + id);
+        var agent = (result && result.data) ? result.data : result;
+        if (!agent) { showToast('Agent not found', 'error'); return; }
+        var newPrompt = prompt('Edit system prompt template for ' + (agent.name || id) + ':', agent.system_prompt_template || '');
+        if (newPrompt === null) return;
+        await api('v9/niche-agents/' + id, { method: 'PUT', body: { system_prompt_template: newPrompt } });
+        showToast('Niche agent updated', 'info');
+        loadNicheAgents();
+    } catch (err) {
+        showToast('Failed to update: ' + String(err), 'error');
+    }
+}
+
+// ==================== v9.0: AGENT CUSTOMIZATION (PERMISSIONS + MODELS) ====================
+async function loadPermissionsTable() {
+    var container = document.getElementById('permissionsTableContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="empty" style="font-size:0.85em">Loading permissions...</div>';
+    try {
+        // Load all known agent types and their permissions
+        var agentTypes = ['planning', 'verification', 'answer', 'research', 'clarity', 'boss', 'review',
+            'design_architect', 'backend_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
+            'coding_director', 'ui_testing', 'observation', 'custom', 'user_communication'];
+        var rows = '';
+        for (var i = 0; i < agentTypes.length; i++) {
+            var at = agentTypes[i];
+            try {
+                var result = await api('v9/permissions/' + at);
+                var perm = (result && result.data) ? result.data : null;
+                var perms = perm ? (perm.permissions || []) : ['read', 'write', 'execute', 'escalate'];
+                var canSpawn = perm ? perm.can_spawn : true;
+                var maxLlm = perm ? (perm.max_llm_calls || 100) : 100;
+                rows += '<tr>' +
+                    '<td style="font-weight:500">' + esc(at) + '</td>' +
+                    '<td>' + ['read', 'write', 'execute', 'escalate', 'spawn', 'configure', 'approve', 'delete'].map(function(p) {
+                        var checked = perms.indexOf(p) >= 0 ? ' checked' : '';
+                        return '<label style="font-size:0.8em;margin-right:6px"><input type="checkbox"' + checked + ' onchange="updateAgentPermission(\'' + at + '\', \'' + p + '\', this.checked)"> ' + p + '</label>';
+                    }).join('') + '</td>' +
+                    '<td><input type="number" value="' + maxLlm + '" style="width:60px;padding:2px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px" onchange="updateAgentMaxLlm(\'' + at + '\', +this.value)"></td>' +
+                    '</tr>';
+            } catch(e) {
+                rows += '<tr><td>' + esc(at) + '</td><td colspan="2" style="color:var(--overlay)">No permissions set (using defaults)</td></tr>';
+            }
+        }
+        container.innerHTML = '<table style="width:100%;font-size:0.85em"><thead><tr><th>Agent</th><th>Permissions</th><th>Max LLM Calls</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function updateAgentPermission(agentType, permission, enabled) {
+    try {
+        var result = await api('v9/permissions/' + agentType);
+        var existing = (result && result.data) ? result.data : null;
+        var perms = existing ? (existing.permissions || []).slice() : ['read', 'write', 'execute', 'escalate'];
+        if (enabled && perms.indexOf(permission) < 0) perms.push(permission);
+        if (!enabled) perms = perms.filter(function(p) { return p !== permission; });
+        await api('v9/permissions/' + agentType, { method: 'PUT', body: { permissions: perms } });
+    } catch (err) {
+        showToast('Failed to update permission: ' + String(err), 'error');
+    }
+}
+
+async function updateAgentMaxLlm(agentType, value) {
+    try {
+        await api('v9/permissions/' + agentType, { method: 'PUT', body: { max_llm_calls: value } });
+    } catch (err) {
+        showToast('Failed to update: ' + String(err), 'error');
+    }
+}
+
+async function loadModelAssignmentsTable() {
+    var container = document.getElementById('modelAssignmentsContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="empty" style="font-size:0.85em">Loading model assignments...</div>';
+    try {
+        var result = await api('v9/models');
+        var models = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+
+        var assignResult = await api('v9/model-assignments/all');
+        var assignments = (assignResult && assignResult.data) ? assignResult.data : [];
+
+        container.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Available Models</div>' +
+            '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px">' +
+            models.map(function(m) { return '<span style="padding:2px 8px;background:var(--surface0);border-radius:4px;font-size:0.8em">' + esc(m.id || m) + '</span>'; }).join('') +
+            (models.length === 0 ? '<span style="color:var(--overlay);font-size:0.85em">No models detected. Click "Detect Models".</span>' : '') +
+            '</div>' +
+            '<div style="font-weight:600;margin-bottom:8px">Assignments</div>' +
+            (assignments.length > 0 ? '<table style="width:100%;font-size:0.85em"><thead><tr><th>Agent</th><th>Capability</th><th>Model</th><th>Actions</th></tr></thead><tbody>' +
+            assignments.map(function(a) {
+                return '<tr><td>' + esc(a.agent_type) + '</td><td>' + esc(a.capability) + '</td><td>' + esc(a.model_id) + '</td>' +
+                    '<td><button class="btn btn-sm btn-danger" onclick="deleteModelAssignment(\'' + a.agent_type + '\')">Remove</button></td></tr>';
+            }).join('') + '</tbody></table>' : '<div class="empty" style="font-size:0.85em">No custom assignments (using defaults)</div>');
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function detectModels() {
+    try {
+        var result = await api('v9/models/detect', { method: 'POST' });
+        showToast('Model detection complete', 'info');
+        loadModelAssignmentsTable();
+    } catch (err) {
+        showToast('Detection failed: ' + String(err), 'error');
+    }
+}
+
+async function deleteModelAssignment(agentType) {
+    try {
+        await api('v9/model-assignments/' + agentType, { method: 'DELETE' });
+        showToast('Assignment removed', 'info');
+        loadModelAssignmentsTable();
+    } catch (err) {
+        showToast('Failed to delete: ' + String(err), 'error');
+    }
+}
+
+// ==================== v9.0: USER PROFILE ====================
+async function loadUserProfile() {
+    var container = document.getElementById('userProfileContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="empty" style="font-size:0.85em">Loading profile...</div>';
+    try {
+        var result = await api('v9/user-profile');
+        var profile = (result && result.data) ? result.data : result;
+        if (!profile || !profile.id) {
+            container.innerHTML = '<div class="empty">No profile found. One will be created on first use.</div>';
+            return;
+        }
+
+        var levels = ['noob', 'new', 'getting_around', 'good', 'really_good', 'expert'];
+        var styles = ['technical', 'simple', 'balanced'];
+
+        container.innerHTML =
+            '<div style="display:grid;gap:12px">' +
+            // Programming level
+            '<div>' + settingRow('Programming Level', 'How experienced are you? Affects how the AI explains things.',
+                '<select id="profile-level" onchange="updateProfileLevel(this.value)" style="padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px">' +
+                levels.map(function(l) { return '<option value="' + l + '"' + (profile.programming_level === l ? ' selected' : '') + '>' + l.replace(/_/g, ' ') + '</option>'; }).join('') +
+                '</select>', 'profile-level') + '</div>' +
+            // Communication style
+            '<div>' + settingRow('Communication Style', 'How should the AI talk to you?',
+                '<select id="profile-style" onchange="updateProfileField(\'communication_style\', this.value)" style="padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px">' +
+                styles.map(function(s) { return '<option value="' + s + '"' + (profile.communication_style === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') +
+                '</select>', 'profile-style') + '</div>' +
+            // Strengths
+            '<div>' + settingRow('Strengths', 'Technical areas you are strong in (comma-separated)',
+                '<input id="profile-strengths" value="' + esc((profile.strengths || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'strengths\', this.value)">', 'profile-strengths') + '</div>' +
+            // Weaknesses
+            '<div>' + settingRow('Weaknesses', 'Areas you need help with',
+                '<input id="profile-weaknesses" value="' + esc((profile.weaknesses || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'weaknesses\', this.value)">', 'profile-weaknesses') + '</div>' +
+            // Known areas
+            '<div>' + settingRow('Known Areas', 'Areas you know well (AI will ask directly)',
+                '<input id="profile-known" value="' + esc((profile.known_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'known_areas\', this.value)">', 'profile-known') + '</div>' +
+            // Unknown areas
+            '<div>' + settingRow('Unknown Areas', 'Areas you are unfamiliar with (AI will research first)',
+                '<input id="profile-unknown" value="' + esc((profile.unknown_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'unknown_areas\', this.value)">', 'profile-unknown') + '</div>' +
+            // Area preferences
+            '<div style="font-weight:600;margin-top:4px">Area Preferences</div>' +
+            '<div style="font-size:0.85em;color:var(--overlay);margin-bottom:8px">Set how the AI handles decisions in specific areas.</div>' +
+            '<div id="areaPreferencesContainer">' + renderAreaPreferences(profile.area_preferences || {}) + '</div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px">' +
+            '<input id="newAreaName" placeholder="Area name" style="flex:1;padding:4px 8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px">' +
+            '<select id="newAreaAction" style="padding:4px 8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px"><option value="always_decide">Always Decide</option><option value="always_recommend">Always Recommend</option><option value="never_touch">Never Touch</option><option value="ask_me">Ask Me</option></select>' +
+            '<button class="btn btn-sm btn-secondary" onclick="addAreaPreference()">Add</button>' +
+            '</div>' +
+            // Notes
+            '<div style="margin-top:8px">' + settingRow('Notes', 'Free-form notes about your preferences',
+                '<textarea id="profile-notes" rows="3" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px;resize:vertical" onchange="updateProfileField(\'notes\', this.value)">' + esc(profile.notes || '') + '</textarea>', 'profile-notes') + '</div>' +
+            // Repeat answers (read-only)
+            '<div style="font-weight:600;margin-top:4px">Repeat Answers (auto-cached)</div>' +
+            '<div style="font-size:0.85em;max-height:150px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px">' +
+            (Object.keys(profile.repeat_answers || {}).length > 0 ?
+                Object.entries(profile.repeat_answers || {}).map(function(entry) {
+                    return '<div style="padding:3px 0;border-bottom:1px solid var(--border)"><strong>' + esc(entry[0]) + ':</strong> ' + esc(String(entry[1])) + '</div>';
+                }).join('') :
+                '<span style="color:var(--overlay)">No cached answers yet</span>') +
+            '</div>' +
+            '</div>';
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+function renderAreaPreferences(prefs) {
+    var keys = Object.keys(prefs);
+    if (keys.length === 0) return '<div style="color:var(--overlay);font-size:0.85em">No area preferences set</div>';
+    return '<table style="width:100%;font-size:0.85em"><thead><tr><th>Area</th><th>Action</th><th></th></tr></thead><tbody>' +
+        keys.map(function(area) {
+            return '<tr><td>' + esc(area) + '</td><td>' + esc(prefs[area]) + '</td><td><button class="btn btn-sm btn-danger" onclick="removeAreaPreference(\'' + esc(area) + '\')">X</button></td></tr>';
+        }).join('') + '</tbody></table>';
+}
+
+async function updateProfileLevel(level) {
+    try {
+        await api('v9/user-profile/level', { method: 'PUT', body: { level: level } });
+        showToast('Level updated', 'info');
+    } catch (err) {
+        showToast('Failed to update level: ' + String(err), 'error');
+    }
+}
+
+async function updateProfileField(field, value) {
+    try {
+        var body = {};
+        body[field] = value;
+        await api('v9/user-profile', { method: 'PUT', body: body });
+    } catch (err) {
+        showToast('Failed to update: ' + String(err), 'error');
+    }
+}
+
+async function updateProfileArray(field, csvValue) {
+    try {
+        var arr = csvValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+        var body = {};
+        body[field] = arr;
+        await api('v9/user-profile', { method: 'PUT', body: body });
+    } catch (err) {
+        showToast('Failed to update: ' + String(err), 'error');
+    }
+}
+
+async function addAreaPreference() {
+    var area = (document.getElementById('newAreaName') || {}).value;
+    var action = (document.getElementById('newAreaAction') || {}).value;
+    if (!area) { showToast('Enter an area name', 'warning'); return; }
+    try {
+        var result = await api('v9/user-profile');
+        var profile = (result && result.data) ? result.data : result;
+        var prefs = profile ? (profile.area_preferences || {}) : {};
+        prefs[area] = action;
+        await api('v9/user-profile/preferences', { method: 'PUT', body: { preferences: prefs } });
+        showToast('Preference added', 'info');
+        loadUserProfile();
+    } catch (err) {
+        showToast('Failed to add preference: ' + String(err), 'error');
+    }
+}
+
+async function removeAreaPreference(area) {
+    try {
+        var result = await api('v9/user-profile');
+        var profile = (result && result.data) ? result.data : result;
+        var prefs = profile ? (profile.area_preferences || {}) : {};
+        delete prefs[area];
+        await api('v9/user-profile/preferences', { method: 'PUT', body: { preferences: prefs } });
+        showToast('Preference removed', 'info');
+        loadUserProfile();
+    } catch (err) {
+        showToast('Failed to remove preference: ' + String(err), 'error');
     }
 }
 

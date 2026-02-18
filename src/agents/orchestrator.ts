@@ -19,11 +19,16 @@ import { DecisionMemoryAgent } from './decision-memory-agent';
 import { ReviewAgent } from './review-agent';
 import { CodingDirectorAgent } from './coding-director-agent';
 import { BackendArchitectAgent } from './backend-architect-agent';
+import { UserCommunicationAgent } from './user-communication-agent';
 import { EvolutionService } from '../core/evolution-service';
 import { TokenBudgetTracker } from '../core/token-budget-tracker';
 import { ContextFeeder } from '../core/context-feeder';
 import { TaskDecompositionEngine } from '../core/task-decomposition-engine';
 import { EventBus } from '../core/event-bus';
+import type { AgentPermissionManager } from '../core/agent-permission-manager';
+import type { ModelRouter } from '../core/model-router';
+import type { AgentTreeManager } from '../core/agent-tree-manager';
+import type { UserProfileManager } from '../core/user-profile-manager';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
     ConversationRole, Task, TaskStatus, TicketPriority
@@ -32,7 +37,8 @@ import {
 const INTENT_CATEGORIES = [
     'planning', 'verification', 'ui_testing', 'observation',
     'design_architect', 'backend_architect', 'gap_hunter', 'design_hardener', 'decision_memory',
-    'review', 'coding_director', 'question', 'research', 'custom', 'general',
+    'review', 'coding_director', 'user_communication',
+    'question', 'research', 'custom', 'general',
 ] as const;
 
 /**
@@ -50,11 +56,12 @@ const INTENT_PRIORITY: Record<string, number> = {
     design_hardener: 7,
     decision_memory: 8,
     coding_director: 9,
-    planning: 10,
-    question: 11,
-    research: 12,
-    custom: 13,
-    general: 14,
+    user_communication: 10,
+    planning: 11,
+    question: 12,
+    research: 13,
+    custom: 14,
+    general: 15,
 };
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -128,6 +135,11 @@ const KEYWORD_MAP: Record<string, string[]> = {
         'external agent', 'coding agent', 'mcp task', 'next task',
         'code implementation', 'coding queue', 'coding status',
     ],
+    user_communication: [
+        'user profile', 'communication style', 'programming level',
+        'user preference', 'ai mode', 'question routing', 'user message',
+        'notification', 'user notification', 'ask user', 'user response',
+    ],
     custom: [
         'custom agent', 'run agent', 'specialist', 'domain expert',
         'custom tool', 'agent gallery', 'my agent', 'specialized',
@@ -164,19 +176,21 @@ Classify every incoming message into EXACTLY ONE intent category, then route it 
    Examples: "what did the user decide about auth?", "check for conflicting decisions", "recall past preferences"
 10. **coding_director** — Code generation tasks, external coding agent interface, MCP task management.
    Examples: "generate code for the auth module", "what's the coding agent status?", "prepare next coding task"
-11. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
+11. **user_communication** — User profile, communication preferences, AI mode settings, question routing.
+   Examples: "update user profile", "set AI mode to smart", "change communication style"
+13. **planning** — Creating plans, breaking down requirements, defining tasks, scoping work.
    Examples: "plan a REST API with auth", "break this feature into tasks", "create a roadmap for v2"
-12. **question** — Asking for information, clarification, or explanation.
+14. **question** — Asking for information, clarification, or explanation.
     Examples: "how does the database schema work?", "what's the difference between P1 and P2?", "explain the verification flow"
-13. **research** — Investigation, comparison, benchmarking, or deep analysis.
+15. **research** — Investigation, comparison, benchmarking, or deep analysis.
     Examples: "compare SQLite vs PostgreSQL for our use case", "investigate why tests are slow", "best practices for MCP servers?"
-14. **custom** — Explicitly requesting a custom or specialized agent.
+16. **custom** — Explicitly requesting a custom or specialized agent.
     Examples: "run my custom lint agent", "invoke the security specialist", "call agent gallery"
-15. **general** — Does not fit any of the above. Fallback to Answer Agent.
+17. **general** — Does not fit any of the above. Fallback to Answer Agent.
 
 ## Tie-Breaking Rules
 If a message matches multiple categories, use this priority (highest first):
-verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > planning > question > research > custom > general.
+verification > ui_testing > observation > review > design_architect > backend_architect > gap_hunter > design_hardener > decision_memory > coding_director > user_communication > planning > question > research > custom > general.
 Example: "verify my plan is correct" matches both verification and planning — choose verification.
 Example: "review the design quality" matches both review and design_architect — choose review.
 
@@ -194,6 +208,7 @@ When classifying, respond with ONLY the category name as a single lowercase word
 - design_hardener → Design Hardener Agent
 - decision_memory → Decision Memory Agent
 - coding_director → Coding Director Agent
+- user_communication → User Communication Agent
 - planning → Planning Team
 - question → Answer Agent
 - research → Research Agent
@@ -232,6 +247,7 @@ If you cannot proceed or information is missing:
     private decisionMemoryAgent!: DecisionMemoryAgent;
     private reviewAgent!: ReviewAgent;
     private codingDirectorAgent!: CodingDirectorAgent;
+    private userCommunicationAgent!: UserCommunicationAgent;
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
     private eventBus: EventBus | null = null;
@@ -282,6 +298,7 @@ If you cannot proceed or information is missing:
         this.decisionMemoryAgent = new DecisionMemoryAgent(this.database, this.llm, this.config, this.outputChannel);
         this.reviewAgent = new ReviewAgent(this.database, this.llm, this.config, this.outputChannel);
         this.codingDirectorAgent = new CodingDirectorAgent(this.database, this.llm, this.config, this.outputChannel);
+        this.userCommunicationAgent = new UserCommunicationAgent(this.database, this.llm, this.config, this.outputChannel);
 
         await Promise.all([
             this.planningAgent.initialize(),
@@ -300,6 +317,7 @@ If you cannot proceed or information is missing:
             this.decisionMemoryAgent.initialize(),
             this.reviewAgent.initialize(),
             this.codingDirectorAgent.initialize(),
+            this.userCommunicationAgent.initialize(),
         ]);
 
         this.outputChannel.appendLine('All agents initialized.');
@@ -444,6 +462,7 @@ If you cannot proceed or information is missing:
             case 'decision_memory': return this.decisionMemoryAgent;
             case 'review': return this.reviewAgent;
             case 'coding_director': return this.codingDirectorAgent;
+            case 'user_communication': return this.userCommunicationAgent;
             case 'question': return this.answerAgent;
             case 'research': return this.researchAgent;
             case 'custom': return this.customAgentRunner;
@@ -472,6 +491,7 @@ If you cannot proceed or information is missing:
             decision_memory: this.decisionMemoryAgent,
             review: this.reviewAgent,
             coding_director: this.codingDirectorAgent,
+            user_communication: this.userCommunicationAgent,
         };
         return agents[name.toLowerCase()] || null;
     }
@@ -587,6 +607,7 @@ If you cannot proceed or information is missing:
     getDecisionMemoryAgent(): DecisionMemoryAgent { return this.decisionMemoryAgent; }
     getReviewAgent(): ReviewAgent { return this.reviewAgent; }
     getCodingDirectorAgent(): CodingDirectorAgent { return this.codingDirectorAgent; }
+    getUserCommunicationAgent(): UserCommunicationAgent { return this.userCommunicationAgent; }
 
     /**
      * Get all agents (including the orchestrator itself) as an array.
@@ -611,6 +632,7 @@ If you cannot proceed or information is missing:
             this.decisionMemoryAgent,
             this.reviewAgent,
             this.codingDirectorAgent,
+            this.userCommunicationAgent,
         ];
     }
 
@@ -633,6 +655,61 @@ If you cannot proceed or information is missing:
         this.outputChannel.appendLine('TaskDecompositionEngine injected into PlanningAgent.');
     }
 
+    // ==================== v9.0: SERVICE INJECTION ====================
+
+    /**
+     * v9.0: Inject permission manager into all agents for permission enforcement.
+     */
+    injectPermissionManager(pm: AgentPermissionManager): void {
+        for (const agent of this.getAllAgents()) {
+            agent.setPermissionManager(pm);
+        }
+        this.outputChannel.appendLine(`AgentPermissionManager injected into ${this.getAllAgents().length} agents.`);
+    }
+
+    /**
+     * v9.0: Inject model router into all agents for multi-model support.
+     */
+    injectModelRouter(mr: ModelRouter): void {
+        for (const agent of this.getAllAgents()) {
+            agent.setModelRouter(mr);
+        }
+        this.outputChannel.appendLine(`ModelRouter injected into ${this.getAllAgents().length} agents.`);
+    }
+
+    /**
+     * v9.0: Inject agent tree manager into all agents for tree-aware processing.
+     */
+    injectAgentTreeManager(atm: AgentTreeManager): void {
+        for (const agent of this.getAllAgents()) {
+            agent.setAgentTreeManager(atm);
+        }
+        this.outputChannel.appendLine(`AgentTreeManager injected into ${this.getAllAgents().length} agents.`);
+    }
+
+    /**
+     * v9.0: Inject user profile manager into the UserCommunicationAgent.
+     */
+    injectUserProfileManager(upm: UserProfileManager): void {
+        this.userCommunicationAgent.setUserProfileManager(upm);
+        this.outputChannel.appendLine('UserProfileManager injected into UserCommunicationAgent.');
+    }
+
+    /**
+     * v9.0: Route a message through the UserCommunicationAgent pipeline.
+     * Called when any agent needs to ask the user a question — this ensures
+     * it goes through the full communication pipeline (cache check, profile routing,
+     * AI mode gate, question rewriting).
+     */
+    async routeToUser(
+        question: string,
+        sourceAgent: string,
+        context: AgentContext,
+        escalationChainId?: string,
+    ): Promise<import('./user-communication-agent').QuestionRouteResult> {
+        return this.userCommunicationAgent.routeQuestion(question, sourceAgent, context, escalationChainId);
+    }
+
     dispose(): void {
         // v4.1: Clear all pending verification timers
         for (const timer of this.pendingTimers) clearTimeout(timer);
@@ -653,5 +730,7 @@ If you cannot proceed or information is missing:
         this.designHardenerAgent?.dispose();
         this.decisionMemoryAgent?.dispose();
         this.reviewAgent?.dispose();
+        this.codingDirectorAgent?.dispose();
+        this.userCommunicationAgent?.dispose();
     }
 }

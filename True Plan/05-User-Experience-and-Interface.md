@@ -1,10 +1,10 @@
 # 05 — User Experience & Interface Design
 
-**Version**: 8.0
+**Version**: 9.0
 **Last Updated**: February 2026
 **Status**: ✅ Current
 **Depends On**: [02-System-Architecture-and-Design](02-System-Architecture-and-Design.md), [09-Features-and-Capabilities](09-Features-and-Capabilities.md)
-**Changelog**: v8.0 — Added Back-End Designer tab (layer/domain views, element cards, BE canvas), Link Tree & Link Matrix views, Unified Review Queue panel, Tag system UI (color-coded pills, filter-by-tag), expanded designer canvas with side-by-side FE/BE layout | v7.0 — Tickets tab team queue grouping/filtering, Coding tab "NOT READY" status display, Boss AI nav indicator per-queue breakdown, queue status display in Progress Dashboard | v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
+**Changelog**: v9.0 — Added Workflow Designer Panel (step palette, live Mermaid diagram, execution view), Agent Tree Viewer (10-level collapsible tree, detail panel, conversation history), Agent Customization Panel (permission matrix, model assignments, per-agent LLM limits), User Profile Page (programming level, communication style, strengths/weaknesses, area preferences, repeat answers), Niche Agent Browser (~230 agents, search/filter, edit definitions, spawn history) | v8.0 — Added Back-End Designer tab (layer/domain views, element cards, BE canvas), Link Tree & Link Matrix views, Unified Review Queue panel, Tag system UI (color-coded pills, filter-by-tag), expanded designer canvas with side-by-side FE/BE layout | v7.0 — Tickets tab team queue grouping/filtering, Coding tab "NOT READY" status display, Boss AI nav indicator per-queue breakdown, queue status display in Progress Dashboard | v4.0 — Added User/Dev views, expanded Planning Wizard (adaptive paths, backend/AI paths, hybrid plan builder), notification system, accessibility, keyboard shortcuts, cross-references
 
 ---
 
@@ -935,6 +935,511 @@ Built-in tags and their colors:
 
 ---
 
+## v9.0: New UI Panels
+
+Five new panels introduced in v9.0 to support workflow orchestration, hierarchical agent management, agent customization, user profiling, and niche agent browsing.
+
+---
+
+### Workflow Designer Panel
+
+A new top-level "Workflows" tab in the webapp for visually building, editing, and monitoring multi-step agent workflows.
+
+#### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Workflows           [New] [Save] [Run ▸] [Validate] [Export] [Clone] [Templates]│
+├────────────┬────────────────────────────────────────┬────────────────────────┤
+│            │                                        │                        │
+│  STEP      │   ┌─────────┐    ┌─────────────┐      │  Step Properties       │
+│  PALETTE   │   │ agent   │───→│ condition   │      │  ────────────────────  │
+│            │   │ call    │    │ score > 80? │      │  Type: agent_call      │
+│  ┌──────┐  │   └─────────┘    └──────┬──────┘      │  Agent: Verification   │
+│  │agent │  │                    ┌────┴────┐        │  Prompt: "Verify..."   │
+│  │call  │  │              ┌─────┴──┐  ┌───┴────┐   │  Accept: score >= 80   │
+│  └──────┘  │              │approve │  │escalate│   │  Tools: [test_runner]  │
+│  ┌──────┐  │              │        │  │        │   │  Retry: 2 attempts     │
+│  │condi-│  │              └────────┘  └────────┘   │  Escalation: Boss AI   │
+│  │tion  │  │                                        │                        │
+│  └──────┘  │        Live Mermaid Diagram             │  ────────────────────  │
+│  ┌──────┐  │     (click nodes to select)             │  Execution History     │
+│  │paral-│  │                                        │  ────────────────────  │
+│  │lel   │  │                                        │  Run #3: ✅ 12s ago    │
+│  └──────┘  │                                        │  Run #2: ❌ 1h ago     │
+│  ┌──────┐  │                                        │  Run #1: ✅ 3h ago     │
+│  │appro-│  │                                        │                        │
+│  │val   │  │                                        │                        │
+│  └──────┘  │                                        │                        │
+│  ┌──────┐  │                                        │                        │
+│  │escal-│  │                                        │                        │
+│  │ation │  │                                        │                        │
+│  └──────┘  │                                        │                        │
+│  ┌──────┐  │                                        │                        │
+│  │tool  │  │                                        │                        │
+│  │unlock│  │                                        │                        │
+│  └──────┘  │                                        │                        │
+│  ┌──────┐  │                                        │                        │
+│  │wait  │  │                                        │                        │
+│  └──────┘  │                                        │                        │
+│  ┌──────┐  │                                        │                        │
+│  │loop  │  │                                        │                        │
+│  └──────┘  │                                        │                        │
+│            │                                        │                        │
+├────────────┴────────────────────────────────────────┴────────────────────────┤
+│ Execution View: step_1 ●──── step_2 ●──── step_3 ◉──── step_4 ○──── step_5 ○│
+│                 ✅ done    ✅ done    🟡 running   ○ pending   ○ pending      │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step Palette (Left Sidebar)
+
+Drag-and-drop step types onto the center canvas:
+
+| Step Type | Icon | Purpose |
+|-----------|------|---------|
+| `agent_call` | 🤖 | Invoke a specific agent with a prompt and acceptance criteria |
+| `condition` | 🔀 | Branch the workflow based on a boolean or score threshold |
+| `parallel` | ⏸ | Execute multiple branches concurrently, wait for all/any |
+| `approval` | ✋ | Pause workflow and wait for user approval before continuing |
+| `escalation` | 🚨 | Route to Boss AI or human when a step fails or exceeds thresholds |
+| `tool_unlock` | 🔓 | Grant temporary tool access to an agent for the duration of the step |
+| `wait` | ⏳ | Pause for a specified duration or until an external event fires |
+| `loop` | 🔄 | Repeat a sub-workflow until a condition is met or max iterations reached |
+
+#### Center Canvas (Mermaid Diagram)
+
+- Renders the workflow as a live Mermaid flowchart (top-to-bottom layout)
+- Auto-updates as steps are added, removed, or reordered from the palette
+- Click any node to select it -- the right sidebar loads that step's properties
+- Double-click a node to rename it inline
+- Drag edges between nodes to create connections
+- Supports undo/redo (`Ctrl+Z` / `Ctrl+Shift+Z`)
+
+#### Right Sidebar (Step Properties + Execution History)
+
+**Step Properties Editor** (top half):
+- **Type**: Read-only display of the step type
+- **Agent Type**: Dropdown of all 16+ agents (for `agent_call` steps)
+- **Prompt**: Textarea for the agent prompt or instruction
+- **Acceptance Criteria**: Textarea defining success conditions (e.g., `score >= 80`)
+- **Tools**: Multi-select checklist of tools the agent can use during this step
+- **Retry**: Number input for max retry attempts (0-5)
+- **Escalation**: Dropdown for escalation target (Boss AI, specific agent, or user)
+
+**Execution History** (bottom half):
+- Scrollable list of past workflow runs with status, duration, and timestamp
+- Click a run to replay its execution view (steps light up in sequence)
+
+#### Toolbar
+
+| Button | Action |
+|--------|--------|
+| **New** | Create a blank workflow with a single start node |
+| **Save** | Persist workflow definition to SQLite (`workflows` table) |
+| **Run** | Execute the workflow immediately, switch to execution view |
+| **Validate** | Check for missing connections, unreachable nodes, invalid configs |
+| **Export** | Download workflow as JSON or Mermaid markdown |
+| **Clone** | Duplicate the current workflow with a new name |
+| **Templates** | Open a modal with pre-built workflow templates (QA pipeline, code review, planning, etc.) |
+
+#### Execution View
+
+During workflow execution, the bottom bar lights up step-by-step:
+- **Green** (●): Step completed successfully
+- **Yellow** (◉): Step currently executing (animated pulse)
+- **Red** (●): Step failed (click to see error details)
+- **Gray** (○): Step pending (not yet reached)
+
+Real-time updates via SSE events (`workflow:step_started`, `workflow:step_completed`, `workflow:step_failed`).
+
+> **User View**: The Workflows tab is where you design and run multi-step agent pipelines. Drag steps from the left palette onto the canvas, connect them, configure each step's properties on the right, then hit Run. Watch the execution view at the bottom light up as each step completes. Use Templates to start from proven patterns like "QA Pipeline" or "Code Review Flow".
+
+> **Developer View**: Workflow definitions stored in `workflows` table (JSON blob for step graph). Canvas renders via Mermaid.js library embedded in the webapp. Step palette uses HTML5 drag-and-drop API. Execution engine is `WorkflowEngineService` which processes steps sequentially or in parallel based on graph structure. Execution state tracked in `workflow_runs` and `workflow_step_runs` tables. SSE events emitted from `EventBus` on step transitions. Validate checks for: orphan nodes, missing agent configs, circular references, unreachable branches.
+
+---
+
+### Agent Tree Viewer
+
+A sub-tab within the "Agents" tab that displays the full 10-level hierarchical agent tree.
+
+#### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Agents  [List View]  [Tree View]           Filter: [All ▼] [All ▼] [🔍]│
+│                                            Level    Status   Search     │
+├──────────────────────────────────────┬───────────────────────────────────┤
+│                                      │                                   │
+│  ▼ L0 Boss AI (Orchestrator)         │  Agent Detail: L3 Verification   │
+│  │  ● Running                        │  ─────────────────────────────── │
+│  ├─ ▼ L1 Planning Director           │                                   │
+│  │  │  ● Active (TK-042)            │  Scope: Task verification,        │
+│  │  ├─ L2 Design Architect           │         test execution            │
+│  │  │     ○ Idle                     │                                   │
+│  │  ├─ L2 Gap Hunter                 │  Permissions:                     │
+│  │  │     ○ Idle                     │  ✅ read  ✅ execute              │
+│  │  └─ L2 Design Hardener            │  ❌ write  ❌ spawn              │
+│  │        ○ Idle                     │  ✅ escalate  ❌ configure        │
+│  │                                    │                                   │
+│  ├─ ▼ L1 Coding Director             │  Model: ministral-3-14b          │
+│  │  │  ● Active (TK-089)            │  Max LLM Calls: 10               │
+│  │  ├─ L2 Code Generator             │                                   │
+│  │  │     ● Working                  │  Telemetry (last 24h):           │
+│  │  ├─ L2 Code Reviewer              │  Tasks: 14 completed, 2 failed   │
+│  │  │     ○ Idle                     │  Avg time: 45s per task           │
+│  │  └─ ▼ L2 Test Writer              │  Tokens: 12,450 in / 8,200 out  │
+│  │     │  ○ Idle                     │  Retries: 3 total                │
+│  │     └─ L3 Unit Test Specialist    │  Escalations: 1 to Boss AI       │
+│  │           ○ Idle                  │                                   │
+│  │                                    │  [View Conversations]            │
+│  ├─ L1 Verification Agent             │                                   │
+│  │     ● Running                     │                                   │
+│  │                                    │                                   │
+│  ├─ L1 Answer Agent                   │                                   │
+│  │     ○ Idle                        │                                   │
+│  │                                    │                                   │
+│  ├─ ▼ L1 Review Agent                 │                                   │
+│  │  └─ L2 Backend Architect           │                                   │
+│  │        ○ Idle                     │                                   │
+│  │                                    │                                   │
+│  └─ ... (more agents)                │                                   │
+│                                      │                                   │
+│  Legend: ● Active  ○ Idle  ⚠ Error   │                                   │
+├──────────────────────────────────────┴───────────────────────────────────┤
+│ Total: 16 agents | Active: 4 | Idle: 11 | Error: 1 | Spawned: 3 niche  │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Features
+
+- **Collapsible tree**: Each level can be expanded/collapsed. All levels (L0 through L9) supported.
+- **Level badges**: Each node displays its level as a colored badge (`L0` = red, `L1` = orange, `L2` = blue, `L3` = green, `L4-L9` = gray gradient).
+- **Status colors**: Green dot = active/running, gray circle = idle, yellow triangle = warning, red dot = error.
+- **Click-to-detail**: Clicking any node loads the detail panel on the right showing:
+  - **Scope**: What the agent is responsible for
+  - **Permissions**: Read, write, execute, escalate, spawn, configure, approve, delete
+  - **Model**: Which LLM model this agent uses
+  - **Telemetry**: Tasks completed/failed, average processing time, token usage (in/out), retry count, escalation count (rolling 24h window)
+  - **Retries**: Total retries in the current session
+  - **Escalations**: Count and targets of escalations
+  - **Tokens**: Input/output token counts for the current session
+- **View Conversations**: Button opens a modal with the isolated chat history for the selected agent node -- each message shows role, content, timestamp, and token count.
+- **Filter bar**: Filter by level dropdown (L0-L9 or All), status dropdown (Active/Idle/Error/All), and free-text search across agent names.
+- **Status bar**: Bottom bar shows aggregate counts: total agents, active, idle, error, and spawned niche agents for the current plan.
+
+> **User View**: The Agent Tree shows you the full hierarchy of AI agents working on your project. Click any agent to see what it's doing, how many tokens it's used, and whether it's had any errors. Use "View Conversations" to see the exact messages an agent sent and received. Filter by level or status to focus on what matters.
+
+> **Developer View**: Tree data from `GET /api/agents/tree` which builds the hierarchy from `AgentTreeManagerService`. Detail panel loads from `GET /api/agents/:id/detail`. Conversation history from `GET /api/agents/:id/conversations`. Telemetry aggregated from `agent_telemetry` table with 24h rolling window. Level badges use CSS classes `.level-badge-L0` through `.level-badge-L9`. Tree rendering uses recursive DOM generation (same pattern as Link Tree). SSE events `agent:status_changed` trigger real-time node updates without full tree reload.
+
+---
+
+### Agent Customization Panel
+
+Located in the "Settings" tab under a new "Agent Permissions" sub-section. Provides fine-grained control over agent permissions and model assignments.
+
+#### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Settings > Agent Permissions                                             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│ ▼ Permission Matrix                                                      │
+│ ┌────────────────┬──────┬───────┬─────────┬────────┬───────┬───────┬────┬──────┐
+│ │ Agent          │ Read │ Write │ Execute │ Escal. │ Spawn │ Conf. │Appr│Delete│
+│ ├────────────────┼──────┼───────┼─────────┼────────┼───────┼───────┼────┼──────┤
+│ │ Boss AI        │  ✅  │  ✅   │   ✅    │  ✅    │  ✅   │  ✅   │ ✅ │  ✅  │
+│ │ Planning Dir.  │  ✅  │  ✅   │   ❌    │  ✅    │  ✅   │  ❌   │ ❌ │  ❌  │
+│ │ Coding Dir.    │  ✅  │  ✅   │   ✅    │  ✅    │  ✅   │  ❌   │ ❌ │  ❌  │
+│ │ Verification   │  ✅  │  ❌   │   ✅    │  ✅    │  ❌   │  ❌   │ ✅ │  ❌  │
+│ │ Answer Agent   │  ✅  │  ❌   │   ❌    │  ✅    │  ❌   │  ❌   │ ❌ │  ❌  │
+│ │ Review Agent   │  ✅  │  ✅   │   ❌    │  ✅    │  ❌   │  ❌   │ ✅ │  ❌  │
+│ │ Backend Arch.  │  ✅  │  ✅   │   ❌    │  ✅    │  ❌   │  ❌   │ ❌ │  ❌  │
+│ │ Gap Hunter     │  ✅  │  ❌   │   ❌    │  ✅    │  ❌   │  ❌   │ ❌ │  ❌  │
+│ │ Des. Hardener  │  ✅  │  ✅   │   ❌    │  ✅    │  ❌   │  ❌   │ ❌ │  ❌  │
+│ │ Decision Mem.  │  ✅  │  ✅   │   ❌    │  ❌    │  ❌   │  ❌   │ ❌ │  ❌  │
+│ │ ... (more)     │      │       │         │        │       │       │    │      │
+│ └────────────────┴──────┴───────┴─────────┴────────┴───────┴───────┴────┴──────┘
+│ [Reset to Defaults]                                                      │
+│                                                                          │
+│ ▼ Model Assignments                                                      │
+│ ┌────────────────┬────────────────────────────────────┬──────────────────┐
+│ │ Agent          │ Model                              │ Actions          │
+│ ├────────────────┼────────────────────────────────────┼──────────────────┤
+│ │ Boss AI        │ [ministral-3-14b-reasoning     ▼] │ [Detect] [Clear] │
+│ │ Planning Dir.  │ [ministral-3-14b-reasoning     ▼] │ [Detect] [Clear] │
+│ │ Coding Dir.    │ [ministral-3-14b-reasoning     ▼] │ [Detect] [Clear] │
+│ │ Verification   │ [ministral-3-14b-reasoning     ▼] │ [Detect] [Clear] │
+│ │ ... (more)     │                                    │                  │
+│ └────────────────┴────────────────────────────────────┴──────────────────┘
+│                                                                          │
+│ ▼ Per-Agent LLM Limits                                                   │
+│ ┌────────────────┬──────────────────┐                                    │
+│ │ Agent          │ Max LLM Calls    │                                    │
+│ ├────────────────┼──────────────────┤                                    │
+│ │ Boss AI        │ [Unlimited    ▼] │                                    │
+│ │ Planning Dir.  │ [50           ▼] │                                    │
+│ │ Coding Dir.    │ [100          ▼] │                                    │
+│ │ Verification   │ [20           ▼] │                                    │
+│ │ Answer Agent   │ [10           ▼] │                                    │
+│ │ ... (more)     │                  │                                    │
+│ └────────────────┴──────────────────┘                                    │
+│                                                                          │
+│ [Save Agent Permissions]                                                 │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Permission Matrix
+
+An agent-by-permission checkbox grid. Each cell is a toggleable checkbox:
+
+| Permission | Description |
+|------------|-------------|
+| **Read** | Can read files, database records, and plan data |
+| **Write** | Can create or modify database records and plan components |
+| **Execute** | Can execute code, run tests, or invoke external tools |
+| **Escalate** | Can escalate issues to a higher-level agent or human |
+| **Spawn** | Can create child agents or niche agent instances |
+| **Configure** | Can modify system configuration or other agents' settings |
+| **Approve** | Can approve drafts, reviews, or workflow steps |
+| **Delete** | Can delete records, components, or tickets |
+
+- Boss AI (L0) has all permissions enabled by default and cannot be restricted.
+- Custom agents always have Write, Execute, and Delete locked off (enforced at `BaseAgent` level).
+- Changes require confirmation dialog: "Change permissions for [Agent]? This takes effect immediately."
+
+#### Model Assignments
+
+A table mapping each agent to its assigned LLM model:
+- **Dropdown**: Lists all models detected from the LLM endpoint (`GET /v1/models`)
+- **Detect**: Re-queries the LLM endpoint and auto-populates the dropdown with available models
+- **Clear**: Resets the agent to use the system default model
+
+#### Per-Agent Max LLM Calls
+
+Configurable limit on how many LLM calls each agent can make per task:
+- Options: 5, 10, 20, 50, 100, Unlimited
+- When an agent exceeds its limit, it escalates to its parent agent with a `max_calls_exceeded` reason
+- Boss AI defaults to Unlimited
+
+> **User View**: This is where you control what each AI agent is allowed to do and which LLM model it uses. The permission matrix lets you tighten or loosen agent capabilities. Model assignments let you assign different models to different agents (e.g., a faster model for simple tasks, a smarter model for complex ones). LLM call limits prevent runaway agents from burning through tokens.
+
+> **Developer View**: Permissions stored in `agent_permissions` table (agent_type, permission, enabled). Model assignments in `agent_model_assignments` table. LLM limits in `agent_llm_limits` table. API: `GET/PUT /api/settings/agent-permissions`, `GET/PUT /api/settings/agent-models`, `GET/PUT /api/settings/agent-llm-limits`. Permission checks enforced in `BaseAgent.checkPermission()` before any action. Model detection calls `LLMService.listModels()` which hits `GET /v1/models` on the configured endpoint. "Reset to Defaults" restores the hardcoded permission matrix from `AgentPermissionDefaults` constant.
+
+---
+
+### User Profile Page
+
+Located in the "Settings" tab under a new "User Profile" sub-section. Stores user preferences that inform how agents communicate and make decisions.
+
+#### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Settings > User Profile                                                  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│ ▼ About You                                                              │
+│                                                                          │
+│   Programming Level:                                                     │
+│   [Intermediate                                                     ▼]  │
+│     ○ Noob — New to programming, needs detailed explanations             │
+│     ○ Beginner — Understands basics, needs guidance on patterns          │
+│     ● Intermediate — Comfortable with most concepts, learns fast         │
+│     ○ Advanced — Deep knowledge, prefers concise communication           │
+│     ○ Expert — Knows the stack inside-out, just give me the code         │
+│                                                                          │
+│   Communication Style:                                                   │
+│   ○ Technical — Use jargon, code snippets, and precise terminology       │
+│   ○ Simple — Plain English, analogies, step-by-step explanations         │
+│   ● Balanced — Mix of both depending on context                          │
+│                                                                          │
+│ ▼ Strengths & Weaknesses                                                 │
+│                                                                          │
+│   Strengths (things you're good at):                                     │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │ [React] [TypeScript] [System Design] [Testing] [+ add]          │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   Weaknesses (things you struggle with):                                 │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │ [CSS Animation] [DevOps] [Database Optimization] [+ add]        │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   Known (topics you understand well):                                    │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │ [REST APIs] [Git] [Node.js] [SQL] [+ add]                       │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   Unknown (topics you want to learn):                                    │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │ [Kubernetes] [GraphQL] [WebSockets] [+ add]                      │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│ ▼ Area Preferences                                                       │
+│ ┌───────────────────────┬──────────────────────────────┐                 │
+│ │ Area                  │ Preference                   │                 │
+│ ├───────────────────────┼──────────────────────────────┤                 │
+│ │ Database Schema       │ [Always Decide            ▼] │                 │
+│ │ API Design            │ [Always Recommend         ▼] │                 │
+│ │ UI/UX Layout          │ [Ask Me                   ▼] │                 │
+│ │ Testing Strategy      │ [Always Recommend         ▼] │                 │
+│ │ Security              │ [Always Decide            ▼] │                 │
+│ │ Performance           │ [Ask Me                   ▼] │                 │
+│ │ Code Style            │ [Never Touch              ▼] │                 │
+│ │ Documentation         │ [Always Recommend         ▼] │                 │
+│ │ Architecture          │ [Always Decide            ▼] │                 │
+│ │ Dependencies          │ [Ask Me                   ▼] │                 │
+│ └───────────────────────┴──────────────────────────────┘                 │
+│                                                                          │
+│ ▼ Repeat Answers (auto-cached)                                           │
+│ ┌────────────────────────────────────────────────────────────────────┐   │
+│ │ "Use OAuth 2.0 for all auth"                       (used 3 times) │   │
+│ │ "Always use TypeScript strict mode"                (used 5 times) │   │
+│ │ "Prefer SQLite for local storage"                  (used 2 times) │   │
+│ │ "Use Jest for all testing"                         (used 4 times) │   │
+│ └────────────────────────────────────────────────────────────────────┘   │
+│ (Read-only — populated automatically from Decision Memory)               │
+│                                                                          │
+│ ▼ Notes                                                                  │
+│ ┌────────────────────────────────────────────────────────────────────┐   │
+│ │ I prefer functional components over class components.              │   │
+│ │ The team uses 2-space indentation.                                 │   │
+│ │ We deploy to Vercel.                                               │   │
+│ │                                                                    │   │
+│ └────────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│ [Save Profile]                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Field Descriptions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Programming Level** | Dropdown (5 options) | Noob, Beginner, Intermediate, Advanced, Expert. Controls verbosity of agent responses. |
+| **Communication Style** | Radio (3 options) | Technical, Simple, Balanced. Affects how agents phrase questions and explanations. |
+| **Strengths** | Comma-separated tag input | Topics the user is proficient in. Agents skip detailed explanations for these. |
+| **Weaknesses** | Comma-separated tag input | Topics the user struggles with. Agents provide extra context and guidance for these. |
+| **Known** | Comma-separated tag input | Technologies/concepts the user understands. Used for context building. |
+| **Unknown** | Comma-separated tag input | Technologies the user wants to learn. Agents include learning-oriented explanations. |
+| **Area Preferences** | Area x action dropdown table | Controls agent autonomy per domain area. |
+| **Repeat Answers** | Read-only list | Auto-populated from Decision Memory when the same answer pattern is detected 2+ times. |
+| **Notes** | Free-form textarea | Any additional context the user wants agents to know. Injected into agent system prompts. |
+
+#### Area Preference Actions
+
+| Action | Behavior |
+|--------|----------|
+| **Always Decide** | User makes all decisions in this area. Agents always create tickets for approval. |
+| **Always Recommend** | Agents recommend and auto-apply unless the user explicitly overrides. |
+| **Never Touch** | Agents skip this area entirely. No suggestions, no modifications. |
+| **Ask Me** | Agents ask the user before each decision (default behavior). |
+
+> **User View**: Your profile helps the AI understand how to work with you. Set your programming level so agents explain things at the right depth. Mark your strengths so agents don't over-explain what you already know. Set area preferences to control how much autonomy agents have -- "Always Decide" means you approve everything, "Never Touch" means agents leave it alone entirely. Repeat answers are auto-detected -- if you keep giving the same answer to similar questions, COE remembers and stops asking.
+
+> **Developer View**: Profile stored in `user_profile` table (single row, JSON fields for arrays). API: `GET/PUT /api/settings/user-profile`. Profile data injected into agent system prompts via `AgentPromptBuilder.injectUserProfile()`. Area preferences checked in `TicketProcessorService` before creating user-facing tickets -- `never_touch` areas skip ticket creation, `always_recommend` areas auto-apply with a notification. Repeat answers populated by `DecisionMemoryAgent` when it detects 2+ identical answer patterns via `decision_memory` table query. Tag inputs use comma-separated entry with pill-style display (same component as the tag system).
+
+---
+
+### Niche Agent Browser
+
+A sub-tab within the "Agents" tab for browsing, searching, editing, and monitoring niche (specialized) agents.
+
+#### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Agents  [List View]  [Tree View]  [Niche Browser]                        │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│ Search: [________________________] Filter: [All Levels ▼] [All Types ▼]  │
+│ Showing 230 niche agents                                                 │
+│                                                                          │
+│ ▼ L2 — Code Specialists (42 agents)                                      │
+│ ┌────────────────────┬─────────────────────────┬────────┬────────────────┐
+│ │ Name               │ Specialty               │ Level  │ Status         │
+│ ├────────────────────┼─────────────────────────┼────────┼────────────────┤
+│ │ React Component    │ React component gen     │ L2     │ ○ Available    │
+│ │ Express Router     │ Express route scaffolding│ L2    │ ● Spawned (×2) │
+│ │ SQL Optimizer      │ Query optimization       │ L2    │ ○ Available    │
+│ │ GraphQL Resolver   │ GraphQL schema + resolv. │ L2    │ ○ Available    │
+│ │ Jest Test Writer   │ Unit test generation     │ L2    │ ● Spawned (×1) │
+│ │ CSS Grid Layout    │ CSS Grid/Flexbox layouts │ L2    │ ○ Available    │
+│ │ ... (36 more)      │                         │        │                │
+│ └────────────────────┴─────────────────────────┴────────┴────────────────┘
+│                                                                          │
+│ ▼ L3 — Sub-Specialists (68 agents)                                       │
+│ ┌────────────────────┬─────────────────────────┬────────┬────────────────┐
+│ │ Name               │ Specialty               │ Level  │ Status         │
+│ ├────────────────────┼─────────────────────────┼────────┼────────────────┤
+│ │ Auth0 Integrator   │ Auth0 SDK integration   │ L3     │ ○ Available    │
+│ │ Prisma Migrator    │ Prisma schema + migrate │ L3     │ ○ Available    │
+│ │ Redis Cacher       │ Redis caching patterns  │ L3     │ ○ Available    │
+│ │ ... (65 more)      │                         │        │                │
+│ └────────────────────┴─────────────────────────┴────────┴────────────────┘
+│                                                                          │
+│ ▼ L4–L9 — Deep Specialists (120 agents)                                  │
+│   ... (collapsed by default)                                             │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│ Selected: Express Router                                                 │
+│ ┌────────────────────────────────────────────────────────────────────┐   │
+│ │ System Prompt Template:                                            │   │
+│ │ ┌──────────────────────────────────────────────────────────────┐   │   │
+│ │ │ You are a specialized Express.js routing agent. Your role    │   │   │
+│ │ │ is to scaffold RESTful route handlers with proper            │   │   │
+│ │ │ middleware, validation, error handling, and OpenAPI           │   │   │
+│ │ │ documentation comments.                                      │   │   │
+│ │ │                                                              │   │   │
+│ │ │ Always use async/await. Always validate request params.      │   │   │
+│ │ │ Always return consistent JSON response shapes.               │   │   │
+│ │ └──────────────────────────────────────────────────────────────┘   │   │
+│ │ [Save Changes]  [Reset to Default]                                 │   │
+│ │                                                                    │   │
+│ │ Spawned for current plan: 2 instances                              │   │
+│ │   Instance #1: TK-089 (completed, 45s, 3,200 tokens)              │   │
+│ │   Instance #2: TK-112 (active, running 12s)                        │   │
+│ └────────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Features
+
+- **Browse by level**: Niche agents grouped by hierarchy level (L2 through L9), each group collapsible. Shows agent count per group.
+- **Search**: Free-text search across agent name, specialty description, and system prompt content. Results filter in real time as you type.
+- **Filter by level**: Dropdown to show only agents at a specific level (L2, L3, L4, etc., or All).
+- **Filter by capability**: Dropdown to filter by capability category (Code Generation, Testing, Database, API, Security, DevOps, etc.).
+- **Status column**: Shows whether the agent is available (never spawned for current plan), spawned (actively running or previously used), with spawn count.
+- **Click to edit**: Selecting a niche agent opens its detail panel at the bottom showing:
+  - **System Prompt Template**: Editable textarea containing the agent's system prompt. Changes are saved per-user and override the default template.
+  - **Save Changes**: Persists the modified prompt to the database.
+  - **Reset to Default**: Reverts to the original system prompt template.
+- **Spawn history**: For the current plan, shows all instances where this niche agent was spawned -- ticket ID, status, duration, and token usage.
+
+#### Niche Agent Categories
+
+| Category | Count (approx.) | Examples |
+|----------|-----------------|----------|
+| Code Generation | ~45 | React Component, Vue Composer, Express Router, Django View |
+| Testing | ~30 | Jest Unit, Playwright E2E, API Contract, Load Tester |
+| Database | ~25 | SQL Optimizer, Prisma Migrator, MongoDB Aggregator, Redis Cacher |
+| API Design | ~20 | REST Scaffolder, GraphQL Resolver, gRPC Proto, WebSocket Handler |
+| Security | ~18 | Auth0 Integrator, JWT Validator, CORS Configurator, CSP Builder |
+| DevOps | ~22 | Docker Composer, GitHub Actions, Nginx Configurator, K8s Deployer |
+| Documentation | ~15 | OpenAPI Generator, JSDoc Writer, README Builder, Changelog Keeper |
+| Performance | ~15 | Bundle Analyzer, Lighthouse Auditor, Memory Profiler, Query Planner |
+| UI/UX | ~20 | CSS Grid Layout, Animation Builder, A11y Checker, Theme Generator |
+| Data Processing | ~20 | CSV Parser, JSON Transformer, Stream Processor, Batch Migrator |
+
+> **User View**: The Niche Agent Browser lets you see all ~230 specialized agents available in the system. Browse by level, search by name or capability, and see which ones have been used for your current project. You can customize any agent's system prompt to fine-tune its behavior -- for example, telling the Express Router agent to always use a specific middleware pattern your team prefers.
+
+> **Developer View**: Niche agent definitions stored in `niche_agent_definitions` table (name, level, category, default_prompt, user_prompt_override). Spawn history from `niche_agent_spawns` table (agent_def_id, ticket_id, status, duration_ms, tokens_in, tokens_out). API: `GET /api/agents/niche` (list with search/filter query params), `GET /api/agents/niche/:id` (detail), `PUT /api/agents/niche/:id/prompt` (update prompt), `DELETE /api/agents/niche/:id/prompt` (reset to default), `GET /api/agents/niche/:id/spawns?plan_id=X` (spawn history). Default definitions seeded from `niche-agent-catalog.json` on first activation. Search uses `LIKE` queries across name, specialty, and prompt fields. Category filter uses indexed `category` column.
+
+---
+
 ## Accessibility Requirements
 
 COE targets **WCAG 2.1 Level AA** compliance across all UI surfaces. Accessibility is not optional — it's a core design constraint.
@@ -1028,6 +1533,15 @@ All COE commands are available via `Ctrl+Shift+P` → type "COE":
 | **Tickets** | `R` | Reply to selected ticket |
 | **Tickets** | `E` | Escalate selected ticket |
 | **Settings** | `Ctrl+S` | Save settings |
+| **Workflows** | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo step changes |
+| **Workflows** | `Delete` | Delete selected step |
+| **Workflows** | `Ctrl+D` | Duplicate selected step |
+| **Workflows** | `Ctrl+Enter` | Run workflow |
+| **Agent Tree** | `↑` / `↓` | Navigate tree nodes |
+| **Agent Tree** | `→` / `←` | Expand / collapse tree node |
+| **Agent Tree** | `Enter` | Open detail panel for selected agent |
+| **Niche Browser** | `/` | Focus search input |
+| **Niche Browser** | `Enter` | Open selected agent's edit panel |
 
 > **👤 User View**: Press `?` on any page to see all available keyboard shortcuts. The most important one is `Ctrl+K` — it opens a quick search bar that finds any ticket, task, or plan instantly.
 
@@ -1045,6 +1559,8 @@ All COE commands are available via `Ctrl+Shift+P` → type "COE":
 | Task list | Task rows | Priority columns | Changes task priority |
 | Custom Agent Builder | Goal items | Reorder zone | Changes goal priority |
 | Designer canvas (v2.0) | Components from palette | Canvas area | Places component on page |
+| Workflow Designer (v9.0) | Step types from palette | Mermaid canvas | Adds step to workflow graph |
+| Workflow Designer (v9.0) | Edge endpoints between nodes | Node connection points | Creates step connections |
 
 **Drag behavior**: Ghost image follows cursor at 50% opacity. Drop target highlights with blue border. Invalid drop targets show red border. `Escape` cancels drag. All drag-and-drop has keyboard equivalents (select item + `Alt+↑` / `Alt+↓` to reorder).
 
@@ -1056,6 +1572,9 @@ All COE commands are available via `Ctrl+Shift+P` → type "COE":
 | Ticket list item | Any ticket row | View Thread, Reply, Escalate, Close, Copy ID |
 | Agent list item | Any agent row | View Status, View Last Output, Restart |
 | Designer component (v2.0) | Component on canvas | Properties, Duplicate, Delete, Move to Front/Back |
+| Workflow step (v9.0) | Step node on canvas | Edit Properties, Duplicate, Delete, Disconnect, Set as Start |
+| Agent tree node (v9.0) | Agent in tree view | View Detail, View Conversations, Restart, Edit Permissions |
+| Niche agent row (v9.0) | Agent in niche browser | Edit Prompt, Reset to Default, View Spawn History |
 
 ### Tooltips and Hover States
 
