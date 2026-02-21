@@ -515,10 +515,10 @@ describe('PlanningAgent', () => {
             const response = await agent.processMessage('Malformed plan', context);
 
             expect(mockOutput.appendLine).toHaveBeenCalledWith(
-                expect.stringContaining('Planning parse error:')
+                expect.stringContaining('JSON parse error:')
             );
-            // Returns raw content on parse failure
-            expect(response.content).toContain('broken plan');
+            // v10.0: Returns clear error message on parse failure
+            expect(response.content).toContain('no_json_found');
         });
     });
 

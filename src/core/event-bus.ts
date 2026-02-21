@@ -111,6 +111,7 @@ export type COEEventType =
     | 'boss:assignment_created' | 'boss:assignment_completed' | 'boss:assignment_failed' | 'boss:assignment_partial'
     | 'boss:ticket_cancelled' | 'boss:ticket_reengaged'
     | 'boss:ticket_moved_queue' | 'boss:slot_allocation_updated'
+    | 'boss:slot_borrowing'
     | 'queue:slot_allocated' | 'queue:balance_cycle'
     | 'queue:escalation_received'
     | 'support:sync_call' | 'support:async_ticket_created'

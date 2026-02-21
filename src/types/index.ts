@@ -756,6 +756,12 @@ export interface TeamQueueStatus {
     cancelled: number;
     lastServedAt: number;       // Timestamp for round-robin balancing
     allocatedSlots: number;     // Boss-assigned slot count for this team
+    /** v10.0: Slots this team has borrowed from idle teams */
+    borrowedSlots: number;
+    /** v10.0: Slots this team has lent to busy teams (its own slots in use by others) */
+    lentSlots: number;
+    /** v10.0: Effective slots = allocatedSlots + borrowedSlots - lentSlots */
+    effectiveSlots: number;
 }
 
 /** Boss notepad section — persistent memory across Boss cycles */

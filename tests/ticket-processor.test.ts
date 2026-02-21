@@ -916,9 +916,9 @@ describe('TicketProcessorService', () => {
             expect(updated?.status).toBe(TicketStatus.Resolved);
         });
 
-        test('plan_generation: passes when response contains "task" and sufficient length', async () => {
+        test('plan_generation: passes when response contains plan creation indicators', async () => {
             mockOrchestrator.callAgent.mockResolvedValue({
-                content: 'Here is the task breakdown with detailed implementation steps. Each task should be completed in order. The first task involves setting up the project structure. The second task involves implementing the core logic.',
+                content: 'Plan "Feature X" created with 5 tasks. Each task involves a specific implementation step. The first task involves setting up the project structure. The second task involves implementing the core logic.',
                 confidence: 80,
             });
 

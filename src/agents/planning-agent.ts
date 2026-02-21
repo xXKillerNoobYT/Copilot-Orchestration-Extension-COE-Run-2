@@ -197,11 +197,44 @@ Example: { "actions": [{ "type": "call_support_agent", "payload": { "agent_name"
         const actions: AgentAction[] = [];
 
         try {
-            // v9.0: Strip markdown code fences before JSON extraction
-            // LLMs often wrap JSON in ```json...``` blocks
+            // v10.0: Enhanced JSON extraction with multiple fallback strategies
+            // Strategy 1: Strip markdown code fences
             let cleanedContent = content.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '');
-            // Try to extract JSON from the response
-            const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+
+            // Strategy 2: Try to extract JSON object
+            let jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+
+            // Strategy 3: If no match, try trimming leading/trailing non-JSON text
+            if (!jsonMatch) {
+                const firstBrace = cleanedContent.indexOf('{');
+                const lastBrace = cleanedContent.lastIndexOf('}');
+                if (firstBrace >= 0 && lastBrace > firstBrace) {
+                    const candidate = cleanedContent.substring(firstBrace, lastBrace + 1);
+                    jsonMatch = [candidate] as unknown as RegExpMatchArray;
+                }
+            }
+
+            // Strategy 4: Handle truncated JSON — attempt to close open brackets
+            if (!jsonMatch) {
+                const firstBrace = cleanedContent.indexOf('{');
+                if (firstBrace >= 0) {
+                    let candidate = cleanedContent.substring(firstBrace);
+                    // Count open/close braces and brackets
+                    let openBraces = 0, openBrackets = 0;
+                    for (const ch of candidate) {
+                        if (ch === '{') openBraces++;
+                        else if (ch === '}') openBraces--;
+                        else if (ch === '[') openBrackets++;
+                        else if (ch === ']') openBrackets--;
+                    }
+                    // Close truncated arrays/objects
+                    while (openBrackets > 0) { candidate += ']'; openBrackets--; }
+                    while (openBraces > 0) { candidate += '}'; openBraces--; }
+                    jsonMatch = [candidate] as unknown as RegExpMatchArray;
+                    this.outputChannel.appendLine(`[${this.name}] Attempted JSON repair (closed ${openBraces} braces, ${openBrackets} brackets)`);
+                }
+            }
+
             if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0]);
 
@@ -282,7 +315,25 @@ Example: { "actions": [{ "type": "call_support_agent", "payload": { "agent_name"
                 }
             }
         } catch (error) {
-            this.outputChannel.appendLine(`Planning parse error: ${error}`);
+            // v10.0: Enhanced error reporting for JSON parse failures
+            const errStr = String(error);
+            this.outputChannel.appendLine(`[${this.name}] JSON parse error: ${errStr}`);
+            this.outputChannel.appendLine(`[${this.name}] Raw content preview (first 200 chars): ${content.substring(0, 200)}`);
+
+            // Check if LLM returned an error instead of plan JSON
+            const lower = content.toLowerCase();
+            if (lower.includes('400 bad request') || lower.includes('llm api error') || lower.includes('503 service')) {
+                return {
+                    content: `LLM API error during planning — could not auto-generate plan. Error: ${content.substring(0, 300)}`,
+                    actions: [{ type: 'escalate', payload: { reason: 'LLM API error during plan generation', error: errStr } }],
+                };
+            }
+
+            // Return clear error so ticket processor knows this failed
+            return {
+                content: `no_json_found: Planning agent could not extract valid plan JSON from LLM response. Preview: ${content.substring(0, 200)}`,
+                actions: [{ type: 'escalate', payload: { reason: 'JSON extraction failed', error: errStr } }],
+            };
         }
 
         return { content, actions };

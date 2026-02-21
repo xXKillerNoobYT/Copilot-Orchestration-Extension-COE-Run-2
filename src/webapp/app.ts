@@ -1868,6 +1868,36 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     </div>
 </div>
 
+<!-- v10.0: Niche Agent Editor Modal -->
+<div class="modal-overlay" id="nicheAgentModal">
+    <div class="modal" style="max-width:700px">
+        <button class="modal-close" onclick="closeModal('nicheAgentModal')">&times;</button>
+        <h2 id="nicheModalTitle">Edit Agent</h2>
+        <input type="hidden" id="nicheEditId">
+        <div class="form-group"><label>Name</label><div id="nicheEditName" style="font-weight:600;font-size:1.05em;padding:4px 0"></div></div>
+        <div style="display:flex;gap:12px">
+            <div class="form-group" style="flex:1"><label>Level</label><div id="nicheEditLevel" style="padding:4px 0;color:var(--subtext)"></div></div>
+            <div class="form-group" style="flex:1"><label>Category</label><div id="nicheEditCategory" style="padding:4px 0;color:var(--subtext)"></div></div>
+            <div class="form-group" style="flex:1"><label>Capability</label>
+                <select id="nicheEditCapability" style="width:100%;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <option value="general">general</option>
+                    <option value="reasoning">reasoning</option>
+                    <option value="code">code</option>
+                    <option value="fast">fast</option>
+                    <option value="vision">vision</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group"><label>Specialty</label><input type="text" id="nicheEditSpecialty" placeholder="What this agent specializes in" style="width:100%"></div>
+        <div class="form-group"><label>System Prompt Template</label><textarea id="nicheEditPrompt" rows="10" style="width:100%;font-family:monospace;font-size:0.85em" placeholder="System prompt template..."></textarea></div>
+        <div class="form-group"><label>Tools (comma-separated)</label><input type="text" id="nicheEditTools" placeholder="e.g. lint, test, review" style="width:100%"></div>
+        <div class="btn-row">
+            <button class="btn btn-secondary" onclick="closeModal('nicheAgentModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="saveNicheAgent()">Save Changes</button>
+        </div>
+    </div>
+</div>
+
 <script>
 const API = 'http://localhost:${port}/api';
 let currentTaskFilter = 'all';
@@ -2096,10 +2126,13 @@ async function loadTeamQueueBar() {
             var total = q.pending + q.active;
             html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;border-left:3px solid ' + color + '">';
             html += '<span style="font-weight:600;font-size:0.85em;color:' + color + '">' + label + '</span>';
-            html += '<span style="font-size:0.8em;color:var(--subtext)" title="Pending / Active / Slots">';
+            html += '<span style="font-size:0.8em;color:var(--subtext)" title="Pending / Active / Effective Slots (Allocated + Borrowed - Lent)">';
             html += q.pending + ' pending';
             if (q.active > 0) html += ' \\u2022 ' + q.active + ' active';
-            html += ' \\u2022 ' + q.allocatedSlots + ' slots';
+            var slotText = (q.effectiveSlots !== undefined ? q.effectiveSlots : q.allocatedSlots) + ' slots';
+            if (q.borrowedSlots > 0) slotText += ' (+' + q.borrowedSlots + ')';
+            if (q.lentSlots > 0) slotText += ' (-' + q.lentSlots + ')';
+            html += ' \\u2022 ' + slotText;
             html += '</span>';
             if (q.blocked > 0) html += '<span class="badge badge-red" style="font-size:0.7em">' + q.blocked + ' blocked</span>';
             if (q.cancelled > 0) html += '<span class="badge badge-gray" style="font-size:0.7em">' + q.cancelled + ' cancelled</span>';
@@ -8011,6 +8044,12 @@ function toggleTreeViewMode() {
 async function loadAgentTree() {
     var container = document.getElementById('agentTreeView');
     if (!container) return;
+    // Note: innerHTML is used here with escaped (esc()) server data in a local extension webapp, not with untrusted user content
+    container.textContent = '';
+    var loadingDiv = document.createElement('div');
+    loadingDiv.className = 'empty';
+    loadingDiv.textContent = 'Loading agent tree...';
+    container.appendChild(loadingDiv);
     try {
         var result = await api('v9/tree');
         var rawData = (result && result.data) ? result.data : {};
@@ -8024,9 +8063,26 @@ async function loadAgentTree() {
             return;
         }
         allTreeNodes = nodes;
+
+        // v10.0: Auto-collapse large trees to L3 (Area level) on first load for performance
+        // This prevents rendering 230+ nodes expanded simultaneously
+        if (nodes.length > 50 && Object.keys(treeCollapsedNodes).length === 0) {
+            nodes.forEach(function(n) {
+                var lvl = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
+                var hasKids = nodes.some(function(c) { return c.parent_id === n.id; });
+                if (hasKids && lvl >= 3) {
+                    treeCollapsedNodes[n.id] = true;
+                }
+            });
+        }
+
         renderAgentTree(nodes);
     } catch (err) {
-        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+        container.innerHTML = '<div class="empty" style="text-align:center;padding:40px">' +
+            '<div style="font-size:1.1em;margin-bottom:12px;color:var(--red)">Failed to load agent tree</div>' +
+            '<p style="color:var(--subtext);margin-bottom:12px">' + esc(String(err)) + '</p>' +
+            '<button class="btn btn-secondary btn-sm" onclick="loadAgentTree()">Retry</button>' +
+            '</div>';
     }
 }
 
@@ -8431,13 +8487,42 @@ async function editNicheAgent(id) {
         var result = await api('v9/niche-agents/' + id);
         var agent = (result && result.data) ? result.data : result;
         if (!agent) { showToast('Agent not found', 'error'); return; }
-        var newPrompt = prompt('Edit system prompt template for ' + (agent.name || id) + ':', agent.system_prompt_template || '');
-        if (newPrompt === null) return;
-        await api('v9/niche-agents/' + id, { method: 'PUT', body: { system_prompt_template: newPrompt } });
-        showToast('Niche agent updated', 'info');
+        // Populate modal fields
+        document.getElementById('nicheEditId').value = id;
+        document.getElementById('nicheModalTitle').textContent = 'Edit: ' + (agent.name || id);
+        document.getElementById('nicheEditName').textContent = agent.name || id;
+        document.getElementById('nicheEditLevel').textContent = 'L' + (agent.level != null ? agent.level : '?') + ' ' + (agent.level_name || '');
+        document.getElementById('nicheEditCategory').textContent = agent.category || 'unknown';
+        var capSelect = document.getElementById('nicheEditCapability');
+        capSelect.value = agent.required_capability || 'general';
+        document.getElementById('nicheEditSpecialty').value = agent.specialty || '';
+        document.getElementById('nicheEditPrompt').value = agent.system_prompt_template || '';
+        document.getElementById('nicheEditTools').value = Array.isArray(agent.tools) ? agent.tools.join(', ') : (agent.tools || '');
+        openModal('nicheAgentModal');
+    } catch (err) {
+        showToast('Failed to load agent: ' + String(err), 'error');
+    }
+}
+
+async function saveNicheAgent() {
+    var id = document.getElementById('nicheEditId').value;
+    if (!id) return;
+    var body = {
+        system_prompt_template: document.getElementById('nicheEditPrompt').value,
+        specialty: document.getElementById('nicheEditSpecialty').value,
+        required_capability: document.getElementById('nicheEditCapability').value
+    };
+    var toolsRaw = document.getElementById('nicheEditTools').value.trim();
+    if (toolsRaw) {
+        body.tools = toolsRaw.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+    }
+    try {
+        await api('v9/niche-agents/' + id, { method: 'PUT', body: body });
+        showToast('Agent updated successfully', 'info');
+        closeModal('nicheAgentModal');
         loadNicheAgents();
     } catch (err) {
-        showToast('Failed to update: ' + String(err), 'error');
+        showToast('Failed to save: ' + String(err), 'error');
     }
 }
 

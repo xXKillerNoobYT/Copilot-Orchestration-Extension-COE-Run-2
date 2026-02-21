@@ -72,12 +72,15 @@ const DEFAULT_CONFIG: COEConfig = {
     // v5.0: AI mode and auto-run
     aiMode: 'hybrid' as const,
     bossAutoRunEnabled: true,
-    // v6.0: Parallel processing and multi-model
-    bossParallelBatchSize: 3,        // max 3 tickets processed concurrently (1 Boss slot reserved)
+    // v6.0/v10.0: Parallel processing and multi-model
+    // v10.0: 3 ticket processing slots + 1 Boss/Orchestrator reserved slot = 4 total LLM channels
+    // When Boss slot is idle, it can pre-stage the next queued ticket
+    bossParallelBatchSize: 3,        // max 3 tickets processed concurrently (Boss uses LLM reserved slot separately)
     modelHoldTimeoutMs: 3600000,     // 1 hour hold timeout for model swap
     maxModelsPerCycle: 2,            // max 2 different models per boss cycle (prevent excessive swapping)
     multiModelEnabled: false,        // default: single model mode (one LLM loaded at a time)
-    // v7.0: Team queue orchestration
+    // v7.0/v10.0: Team queue orchestration — with slot borrowing
+    // When a category has 0 pending tickets, its slots are automatically lent to busy categories
     teamSlotAllocation: {            // Boss-controlled slot allocation per team (total = bossParallelBatchSize)
         orchestrator: 1,
         planning: 1,

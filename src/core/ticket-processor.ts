@@ -333,10 +333,10 @@ export class TicketProcessorService {
     ]);
     /** v7.0: Per-team status tracking for round-robin balancing */
     private teamStatus = new Map<LeadAgentQueue, TeamQueueStatus>([
-        [LeadAgentQueue.Orchestrator, { queue: LeadAgentQueue.Orchestrator, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
-        [LeadAgentQueue.Planning, { queue: LeadAgentQueue.Planning, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
-        [LeadAgentQueue.Verification, { queue: LeadAgentQueue.Verification, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1 }],
-        [LeadAgentQueue.CodingDirector, { queue: LeadAgentQueue.CodingDirector, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 0 }],
+        [LeadAgentQueue.Orchestrator, { queue: LeadAgentQueue.Orchestrator, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1, borrowedSlots: 0, lentSlots: 0, effectiveSlots: 1 }],
+        [LeadAgentQueue.Planning, { queue: LeadAgentQueue.Planning, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1, borrowedSlots: 0, lentSlots: 0, effectiveSlots: 1 }],
+        [LeadAgentQueue.Verification, { queue: LeadAgentQueue.Verification, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 1, borrowedSlots: 0, lentSlots: 0, effectiveSlots: 1 }],
+        [LeadAgentQueue.CodingDirector, { queue: LeadAgentQueue.CodingDirector, pending: 0, active: 0, blocked: 0, cancelled: 0, lastServedAt: 0, allocatedSlots: 0, borrowedSlots: 0, lentSlots: 0, effectiveSlots: 0 }],
     ]);
     /** v7.0: Ordered team list for round-robin traversal */
     private readonly TEAM_ORDER: LeadAgentQueue[] = [
@@ -510,7 +510,107 @@ export class TicketProcessorService {
         this.outputChannel.appendLine(
             `[TicketProcessor] Slot allocation updated: ${JSON.stringify(allocation)}`
         );
+        // v10.0: Recalculate effective slots after allocation change
+        this.recalculateSlotBorrowing();
         return true;
+    }
+
+    /**
+     * v10.0: Recalculate slot borrowing — idle teams lend slots to busy teams.
+     *
+     * Rules:
+     * 1. A team is "idle" if it has 0 pending tickets in its queue
+     * 2. Idle teams lend their allocated slots to teams that have pending work
+     * 3. Borrowing is proportional: if 2 teams need slots and 2 are available, each gets 1
+     * 4. When an idle team gets new work, its slots are reclaimed (gracefully: current
+     *    tickets in borrowed slots finish, but no new ones start)
+     * 5. Teams with 0 allocated slots cannot lend (nothing to lend)
+     * 6. Effective slots are never negative
+     */
+    private recalculateSlotBorrowing(): void {
+        // Reset all borrow/lent counters
+        for (const stat of this.teamStatus.values()) {
+            stat.borrowedSlots = 0;
+            stat.lentSlots = 0;
+            stat.effectiveSlots = stat.allocatedSlots;
+        }
+
+        // Find idle teams (0 pending, have allocated slots to lend)
+        const idleTeams: LeadAgentQueue[] = [];
+        let totalLendable = 0;
+        for (const [team, stat] of this.teamStatus) {
+            const queue = this.getTeamQueue(team);
+            const activeForTeam = this.getActiveSlotCountForTeam(team);
+            if (queue.length === 0 && activeForTeam === 0 && stat.allocatedSlots > 0) {
+                idleTeams.push(team);
+                totalLendable += stat.allocatedSlots;
+            }
+        }
+
+        if (totalLendable === 0) return;
+
+        // Find busy teams (have pending tickets beyond their allocated capacity)
+        const busyTeams: Array<{ team: LeadAgentQueue; needsSlots: number }> = [];
+        let totalDemand = 0;
+        for (const [team, stat] of this.teamStatus) {
+            const queue = this.getTeamQueue(team);
+            const activeForTeam = this.getActiveSlotCountForTeam(team);
+            const freeOwn = Math.max(0, stat.allocatedSlots - activeForTeam);
+            const pending = queue.length;
+            // Need = pending beyond what own free slots can handle
+            const need = Math.max(0, pending - freeOwn);
+            if (need > 0) {
+                busyTeams.push({ team, needsSlots: need });
+                totalDemand += need;
+            }
+        }
+
+        if (busyTeams.length === 0 || totalDemand === 0) return;
+
+        // Distribute available slots proportionally among busy teams
+        let remainingLendable = totalLendable;
+        for (const busy of busyTeams) {
+            if (remainingLendable <= 0) break;
+            // Proportional share, min 1 if demand exists
+            const share = Math.max(1, Math.round((busy.needsSlots / totalDemand) * totalLendable));
+            const granted = Math.min(share, busy.needsSlots, remainingLendable);
+            const busyStat = this.teamStatus.get(busy.team)!;
+            busyStat.borrowedSlots = granted;
+            busyStat.effectiveSlots = busyStat.allocatedSlots + granted;
+            remainingLendable -= granted;
+        }
+
+        // Mark idle teams as having lent their slots
+        let lentSoFar = totalLendable - remainingLendable;
+        for (const idleTeam of idleTeams) {
+            if (lentSoFar <= 0) break;
+            const idleStat = this.teamStatus.get(idleTeam)!;
+            const toLend = Math.min(idleStat.allocatedSlots, lentSoFar);
+            idleStat.lentSlots = toLend;
+            idleStat.effectiveSlots = idleStat.allocatedSlots - toLend;
+            lentSoFar -= toLend;
+        }
+
+        // Log borrowing activity
+        const borrowDetails: string[] = [];
+        for (const stat of this.teamStatus.values()) {
+            if (stat.borrowedSlots > 0) {
+                borrowDetails.push(`${stat.queue} +${stat.borrowedSlots} borrowed`);
+            }
+            if (stat.lentSlots > 0) {
+                borrowDetails.push(`${stat.queue} -${stat.lentSlots} lent`);
+            }
+        }
+        if (borrowDetails.length > 0) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Slot borrowing: ${borrowDetails.join(', ')}`
+            );
+            this.eventBus.emit('boss:slot_borrowing', 'ticket-processor', {
+                borrowing: Object.fromEntries(
+                    [...this.teamStatus.entries()].map(([k, v]) => [k, { borrowed: v.borrowedSlots, lent: v.lentSlots, effective: v.effectiveSlots }])
+                ),
+            });
+        }
     }
 
     /**
@@ -702,6 +802,9 @@ export class TicketProcessorService {
                 cancelled: cancelledForTeam,
                 lastServedAt: status.lastServedAt,
                 allocatedSlots: status.allocatedSlots,
+                borrowedSlots: status.borrowedSlots,
+                lentSlots: status.lentSlots,
+                effectiveSlots: status.effectiveSlots,
             });
         }
         return statuses;
@@ -1269,6 +1372,9 @@ export class TicketProcessorService {
             // v6.0: Check hold queue for timed-out tickets — release them back
             this.checkHoldQueueTimeouts();
 
+            // v10.0: Recalculate slot borrowing before filling
+            this.recalculateSlotBorrowing();
+
             let noProgressCount = 0;
             const maxAttempts = this.TEAM_ORDER.length * 2; // Safety: prevent infinite loop
 
@@ -1283,9 +1389,10 @@ export class TicketProcessorService {
                     const teamStat = this.teamStatus.get(team)!;
                     const activeForTeam = this.getActiveSlotCountForTeam(team);
 
-                    // Skip if no pending tickets or team is at slot limit
+                    // Skip if no pending tickets
                     if (teamQueue.length === 0) continue;
-                    if (activeForTeam >= teamStat.allocatedSlots && teamStat.allocatedSlots > 0) continue;
+                    // v10.0: Use effectiveSlots (includes borrowed) instead of allocatedSlots
+                    if (activeForTeam >= teamStat.effectiveSlots && teamStat.effectiveSlots > 0) continue;
 
                     // Find next processable ticket in this team's queue
                     const result = this.peekNextProcessableFromTeam(team);
@@ -1307,8 +1414,9 @@ export class TicketProcessorService {
                     // Update team status
                     teamStat.lastServedAt = Date.now();
 
+                    const borrowedNote = teamStat.borrowedSlots > 0 ? ` (${teamStat.borrowedSlots} borrowed)` : '';
                     this.outputChannel.appendLine(
-                        `[TicketProcessor] Slot ${this.activeSlots.size}/${this.maxParallelTickets} filled [${team}]: TK-${ticket?.ticket_number} "${ticket?.title}" (${entry.priority})`
+                        `[TicketProcessor] Slot ${this.activeSlots.size}/${this.maxParallelTickets} filled [${team}${borrowedNote}]: TK-${ticket?.ticket_number} "${ticket?.title}" (${entry.priority})`
                     );
 
                     this.eventBus.emit('boss:slot_started', 'ticket-processor', {
@@ -2581,23 +2689,54 @@ export class TicketProcessorService {
         let failureDetails: string | null = null;
 
         if (ticket.acceptance_criteria) {
-            // Basic deliverable validation based on type
+            // v10.0: Improved deliverable validation — checks actual outcomes, not just keywords
             if (route.deliverableType === 'plan_generation') {
-                // Check if response contains task data
-                const hasTaskContent = response.content.toLowerCase().includes('task') && response.content.length > 100;
-                deliverableCheck = hasTaskContent;
-                if (!deliverableCheck) failureDetails = 'Response does not contain sufficient task generation content';
+                // Plan generation succeeds if: Planning Agent created a plan (check DB),
+                // OR response mentions plan creation with task count, OR contains structured JSON
+                const lower = response.content.toLowerCase();
+                const planCreated = lower.includes('plan') && lower.includes('created') && lower.includes('task');
+                const hasJsonTasks = /\{[\s\S]*"tasks"\s*:\s*\[/.test(response.content);
+                const hasErrorIndicator = lower.includes('could not auto-generate') ||
+                    lower.includes('no_json_found') || lower.includes('no valid json') ||
+                    lower.includes('400 bad request') || lower.includes('llm api error');
+                // Check if plan was actually created in the database
+                let dbPlanHasTasks = false;
+                try {
+                    const activePlan = this.database.getActivePlan();
+                    if (activePlan) {
+                        const tasks = this.database.getTasksByPlan(activePlan.id);
+                        dbPlanHasTasks = tasks.length > 0;
+                    }
+                } catch { /* ignore */ }
+
+                deliverableCheck = (planCreated || hasJsonTasks || dbPlanHasTasks) && !hasErrorIndicator;
+                if (!deliverableCheck) {
+                    if (hasErrorIndicator) {
+                        failureDetails = 'Plan generation failed due to LLM errors — AI could not produce structured tasks';
+                    } else {
+                        failureDetails = 'Response does not contain sufficient task generation content (no plan created, no JSON tasks found)';
+                    }
+                }
             } else if (route.deliverableType === 'design_change') {
-                const hasDesignContent = response.content.toLowerCase().includes('component') || response.content.toLowerCase().includes('page');
-                deliverableCheck = hasDesignContent;
-                if (!deliverableCheck) failureDetails = 'Response does not contain design change content';
+                const lower = response.content.toLowerCase();
+                const hasDesignContent = lower.includes('component') || lower.includes('page') ||
+                    lower.includes('layout') || lower.includes('design') || lower.includes('created');
+                const hasError = lower.includes('400 bad request') || lower.includes('llm api error');
+                deliverableCheck = hasDesignContent && !hasError;
+                if (!deliverableCheck) failureDetails = hasError
+                    ? 'Design generation failed due to LLM errors'
+                    : 'Response does not contain design change content';
             } else if (route.deliverableType === 'code_generation') {
-                const hasCodeContent = response.content.toLowerCase().includes('function') ||
-                    response.content.toLowerCase().includes('class') ||
-                    response.content.toLowerCase().includes('const ') ||
-                    response.content.toLowerCase().includes('import ');
-                deliverableCheck = hasCodeContent;
-                if (!deliverableCheck) failureDetails = 'Response does not contain code generation content';
+                const lower = response.content.toLowerCase();
+                const hasCodeContent = lower.includes('function') ||
+                    lower.includes('class') ||
+                    lower.includes('const ') ||
+                    lower.includes('import ');
+                const hasError = lower.includes('400 bad request') || lower.includes('llm api error');
+                deliverableCheck = hasCodeContent && !hasError;
+                if (!deliverableCheck) failureDetails = hasError
+                    ? 'Code generation failed due to LLM errors'
+                    : 'Response does not contain code generation content';
             }
         }
 
@@ -3905,7 +4044,7 @@ export class TicketProcessorService {
             }
 
             case ProjectPhase.Designing: {
-                // Gate: Design QA score >= threshold. All pages have >= 1 component.
+                // v10.0: Design-completeness gate — ensure actual design content exists before proceeding
                 // Check for open design tickets
                 const designTickets = tickets.filter(t =>
                     t.operation_type === 'design_change' || t.title.toLowerCase().startsWith('phase: design')
@@ -3914,6 +4053,23 @@ export class TicketProcessorService {
                 if (openDesign.length > 0) {
                     blockers.push(`${openDesign.length} design ticket(s) still open`);
                 }
+
+                // v10.0: Verify actual design artifacts exist (pages, components, or backend elements)
+                try {
+                    const pages = this.database.getDesignPagesByPlan(planId);
+                    const components = this.database.getDesignComponentsByPlan(planId);
+                    const backendElements = this.database.getBackendElementsByPlan(planId);
+                    const totalArtifacts = pages.length + components.length + backendElements.length;
+
+                    if (totalArtifacts === 0) {
+                        blockers.push('No design artifacts created yet (need pages, components, or backend elements)');
+                    } else if (pages.length > 0 && components.length === 0 && backendElements.length === 0) {
+                        blockers.push('Pages exist but no components or backend elements defined — design incomplete');
+                    }
+                } catch {
+                    // Database methods may not exist in all contexts — skip artifact check
+                }
+
                 return {
                     passed: blockers.length === 0,
                     blockers,

@@ -108,7 +108,7 @@ Respond with ONLY valid JSON:
 
     /**
      * Review a ticket's deliverable and produce approval/flag decision.
-     * Convenience method wrapping processMessage with review-specific context.
+     * v10.0: Falls back to rule-based review if LLM is unavailable (400/500 errors).
      */
     async reviewTicket(ticket: Ticket, agentResponse: string): Promise<AgentResponse> {
         const complexity = this.classifyComplexity(ticket);
@@ -128,7 +128,81 @@ Respond with ONLY valid JSON:
         ].join('\n');
 
         const context: AgentContext = { conversationHistory: [], ticket };
-        return this.processMessage(prompt, context);
+
+        try {
+            const result = await this.processMessage(prompt, context);
+            // Check if LLM returned an error indicator in the response
+            const lower = result.content.toLowerCase();
+            if (lower.includes('400 bad request') || lower.includes('llm api error') || lower.includes('503 service')) {
+                this.outputChannel.appendLine(`[${this.name}] LLM error detected — falling back to rule-based review`);
+                return this.ruleBasedReview(ticket, agentResponse, complexity);
+            }
+            return result;
+        } catch (error) {
+            // v10.0: LLM unavailable — use deterministic rule-based review
+            this.outputChannel.appendLine(`[${this.name}] LLM call failed (${String(error).substring(0, 100)}) — using rule-based review`);
+            return this.ruleBasedReview(ticket, agentResponse, complexity);
+        }
+    }
+
+    /**
+     * v10.0: Rule-based review fallback when LLM is unavailable.
+     * Uses deterministic heuristics to score and decide on ticket deliverables.
+     */
+    private ruleBasedReview(ticket: Ticket, agentResponse: string, complexity: 'simple' | 'moderate' | 'complex'): AgentResponse {
+        const actions: AgentAction[] = [];
+        const responseLen = agentResponse.length;
+        const lower = agentResponse.toLowerCase();
+
+        // Heuristic scoring
+        let clarity = 60;
+        let completeness = 50;
+        let correctness = 60;
+
+        // Length-based clarity (short = unclear, very long = probably good)
+        if (responseLen > 500) clarity += 15;
+        if (responseLen > 1000) clarity += 10;
+        if (responseLen < 50) clarity = 20;
+
+        // Completeness: check if response addresses acceptance criteria keywords
+        if (ticket.acceptance_criteria) {
+            const criteriaWords = ticket.acceptance_criteria.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+            const matched = criteriaWords.filter(w => lower.includes(w));
+            completeness = criteriaWords.length > 0
+                ? Math.min(100, 40 + Math.round((matched.length / criteriaWords.length) * 60))
+                : 60;
+        }
+
+        // Correctness: check for structured output (JSON, code blocks, specific terms)
+        if (lower.includes('created') || lower.includes('implemented') || lower.includes('added')) correctness += 15;
+        if (/\{[\s\S]*\}/.test(agentResponse)) correctness += 10; // Has JSON
+        if (lower.includes('error') || lower.includes('failed') || lower.includes('could not')) correctness -= 20;
+
+        // Clamp scores
+        clarity = Math.max(0, Math.min(100, clarity));
+        completeness = Math.max(0, Math.min(100, completeness));
+        correctness = Math.max(0, Math.min(100, correctness));
+        const avgScore = Math.round((clarity + completeness + correctness) / 3);
+
+        const autoApproved = this.shouldAutoApprove(complexity, avgScore);
+
+        let summary: string;
+        if (autoApproved) {
+            summary = `Auto-approved via rule-based review (${complexity}, score: ${avgScore}/100): Heuristic check passed — LLM unavailable`;
+        } else {
+            summary = `Flagged for user review via rule-based fallback (${complexity}, score: ${avgScore}/100): LLM unavailable, heuristic check uncertain\nScores: clarity=${clarity}, completeness=${completeness}, correctness=${correctness}`;
+            actions.push({
+                type: 'escalate',
+                payload: {
+                    reason: 'Rule-based review (LLM unavailable) — flagging for manual review',
+                    scores: { clarity, completeness, correctness },
+                    issues: ['LLM was unavailable for full review — used heuristic scoring'],
+                    suggestions: ['Retry when LLM is available for more thorough review'],
+                },
+            });
+        }
+
+        return { content: summary, confidence: avgScore, actions };
     }
 
     protected async parseResponse(content: string, _context: AgentContext): Promise<AgentResponse> {
