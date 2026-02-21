@@ -66,6 +66,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
         llmService = new LLMService(configManager.getLLMConfig(), outputChannel);
 
+        // v9.0: Config onChange is wired after all services are created (see below)
+
         // Phase 2: Initialize agent framework
         orchestrator = new Orchestrator(database, llmService, configManager, outputChannel);
         await orchestrator.initialize();
@@ -280,6 +282,8 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine('NicheAgentFactory initialized with default niche agent definitions seeded.');
 
         const agentTreeManager = new AgentTreeManager(database, eventBus, configManager, outputChannel);
+        agentTreeManager.ensureDefaultTree();
+        ticketProcessor.setAgentTreeManager(agentTreeManager);
         outputChannel.appendLine('AgentTreeManager initialized.');
 
         const workflowDesigner = new WorkflowDesigner(database, eventBus, outputChannel);
@@ -300,6 +304,14 @@ export async function activate(context: vscode.ExtensionContext) {
         bossAgent.setTreeManager(agentTreeManager);
         bossAgent.setWorkflowEngine(workflowEngine);
         outputChannel.appendLine('AgentTreeManager and WorkflowEngine wired into BossAgent.');
+
+        // v9.0: Wire config changes to LLMService + ModelRouter so model updates propagate at runtime.
+        // This must be after all services are created so they're in scope.
+        configManager.onChange((newConfig) => {
+            llmService.updateConfig(newConfig.llm);
+            modelRouter.updateLLMConfig(newConfig.llm);
+            outputChannel.appendLine(`[Config] LLM config updated: model=${newConfig.llm.model}`);
+        });
 
         // v9.0: Wire MCP confirmation
         const mcpConfirmEnabled = configManager.getConfig().mcpConfirmationRequired !== false;

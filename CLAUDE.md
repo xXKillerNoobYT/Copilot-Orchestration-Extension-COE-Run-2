@@ -4,6 +4,11 @@
 
 A VS Code extension that orchestrates AI coding agents. It breaks projects into atomic tasks, feeds them one-at-a-time to external coding agents (via MCP on port 3030), verifies results, and self-improves. Think of it as an intelligent project manager between the developer and AI.
 
+GOLE: The goal is to create. A mostly autonomously operating system that can build and maintain software projects with minimal human input. The extension should be able to take high-level directives, decompose them into tasks, route them to specialized agents, verify their output, and iterate until the project is complete.
+With little user input and tweaks here and there.
+or Large user overview for when they want a lot of control.
+for the plans to have a lot of detail and context, but the user to only have to read them if they want to. with an easy to edit add and change info and plans with cating with the AI or mainely and the AI Handling changing. Modify. Or even moving parts of the program. To other parts that are still needed that the user messed with and changed the core function of. In the designer dash front and back end builder. For a smooth Program that can be built and maintained with ease. With the user being able to have a lot of control but not needing to use it if they don't want to. With the AI handling most of the work and the user being able to step in when they want to.
+
 ## How We Work Together
 
 

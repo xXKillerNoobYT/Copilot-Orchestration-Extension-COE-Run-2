@@ -1949,17 +1949,34 @@ L0: BossAgent (1)                  ← Ultimate decider, system-wide authority
 
 **Total**: ~230 niche agent definitions across L4-L9. Exact count depends on project scope and domain coverage.
 
-### Lazy Spawning
+### Spawning — IMPLEMENTED (v9.0)
 
-The full hierarchy is NOT instantiated at startup. Lazy spawning minimizes resource usage:
+The agent hierarchy supports two spawning modes: **auto-build** (full tree on startup) and **on-demand** (lazy spawning for plan-specific work).
 
-1. **Plan Start**: L0-L4 skeleton (~50 nodes) is created. These define the structural framework: BossAgent, GlobalOrchestrator, 4 DomainOrchestrators, 12-16 AreaOrchestrators, and the initial Manager nodes.
+#### Auto-Build on Startup
+
+On extension activation, `AgentTreeManager.ensureDefaultTree()` checks if any tree nodes exist. If the tree is empty, it automatically builds the **full hierarchy**:
+
+1. **L0-L4 skeleton** (~50 nodes): BossAgent, GlobalOrchestrator, 4 DomainOrchestrators, 12-16 AreaOrchestrators, and Manager nodes — using the built-in standard template.
+2. **L5-L9 niche agents** (~230 nodes): For each L4 Manager, `spawnBranch()` matches the manager's scope keywords to niche agent specialties and spawns the full L5-L9 branch (SubManagers, TeamLeads, WorkerGroups, Workers, Checkers).
+
+The auto-built tree uses sentinel task_id `'system-default'` to distinguish from plan-specific trees. This ensures the webapp Agent Tree sub-tab shows the full hierarchy immediately, without requiring the user to activate a plan first.
+
+Users can trigger a rebuild via `POST /api/v9/tree/build-default` (with `{ rebuild: true }` to clear and rebuild), or via the "Build Default Agent Tree" / "Rebuild Tree" buttons in the webapp.
+
+The `tree:default_built` event is emitted after auto-build with `{ rootNodeId, totalNodes, nicheAgentsSpawned }`.
+
+#### On-Demand Spawning (Lazy)
+
+For plan-specific work, lazy spawning minimizes resource usage:
+
+1. **Plan Start**: L0-L4 skeleton (~50 nodes) is created via `buildSkeletonForPlan(planId)`. These define the structural framework.
 
 2. **On Demand (L5-L9)**: When work reaches a domain/area that requires deeper decomposition, the relevant L5-L9 branches are spawned:
-   - A Manager (L4) receives a task that requires feature-level coordination -> spawns SubManagers (L5)
-   - A SubManager receives sprint-level work -> spawns TeamLeads (L6)
-   - A TeamLead identifies parallel work -> spawns WorkerGroups (L7) and Workers (L8)
-   - A Worker completes a task -> spawns a Checker (L9) for verification
+   - A Manager (L4) receives a task that requires feature-level coordination → spawns SubManagers (L5)
+   - A SubManager receives sprint-level work → spawns TeamLeads (L6)
+   - A TeamLead identifies parallel work → spawns WorkerGroups (L7) and Workers (L8)
+   - A Worker completes a task → spawns a Checker (L9) for verification
 
 3. **Pruning**: After a branch completes all its work:
    - L8-L9 nodes are pruned immediately (ephemeral)
@@ -1968,9 +1985,15 @@ The full hierarchy is NOT instantiated at startup. Lazy spawning minimizes resou
    - L0-L3 nodes persist for the lifetime of the plan
 
 ```
+Extension activated
+    │
+    ▼ ensureDefaultTree() — auto-build full hierarchy (~280 nodes)
+    │   L0-L4 skeleton + L5-L9 niche agents for all managers
+    │   Uses task_id = 'system-default'
+    │
 Plan created
     │
-    ▼ Spawn L0-L4 skeleton (~50 nodes)
+    ▼ buildSkeletonForPlan(planId) — L0-L4 skeleton (~50 nodes)
     │
     ▼ Task enters Code Domain → Backend Area
     │

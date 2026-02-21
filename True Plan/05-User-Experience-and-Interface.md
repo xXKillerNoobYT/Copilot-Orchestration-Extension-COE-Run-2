@@ -1059,78 +1059,84 @@ Real-time updates via SSE events (`workflow:step_started`, `workflow:step_comple
 
 ---
 
-### Agent Tree Viewer
+### Agent Tree Viewer — IMPLEMENTED (v9.0)
 
-A sub-tab within the "Agents" tab that displays the full 10-level hierarchical agent tree.
+A sub-tab within the "Agents" tab that displays the full 10-level hierarchical agent tree as an interactive branching diagram with connecting lines, collapsible nodes, and active branch highlighting.
 
-#### Layout
+#### Auto-Population
+
+The Agent Tree is auto-populated on extension startup via `ensureDefaultTree()`. If no tree exists yet, the system builds:
+1. **L0-L4 skeleton** (~50 nodes) — Boss AI, GlobalOrchestrator, Domain Orchestrators, Area Orchestrators, Managers
+2. **L5-L9 niche agents** (~230 nodes) — Spawned automatically by matching each L4 Manager's scope keywords to niche agent specialties
+
+The auto-built tree uses sentinel task_id `'system-default'` to distinguish from plan-specific trees. Users can also trigger a rebuild via the "Build Default Agent Tree" or "Rebuild Tree" buttons in the webapp.
+
+#### Layout — Tree Diagram View
+
+The primary view is a visual branching tree diagram with connecting lines:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Agents  [List View]  [Tree View]           Filter: [All ▼] [All ▼] [🔍]│
-│                                            Level    Status   Search     │
-├──────────────────────────────────────┬───────────────────────────────────┤
-│                                      │                                   │
-│  ▼ L0 Boss AI (Orchestrator)         │  Agent Detail: L3 Verification   │
-│  │  ● Running                        │  ─────────────────────────────── │
-│  ├─ ▼ L1 Planning Director           │                                   │
-│  │  │  ● Active (TK-042)            │  Scope: Task verification,        │
-│  │  ├─ L2 Design Architect           │         test execution            │
-│  │  │     ○ Idle                     │                                   │
-│  │  ├─ L2 Gap Hunter                 │  Permissions:                     │
-│  │  │     ○ Idle                     │  ✅ read  ✅ execute              │
-│  │  └─ L2 Design Hardener            │  ❌ write  ❌ spawn              │
-│  │        ○ Idle                     │  ✅ escalate  ❌ configure        │
-│  │                                    │                                   │
-│  ├─ ▼ L1 Coding Director             │  Model: ministral-3-14b          │
-│  │  │  ● Active (TK-089)            │  Max LLM Calls: 10               │
-│  │  ├─ L2 Code Generator             │                                   │
-│  │  │     ● Working                  │  Telemetry (last 24h):           │
-│  │  ├─ L2 Code Reviewer              │  Tasks: 14 completed, 2 failed   │
-│  │  │     ○ Idle                     │  Avg time: 45s per task           │
-│  │  └─ ▼ L2 Test Writer              │  Tokens: 12,450 in / 8,200 out  │
-│  │     │  ○ Idle                     │  Retries: 3 total                │
-│  │     └─ L3 Unit Test Specialist    │  Escalations: 1 to Boss AI       │
-│  │           ○ Idle                  │                                   │
-│  │                                    │  [View Conversations]            │
-│  ├─ L1 Verification Agent             │                                   │
-│  │     ● Running                     │                                   │
-│  │                                    │                                   │
-│  ├─ L1 Answer Agent                   │                                   │
-│  │     ○ Idle                        │                                   │
-│  │                                    │                                   │
-│  ├─ ▼ L1 Review Agent                 │                                   │
-│  │  └─ L2 Backend Architect           │                                   │
-│  │        ○ Idle                     │                                   │
-│  │                                    │                                   │
-│  └─ ... (more agents)                │                                   │
-│                                      │                                   │
-│  Legend: ● Active  ○ Idle  ⚠ Error   │                                   │
-├──────────────────────────────────────┴───────────────────────────────────┤
-│ Total: 16 agents | Active: 4 | Idle: 11 | Error: 1 | Spawned: 3 niche  │
+│ Agent Tree                                                               │
+│ [Diagram ▼] [Expand All] [Collapse All] [Collapse to Level ▼] [Rebuild] │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Stats: 280 total | 3 active (pulsing) | L0:1 L1:1 L2:4 L3:12 ...      │
+│                                                                          │
+│  ┌─────────────────────────┐                                            │
+│  │ L0 Boss AI              │ ● active (glowing, pulsing)                │
+│  │ orchestrator             │                                            │
+│  └────────┬────────────────┘                                            │
+│           │ ◄── thick blue line (active path)                           │
+│           ├─────────────────────────────────────────┐                   │
+│  ┌────────┴────────┐                       ┌────────┴────────┐         │
+│  │ L1 Planning Dir │ ● active (glow)       │ L1 Coding Dir   │ ○ idle │
+│  └────────┬────────┘                       └────────┬────────┘         │
+│           │ ◄── thick blue (hot path)               │ thin gray        │
+│           ├──────────┐                              ├──────────┐       │
+│  ┌────────┴───┐ ┌────┴───────┐             ┌───────┴───┐ ┌────┴────┐  │
+│  │ L2 Design  │ │ L2 Gap     │             │ L2 Code   │ │ L2 Test │  │
+│  │ Architect  │ │ Hunter     │             │ Generator │ │ Writer  │  │
+│  │ ● working  │ │ ○ idle     │             │ ○ idle    │ │ ○ idle  │  │
+│  └────────────┘ └────────────┘             └───────────┘ └─────────┘  │
+│  ▸ 24 children (collapsed)                                             │
+│                                                                          │
+│  Legend: ● active  ○ idle  ✓ completed  ✗ failed  ⚡ escalated         │
+│  Levels: L0 (purple) L1 (blue) L2 (teal) L3 (green) L4 (yellow) ...   │
+│  ━━━ Active path (auto-expanded, thick lines)                           │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+#### Active Branch Highlighting
+
+When any agent node has `active` or `working` status, the tree automatically:
+
+1. **Detects hot path**: Recursively marks all ancestors of active/working nodes as "on the hot path"
+2. **Auto-expands active branches**: Collapsed branches containing active nodes are automatically expanded so the user always sees what's running
+3. **Visual emphasis on active paths**:
+   - **Connector lines**: Active path lines are thicker (3px vs 2px) and colored blue (`#89b4fa`) instead of gray
+   - **Active nodes**: Glowing box-shadow, pulsing animation (`@keyframes treePulse`), larger status dots with glow effect, bold highlighted name, status label badge
+   - **Collapsed hot branches**: Show "⚡ (active branch)" hint to indicate hidden active content
+4. **Stats bar**: Active count shown in blue with pulsing animation
+
 #### Features
 
-- **Collapsible tree**: Each level can be expanded/collapsed. All levels (L0 through L9) supported.
-- **Level badges**: Each node displays its level as a colored badge (`L0` = red, `L1` = orange, `L2` = blue, `L3` = green, `L4-L9` = gray gradient).
-- **Status colors**: Green dot = active/running, gray circle = idle, yellow triangle = warning, red dot = error.
-- **Click-to-detail**: Clicking any node loads the detail panel on the right showing:
-  - **Scope**: What the agent is responsible for
-  - **Permissions**: Read, write, execute, escalate, spawn, configure, approve, delete
-  - **Model**: Which LLM model this agent uses
-  - **Telemetry**: Tasks completed/failed, average processing time, token usage (in/out), retry count, escalation count (rolling 24h window)
-  - **Retries**: Total retries in the current session
-  - **Escalations**: Count and targets of escalations
-  - **Tokens**: Input/output token counts for the current session
-- **View Conversations**: Button opens a modal with the isolated chat history for the selected agent node -- each message shows role, content, timestamp, and token count.
-- **Filter bar**: Filter by level dropdown (L0-L9 or All), status dropdown (Active/Idle/Error/All), and free-text search across agent names.
-- **Status bar**: Bottom bar shows aggregate counts: total agents, active, idle, error, and spawned niche agents for the current plan.
+- **Branching tree diagram**: Full visual tree with parent-child connecting lines (vertical + horizontal connectors), color-coded by level (10 distinct colors from purple L0 to pink L9)
+- **Collapsible branches**: Each node with children can be expanded/collapsed. Click the ▸/▾ arrow to toggle. Toolbar provides Expand All, Collapse All, and Collapse to Level (L0-L9 dropdown)
+- **Active branch auto-expand**: Branches containing active/working nodes are automatically expanded — the user always sees the full path to active work
+- **Level-colored borders**: Each node box has a left border in its level color (L0 purple, L1 blue, L2 teal, L3 green, L4 yellow, L5 peach, L6 red, L7 maroon, L8 lavender, L9 pink)
+- **Status indicators**: Color-coded status dots — idle (gray `#6c7086`), active (blue `#89b4fa`), working (yellow `#f9e2af`), completed (green `#a6e3a1`), failed (red `#f38ba8`), escalated (orange `#fab387`)
+- **Pulsing active nodes**: Active/working nodes pulse with a CSS animation for immediate visual attention
+- **Stats bar**: Shows total node count, active count (pulsing), and per-level breakdown (L0:1, L1:1, L2:4, etc.)
+- **Legend**: Shows all status colors, level colors, and active path indicator
+- **Dual view toggle**: Switch between Diagram view (branching tree) and List view (flat indented list with hot path row highlighting)
+- **Build/Rebuild buttons**: "Build Default Agent Tree" button when tree is empty; "Rebuild Tree" button in toolbar to rebuild from scratch
+- **Filter bar**: Filter by level dropdown (L0-L9 or All), status dropdown (Active/Idle/Error/All), and free-text search across agent names
+- **Click-to-detail**: Clicking any node loads the detail panel showing scope, permissions, model, telemetry, and conversation history
 
-> **User View**: The Agent Tree shows you the full hierarchy of AI agents working on your project. Click any agent to see what it's doing, how many tokens it's used, and whether it's had any errors. Use "View Conversations" to see the exact messages an agent sent and received. Filter by level or status to focus on what matters.
+> **User View**: The Agent Tree shows you the full hierarchy of AI agents working on your project as a visual branching diagram. Active agents pulse and glow, with thick blue lines tracing the path from Boss AI down to the currently working agent. The tree auto-expands to show active branches, so you always see what's running. Use the toolbar to collapse/expand levels, or switch to list view for a compact overview.
 
-> **Developer View**: Tree data from `GET /api/agents/tree` which builds the hierarchy from `AgentTreeManagerService`. Detail panel loads from `GET /api/agents/:id/detail`. Conversation history from `GET /api/agents/:id/conversations`. Telemetry aggregated from `agent_telemetry` table with 24h rolling window. Level badges use CSS classes `.level-badge-L0` through `.level-badge-L9`. Tree rendering uses recursive DOM generation (same pattern as Link Tree). SSE events `agent:status_changed` trigger real-time node updates without full tree reload.
+> **Developer View**: Tree data from `GET /api/v9/tree` which loads all nodes via `database.getAllTreeNodes()`. Auto-build via `POST /api/v9/tree/build-default` which calls `AgentTreeManager.ensureDefaultTree()`. Rebuild passes `{ rebuild: true }` to delete existing nodes first. Rendering uses recursive `buildTreeNodeHtml()` generating nested HTML divs. Hot path computed by `markAncestorsHot()` walking up `parent_id` chain. Active path auto-expand removes collapsed state for hot nodes. CSS `@keyframes treePulse` handles pulsing animation. Connector lines use `border-left` (vertical) and `border-top` (horizontal) with dynamic width/color for hot paths. SSE events `agent:status_changed` and `tree:default_built` trigger real-time updates.
 
 ---
 

@@ -132,6 +132,7 @@ export type COEEventType =
     | 'tree:node_spawned' | 'tree:node_completed' | 'tree:node_failed'
     | 'tree:node_escalated' | 'tree:context_sliced'
     | 'tree:skeleton_built' | 'tree:branch_spawned' | 'tree:branch_pruned'
+    | 'tree:default_built'
     | 'tree:question_escalated' | 'tree:question_answered'
     // v9.0: Workflow Designer & Engine
     | 'workflow:created' | 'workflow:updated' | 'workflow:deleted'

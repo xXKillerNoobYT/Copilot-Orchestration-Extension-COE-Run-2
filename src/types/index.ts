@@ -96,6 +96,101 @@ export enum ProjectPhase {
     Complete = 'complete',
 }
 
+/** Standardized error codes per True Plan Doc 02 */
+export enum ErrorCode {
+    InvalidParam = 'INVALID_PARAM',
+    TokenLimitExceeded = 'TOKEN_LIMIT_EXCEEDED',
+    Timeout = 'TIMEOUT',
+    InternalError = 'INTERNAL_ERROR',
+    RateLimit = 'RATE_LIMIT',
+    InvalidState = 'INVALID_STATE',
+    ResourceNotFound = 'RESOURCE_NOT_FOUND',
+    AuthError = 'AUTH_ERROR',
+    SchemaValidationFailed = 'SCHEMA_VALIDATION_FAILED',
+    RecoveryTriggered = 'RECOVERY_TRIGGERED',
+    BreakerFailed = 'BREAKER_FAILED',
+    ToolNotFound = 'TOOL_NOT_FOUND',
+    DelegationFailed = 'DELEGATION_FAILED',
+    LoopDetected = 'LOOP_DETECTED',
+    DriftThresholdExceeded = 'DRIFT_THRESHOLD_EXCEEDED',
+    CoherenceDrop = 'COHERENCE_DROP',
+    TicketUpdateConflict = 'TICKET_UPDATE_CONFLICT',
+}
+
+/** Error severity levels */
+export type ErrorSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+/** Priority impact on workflow */
+export type PriorityImpact = 'NONE' | 'P3_IGNORABLE' | 'P2_DELAYED' | 'P1_BLOCKED';
+
+/** Standardized error response per True Plan Doc 02 */
+export interface StandardErrorResponse {
+    success: false;
+    error: {
+        code: ErrorCode;
+        message: string;
+        details?: Record<string, unknown>;
+        severity: ErrorSeverity;
+        retryable: boolean;
+        retry_after_seconds?: number;
+        fallback_suggested: boolean;
+        priority_impact: PriorityImpact;
+    };
+    context: {
+        task_id?: string;
+        agent_name?: string;
+        timestamp: string;
+    };
+}
+
+/** Error code metadata for retry/escalation logic */
+export const ERROR_CODE_META: Record<ErrorCode, { severity: ErrorSeverity; retryable: boolean; defaultRetryDelay: number; priorityImpact: PriorityImpact }> = {
+    [ErrorCode.InvalidParam]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.TokenLimitExceeded]:     { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 15, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.Timeout]:                { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 30, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.InternalError]:          { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.RateLimit]:              { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 60, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.InvalidState]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.ResourceNotFound]:       { severity: 'LOW',      retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P3_IGNORABLE' },
+    [ErrorCode.AuthError]:              { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.SchemaValidationFailed]: { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.RecoveryTriggered]:      { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 10, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.BreakerFailed]:          { severity: 'HIGH',     retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.ToolNotFound]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.DelegationFailed]:       { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 15, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.LoopDetected]:           { severity: 'HIGH',     retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.DriftThresholdExceeded]: { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.CoherenceDrop]:          { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 20, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.TicketUpdateConflict]:   { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 1,  priorityImpact: 'P2_DELAYED' },
+};
+
+/** Helper to create a StandardErrorResponse */
+export function createErrorResponse(
+    code: ErrorCode,
+    message: string,
+    options?: { details?: Record<string, unknown>; taskId?: string; agentName?: string }
+): StandardErrorResponse {
+    const meta = ERROR_CODE_META[code];
+    return {
+        success: false,
+        error: {
+            code,
+            message,
+            details: options?.details,
+            severity: meta.severity,
+            retryable: meta.retryable,
+            retry_after_seconds: meta.retryable ? meta.defaultRetryDelay : undefined,
+            fallback_suggested: meta.severity === 'HIGH' || meta.severity === 'CRITICAL',
+            priority_impact: meta.priorityImpact,
+        },
+        context: {
+            task_id: options?.taskId,
+            agent_name: options?.agentName,
+            timestamp: new Date().toISOString(),
+        },
+    };
+}
+
 /** Maps each phase to its stage number (1, 2, or 3) */
 export const PHASE_STAGE_MAP: Record<ProjectPhase, number> = {
     [ProjectPhase.Planning]: 1,

@@ -44,8 +44,13 @@ export class ModelRouter {
 
     constructor(
         private readonly database: Database,
-        private readonly llmConfig: LLMConfig
+        private llmConfig: LLMConfig
     ) {}
+
+    /** v9.0: Update the default LLM config so model changes propagate to agent fallback routing. */
+    updateLLMConfig(config: LLMConfig): void {
+        this.llmConfig = config;
+    }
 
     // ==================== MODEL DETECTION ====================
 

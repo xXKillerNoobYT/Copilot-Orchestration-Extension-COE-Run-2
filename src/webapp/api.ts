@@ -1013,8 +1013,13 @@ export async function handleApiRequest(
             if (route === 'plan-files/folders' && method === 'GET') {
                 const planId = new URL(req.url || '', 'http://localhost').searchParams.get('plan_id');
                 if (!planId) { json(res, { error: 'plan_id required' }, 400); return true; }
-                const folders = database.getPlanFileFolders(planId);
-                json(res, folders);
+                try {
+                    const folders = database.getPlanFileFolders(planId);
+                    json(res, folders);
+                } catch {
+                    // v9.0: Return empty array if table/query fails (e.g. fresh DB without plan_file_folders table)
+                    json(res, { success: true, data: [] });
+                }
                 return true;
             }
 
@@ -1278,18 +1283,20 @@ export async function handleApiRequest(
             eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
             database.addAuditLog('planning', 'plan_created', `Plan "${name}": created without AI tasks (${genError})`);
 
-            // Update early ticket to reflect failure (or create fallback)
+            // Update early ticket to reflect partial success (plan created, tasks need manual addition or retry)
             if (earlyParentTicket) {
                 database.updateTicket(earlyParentTicket.id, {
-                    title: 'Plan: ' + name + ' \u2014 Generation Failed',
-                    body: 'Plan "' + name + '" was created but AI task generation failed.\nError: ' + genError + '\n' + detail +
+                    title: 'Plan: ' + name + ' \u2014 Needs Task Generation',
+                    body: 'Plan "' + name + '" was created successfully but AI could not auto-generate structured tasks.\nReason: ' + genError + '\n' + detail +
+                        '\n\nYou can retry AI generation or add tasks manually.' +
                         '\n\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel,
+                    status: TicketStatus.InReview,
                 });
             } else {
                 createAutoTicket(database, 'plan_generation',
-                    'Plan: ' + name + ' \u2014 Generation Failed',
-                    'AI task generation failed.\nError: ' + genError + '\n' + detail,
-                    'P1', aiLevel);
+                    'Plan: ' + name + ' \u2014 Needs Task Generation',
+                    'Plan created but AI task generation needs retry.\nReason: ' + genError + '\n' + detail,
+                    'P2', aiLevel);
             }
 
             json(res, { plan: database.getPlan(plan.id), taskCount: 0, tasks: [], raw_response: response.content, generation_error: genError, error_detail: detail }, 201);
@@ -5219,7 +5226,7 @@ Only return the JSON array.`;
 
         // GET /api/v9/workflows — list all workflows
         if (route === 'v9/workflows' && method === 'GET') {
-            const workflows = database.getWorkflowsByPlan(null);
+            const workflows = database.getAllWorkflows();
             json(res, { success: true, data: workflows });
             return true;
         }
@@ -5467,12 +5474,11 @@ Only return the JSON array.`;
 
         // ==================== v9.0: AGENT TREE ENDPOINTS ====================
 
-        // GET /api/v9/tree — get full tree for active plan
+        // GET /api/v9/tree — get full tree
         if (route === 'v9/tree' && method === 'GET') {
             const plan = database.getActivePlan();
-            if (!plan) { json(res, { success: true, data: { nodes: [] } }); return true; }
-            const nodes = database.getTreeNodesByTask(plan.id);
-            json(res, { success: true, data: { plan_id: plan.id, nodes } });
+            const nodes = database.getAllTreeNodes();
+            json(res, { success: true, data: { plan_id: plan?.id || null, nodes } });
             return true;
         }
 
@@ -5480,6 +5486,27 @@ Only return the JSON array.`;
         if (route === 'v9/tree-templates' && method === 'GET') {
             const templates = database.getAllTreeTemplates();
             json(res, { success: true, data: templates });
+            return true;
+        }
+
+        // POST /api/v9/tree/build-default — build default system tree with all niche agents
+        if (route === 'v9/tree/build-default' && method === 'POST') {
+            const atm = orchestrator.getAgentTreeManager();
+            if (!atm) {
+                json(res, { error: 'AgentTreeManager not available' }, 500);
+                return true;
+            }
+            // Clear existing tree first if requested
+            const body = await parseBody(req);
+            if (body.rebuild) {
+                const existing = database.getAllTreeNodes();
+                for (const node of existing) {
+                    database.deleteTreeNode(node.id);
+                }
+            }
+            const built = atm.ensureDefaultTree();
+            const nodes = database.getAllTreeNodes();
+            json(res, { success: true, data: { built, nodeCount: nodes.length } }, built ? 201 : 200);
             return true;
         }
 

@@ -17,7 +17,14 @@
       "Bash(design \")",
       "Bash(grep:*)",
       "Bash(curl:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(code:*)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_install",
+      "Bash(where:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(PLAYWRIGHT_BROWSERS_PATH=\"C:\\\\Users\\\\weird\\\\AppData\\\\Local\\\\ms-playwright\" npx playwright install:*)",
+      "Bash(npx playwright install chromium)"
     ]
   }
 }

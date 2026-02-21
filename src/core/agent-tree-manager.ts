@@ -96,6 +96,58 @@ export class AgentTreeManager {
         private outputChannel: OutputChannelLike
     ) {}
 
+    // ==================== DEFAULT TREE AUTO-BUILD ====================
+
+    /**
+     * Ensure a default agent tree exists. If the tree is empty, builds the
+     * full 10-level hierarchy using the standard template and spawns all
+     * niche agent branches so the user can see the complete ~230+ agent
+     * structure immediately.
+     *
+     * Uses sentinel task_id 'system-default' so it's distinguishable from
+     * plan-specific trees.
+     *
+     * @returns true if a new tree was built, false if one already existed
+     */
+    ensureDefaultTree(): boolean {
+        const existingNodes = this.database.getAllTreeNodes();
+        if (existingNodes.length > 0) {
+            this.outputChannel.appendLine('[AgentTree] Default tree already exists, skipping auto-build');
+            return false;
+        }
+
+        this.outputChannel.appendLine('[AgentTree] No tree found — auto-building default hierarchy');
+
+        // Build L0-L4 skeleton
+        const rootNode = this.buildSkeletonForPlan('system-default', 'standard');
+
+        // Now spawn L5-L9 branches for every L4 manager
+        const l4Nodes = this.database.getTreeNodesByLevel(AgentLevel.L4_Manager, 'system-default');
+        let totalNicheSpawned = 0;
+        for (const manager of l4Nodes) {
+            try {
+                const spawned = this.spawnBranch(manager.id, AgentLevel.L9_Checker);
+                totalNicheSpawned += spawned.length;
+            } catch {
+                // Some managers may not have matching niche agents — that's fine
+            }
+        }
+
+        const totalNodes = this.database.getAllTreeNodes().length;
+        this.outputChannel.appendLine(
+            `[AgentTree] Default tree built: ${totalNodes} total nodes ` +
+            `(skeleton ~50 + ${totalNicheSpawned} niche agents)`
+        );
+
+        this.eventBus.emit('tree:default_built', 'AgentTreeManager', {
+            rootNodeId: rootNode.id,
+            totalNodes,
+            nicheAgentsSpawned: totalNicheSpawned,
+        });
+
+        return true;
+    }
+
     // ==================== SKELETON BUILD ====================
 
     /**
@@ -985,7 +1037,17 @@ export class AgentTreeManager {
      * Mark a node as actively working.
      */
     activateNode(nodeId: string): void {
+        const node = this.getNode(nodeId);
         this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Working });
+
+        if (node) {
+            this.eventBus.emit('tree:node_activated', 'AgentTreeManager', {
+                nodeId,
+                nodeName: node.name,
+                level: node.level,
+                parentId: node.parent_id,
+            });
+        }
     }
 
     /**
@@ -997,6 +1059,7 @@ export class AgentTreeManager {
 
     /**
      * Complete a node with a result.
+     * Resets back to idle after 10s so the node can be reused for subsequent tickets.
      */
     completeNode(nodeId: string, result: string): void {
         const node = this.getNode(nodeId);
@@ -1020,10 +1083,19 @@ export class AgentTreeManager {
             level: node.level,
             parentId: node.parent_id,
         });
+
+        // Reset to idle after 10s so the tree refreshes for subsequent tickets
+        setTimeout(() => {
+            try {
+                this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Idle });
+                this.eventBus.emit('tree:node_idle', 'AgentTreeManager', { nodeId, nodeName: node.name, level: node.level });
+            } catch { /* non-fatal — node may have been deleted */ }
+        }, 10000);
     }
 
     /**
      * Fail a node with an error.
+     * Resets back to idle after 15s so the node can be reused for subsequent tickets.
      */
     failNode(nodeId: string, error: string): void {
         const node = this.getNode(nodeId);
@@ -1048,6 +1120,14 @@ export class AgentTreeManager {
             error,
             retries: node.retries + 1,
         });
+
+        // Reset to idle after 15s (slightly longer than success so user can see the failure)
+        setTimeout(() => {
+            try {
+                this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Idle });
+                this.eventBus.emit('tree:node_idle', 'AgentTreeManager', { nodeId, nodeName: node.name, level: node.level });
+            } catch { /* non-fatal — node may have been deleted */ }
+        }, 15000);
     }
 
     /**

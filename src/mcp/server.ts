@@ -357,6 +357,14 @@ export class MCPServer {
             const message = args.message as string;
             const confirmationId = args.confirmation_id as string | undefined;
 
+            // Validate required parameters
+            if (!agentName || typeof agentName !== 'string') {
+                return { success: false, error: 'Missing or invalid required parameter: agent_name. Expected a string identifying the agent (e.g., "planning", "verification", "answer").' };
+            }
+            if (!message || typeof message !== 'string') {
+                return { success: false, error: 'Missing or invalid required parameter: message. Expected a string with the task or question for the agent.' };
+            }
+
             // v9.0: Confirmation stage
             if (this.confirmationEnabled && !confirmationId) {
                 // Step 1: Create confirmation — return agent description, don't execute yet
@@ -623,7 +631,7 @@ export class MCPServer {
         this.server = http.createServer(async (req, res) => {
             // CORS headers
             res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
             if (req.method === 'OPTIONS') {

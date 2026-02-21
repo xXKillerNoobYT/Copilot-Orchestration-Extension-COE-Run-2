@@ -80,6 +80,13 @@ export interface DocumentManagerLike {
     ): import('../types').SupportDocument;
 }
 
+/** v9.0: Minimal interface for AgentTreeManager, avoiding tight coupling */
+export interface AgentTreeManagerLike {
+    activateNode(nodeId: string): void;
+    completeNode(nodeId: string, result: string): void;
+    failNode(nodeId: string, error: string): void;
+}
+
 interface QueuedTicket {
     ticketId: string;
     priority: string;
@@ -371,6 +378,8 @@ export class TicketProcessorService {
     private fillingSlots = false;
     /** v7.0: Document manager for support document context injection */
     private documentManager: DocumentManagerLike | null = null;
+    /** v9.0: Agent tree manager for live status tracking during ticket processing */
+    private agentTreeMgr: AgentTreeManagerLike | null = null;
 
     constructor(
         private database: Database,
@@ -391,6 +400,15 @@ export class TicketProcessorService {
     setDocumentManager(dm: DocumentManagerLike): void {
         this.documentManager = dm;
         this.outputChannel.appendLine('[TicketProcessor] DocumentManagerService injected.');
+    }
+
+    /**
+     * v9.0: Inject AgentTreeManager for live tree status tracking.
+     * Called during extension activation after AgentTreeManager is created.
+     */
+    setAgentTreeManager(atm: AgentTreeManagerLike): void {
+        this.agentTreeMgr = atm;
+        this.outputChannel.appendLine('[TicketProcessor] AgentTreeManager injected for live status.');
     }
 
     // ==================== TEAM QUEUE MANAGEMENT (v7.0) ====================
@@ -929,7 +947,15 @@ export class TicketProcessorService {
             if (!this.disposed) {
                 this.startupAssessmentRunning = true;
                 this.kickRequestedDuringStartup = false;
-                this.runBossStartupAssessment().finally(() => {
+                // v9.0: 30s timeout guard — if LLM is down, don't block bossCycle indefinitely
+                const assessmentPromise = this.runBossStartupAssessment();
+                const timeoutPromise = new Promise<void>((resolve) =>
+                    setTimeout(() => {
+                        this.outputChannel.appendLine('[TicketProcessor] Startup assessment timed out after 30s — proceeding to bossCycle');
+                        resolve();
+                    }, 30000)
+                );
+                Promise.race([assessmentPromise, timeoutPromise]).finally(() => {
                     this.startupAssessmentRunning = false;
                     if (!this.disposed) {
                         // If tickets arrived during the assessment, or assessment found work
@@ -1974,6 +2000,9 @@ export class TicketProcessorService {
             prompt_sent: promptText,
         });
 
+        // v9.0: Track active tree node for lifecycle updates (declared before try so catch can access it)
+        let activeTreeNodeId: string | null = null;
+
         try {
             // v4.1: Build context with previous run history for retries
             const previousRuns = this.database.getTicketRuns(ticketId);
@@ -2034,6 +2063,32 @@ export class TicketProcessorService {
                     this.outputChannel.appendLine(
                         `[TicketProcessor] Support document injection failed (non-fatal): ${error}`
                     );
+                }
+            }
+
+            // v9.0: Activate matching tree node for live status tracking
+            // Use the primary specialist agent (skip orchestrator wrap steps) for a better tree match
+            if (this.agentTreeMgr) {
+                try {
+                    // Find the primary specialist agent (not orchestrator wrap)
+                    const specialistStep = pipeline.steps.find(s => s.agentName !== 'orchestrator') || pipeline.steps[0];
+                    const primaryAgent = specialistStep?.agentName;
+                    if (primaryAgent) {
+                        const treeNode = this.database.findTreeNodeForAgent(primaryAgent, {
+                            title: ticket.title,
+                            operation_type: ticket.operation_type,
+                            body: ticket.body,
+                        });
+                        if (treeNode) {
+                            activeTreeNodeId = treeNode.id;
+                            this.agentTreeMgr.activateNode(treeNode.id);
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Tree node activated: ${treeNode.name} (${treeNode.id}) for agent '${primaryAgent}'`
+                            );
+                        }
+                    }
+                } catch (treeErr) {
+                    this.outputChannel.appendLine(`[TicketProcessor] Tree node activation failed (non-fatal): ${treeErr}`);
                 }
             }
 
@@ -2343,6 +2398,11 @@ export class TicketProcessorService {
                     ticketId, ticketNumber: ticket.ticket_number, title: ticket.title,
                 });
                 this.eventBus.emit('ticket:verification_passed', 'ticket-processor', { ticketId });
+                // v9.0: Complete tree node on successful resolution
+                if (this.agentTreeMgr && activeTreeNodeId) {
+                    try { this.agentTreeMgr.completeNode(activeTreeNodeId, `Resolved TK-${ticket.ticket_number}`); }
+                    catch (treeErr) { /* non-fatal */ }
+                }
                 this.outputChannel.appendLine(`[TicketProcessor] TK-${ticket.ticket_number} resolved (verified)`);
 
                 // v4.1: Unblock any tickets that were blocked by this resolved ticket
@@ -2370,6 +2430,11 @@ export class TicketProcessorService {
             this.outputChannel.appendLine(`[TicketProcessor] Error processing TK-${ticket.ticket_number}: ${msg}`);
             this.database.addTicketReply(ticketId, 'system', `Processing error: ${msg}`);
             this.eventBus.emit('agent:error', 'ticket-processor', { ticketId, error: msg, stack });
+            // v9.0: Fail tree node on error
+            if (this.agentTreeMgr && activeTreeNodeId) {
+                try { this.agentTreeMgr.failNode(activeTreeNodeId, msg.substring(0, 200)); }
+                catch (treeErr) { /* non-fatal */ }
+            }
 
             // v4.1: Update run with error details (stack truncated to 2000 chars)
             this.database.completeTicketRun(run.id, {

@@ -5208,11 +5208,109 @@ export class Database {
         return rows.map(r => this.rowToTreeNode(r));
     }
 
+    getAllTreeNodes(): AgentTreeNode[] {
+        return (this.db.prepare('SELECT * FROM agent_tree_nodes ORDER BY level ASC').all() as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
+    }
+
     getTreeNodesByLevel(level: AgentLevel, taskId?: string): AgentTreeNode[] {
         if (taskId) {
             return (this.db.prepare('SELECT * FROM agent_tree_nodes WHERE level = ? AND task_id = ?').all(level, taskId) as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
         }
         return (this.db.prepare('SELECT * FROM agent_tree_nodes WHERE level = ?').all(level) as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
+    }
+
+    /** v9.0: Find tree nodes by agent_type (e.g. 'planning', 'verification'). Returns first match at lowest level. */
+    getTreeNodeByAgentType(agentType: string): AgentTreeNode | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE agent_type = ? ORDER BY level ASC LIMIT 1').get(agentType) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeNode(row);
+    }
+
+    /**
+     * v9.0: Smart tree node lookup for live status tracking.
+     * Maps core pipeline agent names to the best matching tree node using:
+     * 1. Static mapping for well-known agents (boss → BossAgent, orchestrator → GlobalOrchestrator)
+     * 2. Scope-keyword matching against the ticket context to pick the right domain subtree
+     * 3. Fallback to exact agent_type match
+     * 4. Final fallback to GlobalOrchestrator
+     */
+    findTreeNodeForAgent(agentName: string, ticketContext?: { title?: string; operation_type?: string; body?: string }): AgentTreeNode | null {
+        // Static mapping: core agent names → preferred tree node names
+        const AGENT_TO_NODE_NAME: Record<string, string> = {
+            'boss': 'BossAgent',
+            'orchestrator': 'GlobalOrchestrator',
+            'clarity': 'GlobalOrchestrator',
+        };
+
+        // Direct name match for well-known agents
+        const directName = AGENT_TO_NODE_NAME[agentName];
+        if (directName) {
+            const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE name = ? LIMIT 1').get(directName) as Record<string, unknown> | undefined;
+            if (row) return this.rowToTreeNode(row);
+        }
+
+        // For domain-specific agents, pick the right subtree based on ticket context
+        // Agent → domain mapping (which L2 orchestrator subtree they belong under)
+        const AGENT_DOMAIN_HINTS: Record<string, string[]> = {
+            'coding': ['CodeDomainOrchestrator'],
+            'verification': ['TestingArea', 'CodeDomainOrchestrator'],
+            'design_architect': ['DesignDomainOrchestrator'],
+            'planning': [], // planning is cross-domain — use ticket context to decide
+        };
+
+        const domainHints = AGENT_DOMAIN_HINTS[agentName];
+        if (domainHints && domainHints.length > 0) {
+            // Try each hint in order
+            for (const nodeName of domainHints) {
+                const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE name = ? LIMIT 1').get(nodeName) as Record<string, unknown> | undefined;
+                if (row) return this.rowToTreeNode(row);
+            }
+        }
+
+        // For 'planning' and unknown agents: use ticket context to find the best domain match
+        if (ticketContext) {
+            const contextText = [
+                ticketContext.title || '',
+                ticketContext.operation_type || '',
+                ticketContext.body?.substring(0, 200) || '',
+            ].join(' ').toLowerCase();
+
+            // Try to match L2 domain orchestrators by their scope keywords
+            const domainNodes = (this.db.prepare(
+                'SELECT * FROM agent_tree_nodes WHERE level = 2 ORDER BY name ASC'
+            ).all() as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
+
+            let bestNode: AgentTreeNode | null = null;
+            let bestScore = 0;
+
+            for (const node of domainNodes) {
+                const scopeKeywords = (node.scope || '').split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
+                let score = 0;
+                for (const kw of scopeKeywords) {
+                    if (contextText.includes(kw)) {
+                        score++;
+                    }
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestNode = node;
+                }
+            }
+
+            if (bestNode && bestScore > 0) {
+                return bestNode;
+            }
+        }
+
+        // Fallback: try exact agent_type match (original behavior)
+        const typeMatch = this.getTreeNodeByAgentType(agentName);
+        if (typeMatch) return typeMatch;
+
+        // Final fallback: GlobalOrchestrator
+        const fallback = this.db.prepare("SELECT * FROM agent_tree_nodes WHERE name = 'GlobalOrchestrator' LIMIT 1").get() as Record<string, unknown> | undefined;
+        if (fallback) return this.rowToTreeNode(fallback);
+
+        return null;
     }
 
     getTreeAncestors(nodeId: string): AgentTreeNode[] {
@@ -5444,6 +5542,10 @@ export class Database {
         const row = this.db.prepare('SELECT * FROM workflow_definitions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
         if (!row) return null;
         return this.rowToWorkflowDef(row);
+    }
+
+    getAllWorkflows(): WorkflowDefinition[] {
+        return (this.db.prepare('SELECT * FROM workflow_definitions ORDER BY name ASC').all() as Record<string, unknown>[]).map(r => this.rowToWorkflowDef(r));
     }
 
     getWorkflowsByPlan(planId: string | null): WorkflowDefinition[] {

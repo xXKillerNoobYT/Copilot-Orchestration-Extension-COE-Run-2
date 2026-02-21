@@ -204,37 +204,56 @@ export class ConfigManager {
         };
     }
 
+    /**
+     * Apply VS Code settings overrides — ONLY if the user has explicitly set them.
+     *
+     * Uses inspect() instead of get() to distinguish between:
+     * - User-set values (globalValue, workspaceValue, workspaceFolderValue) → override config
+     * - Package.json defaults (defaultValue) → DO NOT override config
+     *
+     * This ensures that changes made via the webapp Settings page persist across
+     * reloads, while still allowing VS Code settings to take priority when
+     * the user explicitly configures them in settings.json.
+     */
     private applyVSCodeSettings(): void {
         const vsConfig = vscode.workspace.getConfiguration('coe');
 
-        const endpoint = vsConfig.get<string>('llm.endpoint');
+        // Helper: returns the user-set value (if any), or undefined if only the default is present
+        const getUserSet = <T>(key: string): T | undefined => {
+            const inspection = vsConfig.inspect<T>(key);
+            if (!inspection) return undefined;
+            // Priority: workspaceFolder > workspace > global. Skip defaultValue.
+            return inspection.workspaceFolderValue ?? inspection.workspaceValue ?? inspection.globalValue;
+        };
+
+        const endpoint = getUserSet<string>('llm.endpoint');
         if (endpoint) this.config.llm.endpoint = endpoint;
 
-        const model = vsConfig.get<string>('llm.model');
+        const model = getUserSet<string>('llm.model');
         if (model) this.config.llm.model = model;
 
-        const timeout = vsConfig.get<number>('llm.timeoutSeconds');
+        const timeout = getUserSet<number>('llm.timeoutSeconds');
         if (timeout != null) this.config.llm.timeoutSeconds = timeout;
 
-        const startupTimeout = vsConfig.get<number>('llm.startupTimeoutSeconds');
+        const startupTimeout = getUserSet<number>('llm.startupTimeoutSeconds');
         if (startupTimeout != null) this.config.llm.startupTimeoutSeconds = startupTimeout;
 
-        const maxTokens = vsConfig.get<number>('llm.maxTokens');
+        const maxTokens = getUserSet<number>('llm.maxTokens');
         if (maxTokens != null) this.config.llm.maxTokens = maxTokens;
 
-        const maxInputTokens = vsConfig.get<number>('llm.maxInputTokens');
+        const maxInputTokens = getUserSet<number>('llm.maxInputTokens');
         if (maxInputTokens != null) this.config.llm.maxInputTokens = maxInputTokens;
 
-        const streamStall = vsConfig.get<number>('llm.streamStallTimeoutSeconds');
+        const streamStall = getUserSet<number>('llm.streamStallTimeoutSeconds');
         if (streamStall != null) this.config.llm.streamStallTimeoutSeconds = streamStall;
 
-        const maxPending = vsConfig.get<number>('taskQueue.maxPending');
+        const maxPending = getUserSet<number>('taskQueue.maxPending');
         if (maxPending != null) this.config.taskQueue.maxPending = maxPending;
 
-        const verDelay = vsConfig.get<number>('verification.delaySeconds');
+        const verDelay = getUserSet<number>('verification.delaySeconds');
         if (verDelay != null) this.config.verification.delaySeconds = verDelay;
 
-        const debounce = vsConfig.get<number>('watcher.debounceMs');
+        const debounce = getUserSet<number>('watcher.debounceMs');
         if (debounce != null) this.config.watcher.debounceMs = debounce;
     }
 

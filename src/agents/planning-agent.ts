@@ -197,8 +197,11 @@ Example: { "actions": [{ "type": "call_support_agent", "payload": { "agent_name"
         const actions: AgentAction[] = [];
 
         try {
+            // v9.0: Strip markdown code fences before JSON extraction
+            // LLMs often wrap JSON in ```json...``` blocks
+            let cleanedContent = content.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '');
             // Try to extract JSON from the response
-            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0]);
 

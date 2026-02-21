@@ -251,6 +251,7 @@ If you cannot proceed or information is missing:
     private llmOffline = false;
     private evolutionService: EvolutionService | null = null;
     private eventBus: EventBus | null = null;
+    private injectedTreeManager: AgentTreeManager | undefined;
     // v4.1: Track scheduled timers for cleanup on dispose
     private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -335,6 +336,7 @@ If you cannot proceed or information is missing:
         }
 
         this.outputChannel.appendLine(`Routing to ${agent.name} (intent: ${intent})`);
+        this.database.updateAgentStatus(agent.name, AgentStatus.Working, message.substring(0, 100));
 
         try {
             const response = await agent.processMessage(message, context);
@@ -342,6 +344,8 @@ If you cannot proceed or information is missing:
             return response;
         } catch (error) {
             return this.handleAgentError(agent.name, error, message, context, true);
+        } finally {
+            this.database.updateAgentStatus(agent.name, AgentStatus.Idle);
         }
     }
 
@@ -351,6 +355,7 @@ If you cannot proceed or information is missing:
             return { content: `Agent not found: ${agentName}` };
         }
         this.database.addAuditLog('orchestrator', 'direct_call', `Direct call to ${agentName}`);
+        this.database.updateAgentStatus(agentName, AgentStatus.Working, message.substring(0, 100));
 
         try {
             const response = await agent.processMessage(message, context);
@@ -358,6 +363,8 @@ If you cannot proceed or information is missing:
             return response;
         } catch (error) {
             return this.handleAgentError(agentName, error, message, context, false);
+        } finally {
+            this.database.updateAgentStatus(agentName, AgentStatus.Idle);
         }
     }
 
@@ -681,10 +688,18 @@ If you cannot proceed or information is missing:
      * v9.0: Inject agent tree manager into all agents for tree-aware processing.
      */
     injectAgentTreeManager(atm: AgentTreeManager): void {
+        this.injectedTreeManager = atm;
         for (const agent of this.getAllAgents()) {
             agent.setAgentTreeManager(atm);
         }
         this.outputChannel.appendLine(`AgentTreeManager injected into ${this.getAllAgents().length} agents.`);
+    }
+
+    /**
+     * v9.0: Get the injected agent tree manager.
+     */
+    getAgentTreeManager(): AgentTreeManager | undefined {
+        return this.injectedTreeManager;
     }
 
     /**

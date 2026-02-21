@@ -731,7 +731,7 @@ flowchart TB
 
 ### v9.0 Features (February 2026)
 
-#### 10-Level Agent Hierarchy — PLANNED (v9.0)
+#### 10-Level Agent Hierarchy — IMPLEMENTED (v9.0)
 
 Full corporate-style hierarchy with approximately 230 niche agents across 4 domains:
 
@@ -742,13 +742,17 @@ Full corporate-style hierarchy with approximately 230 niche agents across 4 doma
 | **Data** | ~40 | Schema designers, migration writers, query optimizers, seed data generators |
 | **Docs** | ~30 | API doc writers, README generators, changelog maintainers, tutorial builders |
 
-**Lazy spawning**: Levels L0-L4 (Boss AI, Directors, Senior Managers, Managers, Team Leads) are created as a skeleton structure on plan creation. Levels L5-L9 (Senior Specialists, Specialists, Workers, Junior Workers, Interns) are spawned on demand when work arrives that requires them. Despawned after configurable idle timeout to conserve resources.
+**Auto-build on startup**: `ensureDefaultTree()` auto-builds the full hierarchy (~280 nodes) on extension activation if no tree exists. L0-L4 skeleton from built-in template, L5-L9 niche agents spawned for all L4 managers by matching scope keywords to specialties. Uses sentinel task_id `'system-default'`.
 
-**Files**: `src/core/agent-tree-manager.ts` (hierarchy management, spawn/despawn, depth/fanout enforcement)
+**Lazy spawning for plans**: Plan-specific trees use `buildSkeletonForPlan(planId)` for L0-L4, with L5-L9 spawned on demand when work arrives. Despawned after configurable idle timeout.
 
-#### Visual Workflow Designer — PLANNED (v9.0)
+**Webapp visualization**: Interactive branching tree diagram with connecting lines, collapsible nodes, color-coded levels (10 colors), status dots, active branch auto-expansion, hot path highlighting (thick blue lines + pulsing animation), stats bar, legend, and dual view toggle (diagram/list).
 
-Mermaid-based diagram editor for designing and executing multi-step agent workflows. Users draw flowcharts; COE executes them.
+**Files**: `src/core/agent-tree-manager.ts` (hierarchy management, spawn/despawn, auto-build, depth/fanout enforcement), `src/core/niche-agent-factory.ts` (~230 niche agent definitions)
+
+#### Visual Workflow Designer — IMPLEMENTED (v9.0)
+
+Mermaid-based diagram editor for designing and executing multi-step agent workflows. Users draw flowcharts; COE executes them. Accessible from the standalone "Workflows" tab in the webapp, and also linked from the "Planning & Design" tab via a "Plan Workflows" section that shows workflows associated with the active plan.
 
 **Step types**:
 
@@ -768,7 +772,7 @@ Mermaid-based diagram editor for designing and executing multi-step agent workfl
 
 **Files**: `src/core/workflow-engine.ts` (execution), `src/core/workflow-designer.ts` (Mermaid rendering + editing)
 
-#### User Communication Orchestrator (Agent #18) — PLANNED (v9.0)
+#### User Communication Orchestrator (Agent #18) — IMPLEMENTED (v9.0)
 
 Intercepts ALL system-to-user messages. No agent communicates directly with the user — everything routes through this agent.
 
@@ -782,7 +786,7 @@ Intercepts ALL system-to-user messages. No agent communicates directly with the 
 
 **Files**: `src/agents/user-comm-orchestrator-agent.ts`
 
-#### Question Escalation Chain — PLANNED (v9.0)
+#### Question Escalation Chain — IMPLEMENTED (v9.0)
 
 Questions bubble up through the agent tree: L9 -> L8 -> ... -> L1 -> L0 (Boss AI) -> User Communication Orchestrator -> User.
 
@@ -794,7 +798,7 @@ At each level, the agent checks:
 
 Most questions are resolved before reaching the user. Only genuinely novel questions that no agent at any level can answer reach the User Communication Orchestrator for user presentation.
 
-#### Per-Agent Model Selection — PLANNED (v9.0)
+#### Per-Agent Model Selection — IMPLEMENTED (v9.0)
 
 Multiple LLM models can be configured per agent based on the agent's capability requirements:
 
@@ -807,7 +811,7 @@ Multiple LLM models can be configured per agent based on the agent's capability 
 
 Model assignment is configurable per agent via the Settings UI. Each agent's model can be changed independently. The `LLMService` routes calls to the correct model endpoint based on the calling agent's configuration.
 
-#### Agent Permission System — PLANNED (v9.0)
+#### Agent Permission System — IMPLEMENTED (v9.0)
 
 Per-agent permissions with 8 permission types: `read`, `write`, `execute`, `escalate`, `spawn`, `configure`, `approve`, `delete`.
 
@@ -817,7 +821,7 @@ Per-agent permissions with 8 permission types: `read`, `write`, `execute`, `esca
 
 **Permission matrix UI**: New Settings tab showing a grid of agents x permissions with toggle switches. Changes logged to audit trail.
 
-#### User Profile System — PLANNED (v9.0)
+#### User Profile System — IMPLEMENTED (v9.0)
 
 Persistent user profile that shapes how COE communicates and what decisions it makes autonomously:
 
@@ -834,7 +838,7 @@ Persistent user profile that shapes how COE communicates and what decisions it m
 
 **Profile storage**: `user_profile` table in SQLite. Profile fields editable via Settings page. Profile is loaded into User Communication Orchestrator context on every message.
 
-#### MCP Confirmation Stage — PLANNED (v9.0)
+#### MCP Confirmation Stage — IMPLEMENTED (v9.0)
 
 2-step confirmation for external agent calls via MCP:
 
@@ -843,7 +847,7 @@ Persistent user profile that shapes how COE communicates and what decisions it m
 
 Confirmations expire after configurable timeout (default: 60 seconds). One-time use. Scope-bound to specific agent + input. Can be enabled/disabled globally or per-agent.
 
-#### Niche Agent Browser — PLANNED (v9.0)
+#### Niche Agent Browser — IMPLEMENTED (v9.0)
 
 New webapp panel for exploring the ~230 niche agent definitions:
 

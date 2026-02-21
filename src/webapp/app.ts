@@ -1525,6 +1525,22 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </div>
         <div class="version-list" id="versionList"><div class="empty">No versions saved yet.</div></div>
     </div>
+
+    <!-- ==================== PLAN WORKFLOWS (v9.0) ==================== -->
+    <div class="section" id="planWorkflowSection" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h2>Plan Workflows</h2>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-sm btn-primary" onclick="createPlanWorkflow()">+ New Workflow</button>
+                <button class="btn btn-sm btn-secondary" onclick="loadPlanWorkflows()">Refresh</button>
+                <button class="btn btn-sm btn-secondary" onclick="navigateTo('workflows')">Open Full Designer</button>
+            </div>
+        </div>
+        <p style="color:var(--subtext);font-size:0.85em;margin-bottom:12px">Define workflows to link elements, pages, and requirements together. Create step-by-step processes for your plan.</p>
+        <div id="planWorkflowList" style="display:flex;flex-direction:column;gap:8px">
+            <div class="empty">Select a plan to view its workflows</div>
+        </div>
+    </div>
 </div>
 
 <!-- ==================== MERGE MODAL ==================== -->
@@ -1576,6 +1592,17 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <option value="failed">Failed</option>
             </select>
             <button class="btn btn-sm btn-secondary" onclick="loadAgentTree()">Refresh</button>
+            <button class="btn btn-sm btn-secondary" onclick="expandAllTree()">Expand All</button>
+            <button class="btn btn-sm btn-secondary" onclick="collapseAllTree()">Collapse All</button>
+            <select id="treeCollapseLevel" onchange="var v=this.value;if(v)collapseTreeToLevel(parseInt(v))" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                <option value="">Collapse to level...</option>
+                <option value="0">L0 Boss</option>
+                <option value="1">L1 Global</option>
+                <option value="2">L2 Domain</option>
+                <option value="3">L3 Area</option>
+                <option value="4">L4 Manager</option>
+            </select>
+            <button class="btn btn-sm btn-secondary" onclick="rebuildDefaultTree()" title="Delete and rebuild the full agent hierarchy">Rebuild</button>
         </div>
         <div id="agentTreeView" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;min-height:300px;overflow-x:auto"></div>
         <div id="agentTreeDetail" style="margin-top:12px;display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px"></div>
@@ -2104,7 +2131,7 @@ function loadPage(page) {
                     }
                 }).catch(function() { /* no design data, skip */ });
             }
-            // Check if generation was in progress and restore dashboard
+            // Check if generation was in progress and restore dashboard + wizard
             if (loadState('generationInProgress', false)) {
                 showProgressDashboard(true);
                 var savedStart = loadState('generationStartTime', null);
@@ -2112,6 +2139,14 @@ function loadPage(page) {
                     pdStartTime = savedStart;
                     startElapsedTimer();
                 }
+                // Restore wizard visibility and step so the user sees progress
+                var wizEl = document.getElementById('wizardSection');
+                if (wizEl) wizEl.style.display = '';
+                var savedWizStep = loadState('wizStep', 0);
+                if (savedWizStep > 0) wizGoTo(savedWizStep);
+                // Show the output area
+                var wizOut = document.getElementById('wizOutput');
+                if (wizOut) wizOut.style.display = '';
             }
         }); break;
         case 'agents': loadAgents(); break;
@@ -3380,8 +3415,11 @@ async function wizGenerate() {
     out.appendChild(loadingOverlay);
     // Persist generation state for recovery if user navigates away
     saveState('generationInProgress', true);
-    saveState('generationStartTime', Date.now());
+    var genStart = Date.now();
+    saveState('generationStartTime', genStart);
+    saveState('pdStartTime', genStart);
     saveState('generationPlanName', name);
+    pdStartTime = genStart;
     showProgressDashboard(true);
     startElapsedTimer();
     const design = {
@@ -3911,7 +3949,9 @@ async function loadPlans() {
         }
 
         // Has plans — hide the wizard and tour, show the active plan section prominently
-        if (wizSection) wizSection.style.display = 'none';
+        // But preserve wizard if plan generation is actively in progress
+        var genInProgress = loadState('generationInProgress', false);
+        if (wizSection && !genInProgress) wizSection.style.display = 'none';
         if (tourContainer) tourContainer.style.display = 'none';
         if (activePlanSec) activePlanSec.style.display = '';
 
@@ -3920,9 +3960,10 @@ async function loadPlans() {
         activePlanId = active.id;
         saveState('activePlanId', activePlanId);
 
-        // Render phase indicator and QA panel for active plan
+        // Render phase indicator, QA panel, and plan workflows for active plan
         renderPhaseIndicator(activePlanId);
         renderQAPanel(activePlanId);
+        loadPlanWorkflows();
 
         // Always show progress dashboard when a plan exists, start polling
         showProgressDashboard(false); // show in idle mode initially
@@ -7704,6 +7745,74 @@ function loadSettingsPage() {
     }
 }
 
+// ==================== v9.0: PLAN WORKFLOWS (in Planning tab) ====================
+function navigateTo(page) {
+    switchToTab(page);
+}
+
+async function loadPlanWorkflows() {
+    var section = document.getElementById('planWorkflowSection');
+    var container = document.getElementById('planWorkflowList');
+    if (!section || !container) return;
+    if (!activePlanId) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+    try {
+        var result = await api('v9/workflows');
+        var workflows = Array.isArray(result) ? result : (result && result.data ? (Array.isArray(result.data) ? result.data : []) : []);
+        // Filter workflows for the active plan (or show all if none are plan-specific)
+        var planWorkflows = workflows.filter(function(w) { return w.plan_id === activePlanId; });
+        var otherWorkflows = workflows.filter(function(w) { return !w.plan_id; });
+        var allRelevant = planWorkflows.concat(otherWorkflows);
+        if (allRelevant.length === 0) {
+            container.innerHTML = '<div class="empty" style="text-align:center;padding:20px">' +
+                '<p style="color:var(--subtext)">No workflows yet. Create a workflow to define processes for your plan.</p>' +
+                '<button class="btn btn-primary btn-sm" onclick="createPlanWorkflow()">+ Create First Workflow</button>' +
+                '</div>';
+            return;
+        }
+        container.innerHTML = allRelevant.map(function(w) {
+            var planBadge = w.plan_id === activePlanId ? '<span class="badge badge-blue" style="font-size:0.7em">This Plan</span>' : '<span class="badge badge-gray" style="font-size:0.7em">General</span>';
+            var stepCount = w.step_count || 0;
+            return '<div class="card" style="padding:12px;cursor:pointer" onclick="navigateTo(\\'workflows\\');setTimeout(function(){selectWorkflow(\\'' + w.id + '\\')},200)">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                '<div><strong>' + esc(w.name || 'Unnamed Workflow') + '</strong> ' + planBadge +
+                '<div style="font-size:0.82em;color:var(--subtext);margin-top:2px">' + esc(w.description || 'No description') + '</div></div>' +
+                '<div style="text-align:right;font-size:0.82em;color:var(--overlay)">' + stepCount + ' steps</div>' +
+                '</div></div>';
+        }).join('');
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function createPlanWorkflow() {
+    var name = prompt('Workflow name:', 'New Plan Workflow');
+    if (!name) return;
+    try {
+        var result = await api('v9/workflows', {
+            method: 'POST',
+            body: JSON.stringify({ name: name, description: 'Workflow for plan', plan_id: activePlanId || null })
+        });
+        if (result && (result.success || result.id)) {
+            showToast('Workflow created', 'success');
+            loadPlanWorkflows();
+            // Also switch to workflow designer to edit it
+            navigateTo('workflows');
+            setTimeout(function() {
+                var wfId = result.id || (result.data && result.data.id);
+                if (wfId) selectWorkflow(wfId);
+            }, 300);
+        } else {
+            showToast('Failed to create workflow', 'error');
+        }
+    } catch (err) {
+        showToast('Error: ' + String(err), 'error');
+    }
+}
+
 // ==================== v9.0: WORKFLOW DESIGNER ====================
 var currentWorkflowId = null;
 var currentWorkflowSteps = [];
@@ -7717,7 +7826,7 @@ async function loadWorkflows() {
         container.innerHTML = workflows.map(function(wf) {
             var cls = wf.id === currentWorkflowId ? 'background:var(--surface0);' : '';
             var statusColor = wf.status === 'running' ? 'var(--green)' : wf.status === 'failed' ? 'var(--red)' : 'var(--overlay)';
-            return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer;' + cls + '" onclick="selectWorkflow(\'' + wf.id + '\')">' +
+            return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer;' + cls + '" onclick="selectWorkflow(\\'' + wf.id + '\\')">' +
                 '<div style="font-weight:500;font-size:0.9em">' + esc(wf.name) + '</div>' +
                 '<div style="font-size:0.8em;color:' + statusColor + '">' + esc(wf.status) + (wf.is_template ? ' (template)' : '') + '</div>' +
                 '</div>';
@@ -7736,7 +7845,7 @@ async function loadWorkflowTemplates() {
         if (!container) return;
         container.innerHTML = '<div style="padding:6px 8px;font-size:0.85em;color:var(--overlay);border-bottom:1px solid var(--border)">Templates</div>' +
             templates.map(function(t) {
-                return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectWorkflow(\'' + t.id + '\')">' +
+                return '<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectWorkflow(\\'' + t.id + '\\')">' +
                     '<div style="font-weight:500;font-size:0.9em">' + esc(t.name) + '</div>' +
                     '<div style="font-size:0.8em;color:var(--overlay)">Template</div>' +
                     '</div>';
@@ -7874,40 +7983,362 @@ function switchAgentSubTab(sub) {
     if (sub === 'niche') loadNicheAgents();
 }
 
+var treeCollapsedNodes = {};
+var treeViewMode = 'diagram'; // 'diagram' or 'list'
+var allTreeNodes = [];
+
+// v9.0: Update a tree node status in local cache and re-render
+function updateLocalTreeNodeStatus(nodeId, newStatus) {
+    if (!allTreeNodes || allTreeNodes.length === 0) return;
+    for (var i = 0; i < allTreeNodes.length; i++) {
+        if (allTreeNodes[i].id === nodeId) {
+            allTreeNodes[i].status = newStatus;
+            break;
+        }
+    }
+    // Re-render tree if currently viewing the agent tree tab
+    var container = document.getElementById('agentTreeView');
+    if (container && container.innerHTML.indexOf('No agent tree') === -1) {
+        renderAgentTree(allTreeNodes);
+    }
+}
+
+function toggleTreeViewMode() {
+    treeViewMode = treeViewMode === 'diagram' ? 'list' : 'diagram';
+    renderAgentTree(allTreeNodes);
+}
+
 async function loadAgentTree() {
     var container = document.getElementById('agentTreeView');
     if (!container) return;
     try {
         var result = await api('v9/tree');
-        var nodes = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        var rawData = (result && result.data) ? result.data : {};
+        var nodes = rawData.nodes || (Array.isArray(rawData) ? rawData : []);
         if (nodes.length === 0) {
-            container.innerHTML = '<div class="empty">No agent tree active. Build a tree from the Planning tab.</div>';
+            container.innerHTML = '<div class="empty" style="text-align:center;padding:40px">' +
+                '<div style="font-size:1.5em;margin-bottom:12px">No agent tree built yet</div>' +
+                '<p style="color:var(--subtext);margin-bottom:16px">Build the default 10-level agent hierarchy with ~230 specialized agents</p>' +
+                '<button class="btn btn-primary" onclick="buildDefaultTree()">Build Default Agent Tree</button>' +
+                '</div>';
             return;
         }
-        // Filter
-        var levelFilter = document.getElementById('treeFilterLevel');
-        var statusFilter = document.getElementById('treeFilterStatus');
-        var filterLevel = levelFilter ? levelFilter.value : '';
-        var filterStatus = statusFilter ? statusFilter.value : '';
-        if (filterLevel) nodes = nodes.filter(function(n) { return String(n.level) === filterLevel || n.level === 'L' + filterLevel; });
-        if (filterStatus) nodes = nodes.filter(function(n) { return n.status === filterStatus; });
+        allTreeNodes = nodes;
+        renderAgentTree(nodes);
+    } catch (err) {
+        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
 
-        // Build tree display
-        var html = nodes.map(function(n) {
-            var levelNum = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
-            var indent = levelNum * 20;
+function renderAgentTree(nodes) {
+    var container = document.getElementById('agentTreeView');
+    if (!container) return;
+
+    // Apply filters
+    var levelFilter = document.getElementById('treeFilterLevel');
+    var statusFilter = document.getElementById('treeFilterStatus');
+    var filterLevel = levelFilter ? levelFilter.value : '';
+    var filterStatus = statusFilter ? statusFilter.value : '';
+
+    var filtered = nodes;
+    if (filterLevel) filtered = filtered.filter(function(n) { return String(n.level) === filterLevel; });
+    if (filterStatus) filtered = filtered.filter(function(n) { return n.status === filterStatus; });
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="empty">No nodes match filter</div>';
+        return;
+    }
+
+    // Build tree structure: map of id -> node, and children lookup
+    var nodeMap = {};
+    var childrenMap = {};
+    var rootNodes = [];
+    filtered.forEach(function(n) {
+        var levelNum = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
+        n._levelNum = levelNum;
+        nodeMap[n.id] = n;
+        if (!childrenMap[n.id]) childrenMap[n.id] = [];
+    });
+    filtered.forEach(function(n) {
+        if (n.parent_id && nodeMap[n.parent_id]) {
+            if (!childrenMap[n.parent_id]) childrenMap[n.parent_id] = [];
+            childrenMap[n.parent_id].push(n);
+        } else {
+            rootNodes.push(n);
+        }
+    });
+
+    // Sort children by name
+    Object.keys(childrenMap).forEach(function(k) {
+        childrenMap[k].sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+    });
+
+    // ===== ACTIVE BRANCH DETECTION =====
+    // Nodes that are actively working
+    var activeStatuses = { active: true, working: true };
+    // Build set of all active nodes + their ancestors (the "hot path")
+    var hotPathNodes = {};
+    function markAncestorsHot(nodeId) {
+        if (hotPathNodes[nodeId]) return; // already marked
+        hotPathNodes[nodeId] = true;
+        var node = nodeMap[nodeId];
+        if (node && node.parent_id && nodeMap[node.parent_id]) {
+            markAncestorsHot(node.parent_id);
+        }
+    }
+    filtered.forEach(function(n) {
+        if (activeStatuses[n.status]) {
+            markAncestorsHot(n.id);
+        }
+    });
+
+    // Auto-expand active branches: ensure hot path nodes are NOT collapsed
+    var hasActiveNodes = Object.keys(hotPathNodes).length > 0;
+    if (hasActiveNodes) {
+        Object.keys(hotPathNodes).forEach(function(id) {
+            if (treeCollapsedNodes[id]) {
+                delete treeCollapsedNodes[id]; // force expand
+            }
+        });
+    }
+
+    // Stats bar
+    var levelCounts = {};
+    var activeCount = 0;
+    filtered.forEach(function(n) {
+        var lbl = 'L' + n._levelNum;
+        levelCounts[lbl] = (levelCounts[lbl] || 0) + 1;
+        if (activeStatuses[n.status]) activeCount++;
+    });
+    var statsHtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:12px;font-size:0.82em;color:var(--subtext)">' +
+        '<span><strong>' + filtered.length + '</strong> total nodes</span>' +
+        (activeCount > 0 ? '<span style="color:#89b4fa;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#89b4fa;vertical-align:middle;margin-right:3px;animation:treePulse 1.5s infinite"></span>' + activeCount + ' active</span>' : '') +
+        Object.keys(levelCounts).sort().map(function(k) {
+            return '<span>' + k + ': <strong>' + levelCounts[k] + '</strong></span>';
+        }).join('') +
+        '<span style="margin-left:auto;cursor:pointer;color:var(--blue)" onclick="toggleTreeViewMode()">' + (treeViewMode === 'diagram' ? 'Switch to List' : 'Switch to Diagram') + '</span>' +
+        '</div>';
+
+    if (treeViewMode === 'list') {
+        // Flat list view (the old view, as a fallback)
+        var listHtml = filtered.map(function(n) {
+            var indent = n._levelNum * 20;
             var statusColors = { idle: 'var(--overlay)', active: 'var(--blue)', working: 'var(--yellow)', completed: 'var(--green)', failed: 'var(--red)', escalated: 'var(--orange)' };
             var color = statusColors[n.status] || 'var(--overlay)';
-            var levelBadge = '<span style="display:inline-block;min-width:24px;padding:1px 4px;border-radius:3px;background:var(--surface0);color:var(--subtext);font-size:0.75em;text-align:center;margin-right:6px">L' + levelNum + '</span>';
-            return '<div style="padding:4px 8px;padding-left:' + (8 + indent) + 'px;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.9em" onclick="showTreeNodeDetail(\'' + n.id + '\')">' +
+            var isHot = !!hotPathNodes[n.id];
+            var bgStyle = isHot ? 'background:rgba(137,180,250,0.08);' : '';
+            var levelBadge = '<span style="display:inline-block;min-width:24px;padding:1px 4px;border-radius:3px;background:var(--surface0);color:var(--subtext);font-size:0.75em;text-align:center;margin-right:6px">L' + n._levelNum + '</span>';
+            return '<div style="padding:4px 8px;padding-left:' + (8 + indent) + 'px;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.9em;' + bgStyle + '" onclick="showTreeNodeDetail(\\'' + n.id + '\\')">' +
                 levelBadge + '<strong>' + esc(n.name || n.agent_type || 'Node') + '</strong>' +
                 '<span style="color:' + color + ';margin-left:8px;font-size:0.85em">' + esc(n.status || 'idle') + '</span>' +
                 (n.tokens_consumed ? '<span style="color:var(--overlay);margin-left:8px;font-size:0.8em">' + n.tokens_consumed + ' tokens</span>' : '') +
+                (isHot && activeStatuses[n.status] ? '<span style="margin-left:6px;animation:treePulse 1.5s infinite;font-size:0.7em">&#x1F7E2;</span>' : '') +
                 '</div>';
         }).join('');
-        container.innerHTML = html || '<div class="empty">No nodes match filter</div>';
+        container.innerHTML = statsHtml + listHtml;
+        return;
+    }
+
+    // ===== TREE DIAGRAM VIEW =====
+    var levelColors = [
+        '#cba6f7', '#89b4fa', '#74c7ec', '#94e2d5', '#a6e3a1',
+        '#f9e2af', '#fab387', '#eba0ac', '#f38ba8', '#f5c2e7'
+    ];
+    var statusDots = { idle: '#6c7086', active: '#89b4fa', working: '#f9e2af', completed: '#a6e3a1', failed: '#f38ba8', escalated: '#fab387' };
+    var levelNames = ['Boss', 'Global', 'Domain', 'Area', 'Manager', 'SubMgr', 'Lead', 'WkrGrp', 'Worker', 'Checker'];
+
+    // Active branch colors
+    var activeLineColor = '#89b4fa'; // blue for active
+    var workingLineColor = '#f9e2af'; // yellow for working
+    var activeLineWidth = '3px';
+    var inactiveLineWidth = '2px';
+
+    function buildTreeNodeHtml(node, depth) {
+        var children = childrenMap[node.id] || [];
+        var hasChildren = children.length > 0;
+        var isCollapsed = !!treeCollapsedNodes[node.id];
+        var lvl = node._levelNum;
+        var borderColor = levelColors[lvl] || '#6c7086';
+        var dotColor = statusDots[node.status] || '#6c7086';
+        var isHot = !!hotPathNodes[node.id];
+        var isDirectlyActive = !!activeStatuses[node.status];
+
+        // Determine node visual emphasis
+        var nodeBoxShadow = isDirectlyActive ? '0 0 12px rgba(137,180,250,0.4),0 2px 8px rgba(0,0,0,0.2)' : (isHot ? '0 0 6px rgba(137,180,250,0.15),0 1px 4px rgba(0,0,0,0.15)' : '0 1px 3px rgba(0,0,0,0.15)');
+        var nodeBorderWidth = isDirectlyActive ? '4px' : (isHot ? '3px' : '3px');
+        var nodeBorderColor = isDirectlyActive ? (node.status === 'working' ? workingLineColor : activeLineColor) : borderColor;
+        var nodeBackground = isDirectlyActive ? 'rgba(137,180,250,0.06)' : 'var(--surface)';
+        var pulseAnim = isDirectlyActive ? ';animation:treePulse 1.5s infinite' : '';
+
+        // Node box
+        var html = '<div class="tree-node-wrap" data-node-id="' + node.id + '" style="position:relative">';
+
+        // The node itself
+        html += '<div class="tree-node-box" style="' +
+            'display:flex;align-items:center;gap:8px;padding:6px 12px;' +
+            'border-left:' + nodeBorderWidth + ' solid ' + nodeBorderColor + ';' +
+            'background:' + nodeBackground + ';border-radius:6px;cursor:pointer;' +
+            'transition:background 0.15s,box-shadow 0.15s;' +
+            'box-shadow:' + nodeBoxShadow + ';margin:3px 0;' +
+            'min-width:140px;max-width:340px;font-size:0.82em' + pulseAnim + ';' +
+            '" onclick="showTreeNodeDetail(\\'' + node.id + '\\')" ' +
+            'onmouseover="this.style.background=\\'var(--surface0)\\';this.style.boxShadow=\\'0 2px 8px rgba(0,0,0,0.25)\\'" ' +
+            'onmouseout="this.style.background=\\'' + nodeBackground + '\\';this.style.boxShadow=\\'' + nodeBoxShadow + '\\'">';
+
+        // Collapse toggle
+        if (hasChildren) {
+            html += '<span onclick="event.stopPropagation();toggleTreeCollapse(\\'' + node.id + '\\')" ' +
+                'style="cursor:pointer;font-size:0.9em;width:16px;text-align:center;flex-shrink:0;user-select:none;color:' + (isHot ? activeLineColor : 'var(--subtext)') + '" ' +
+                'title="' + (isCollapsed ? 'Expand' : 'Collapse') + ' (' + children.length + ' children)">' +
+                (isCollapsed ? '&#x25B6;' : '&#x25BC;') + '</span>';
+        } else {
+            html += '<span style="width:16px;flex-shrink:0;text-align:center;color:' + (isDirectlyActive ? activeLineColor : 'var(--overlay)') + ';font-size:0.7em">&#x25CF;</span>';
+        }
+
+        // Status dot (pulsing if active)
+        html += '<span style="display:inline-block;width:' + (isDirectlyActive ? '10px' : '8px') + ';height:' + (isDirectlyActive ? '10px' : '8px') + ';border-radius:50%;background:' + dotColor + ';flex-shrink:0' + (isDirectlyActive ? ';animation:treePulse 1.5s infinite;box-shadow:0 0 6px ' + dotColor : '') + '" title="' + esc(node.status || 'idle') + '"></span>';
+
+        // Level badge
+        html += '<span style="display:inline-block;padding:1px 5px;border-radius:3px;background:' + borderColor + '22;color:' + borderColor + ';font-size:0.72em;font-weight:600;flex-shrink:0;letter-spacing:0.5px">L' + lvl + '</span>';
+
+        // Name (bold + highlighted if active)
+        html += '<span style="font-weight:' + (isDirectlyActive ? '700' : '600') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap' + (isDirectlyActive ? ';color:' + activeLineColor : '') + '" title="' + esc(node.name || node.agent_type || 'Node') + ' \\u2014 ' + esc(node.scope || '') + '">' +
+            esc(node.name || node.agent_type || 'Node') + '</span>';
+
+        // Status label for active nodes
+        if (isDirectlyActive) {
+            html += '<span style="font-size:0.68em;padding:1px 5px;border-radius:3px;background:' + (node.status === 'working' ? workingLineColor : activeLineColor) + '33;color:' + (node.status === 'working' ? workingLineColor : activeLineColor) + ';font-weight:600;flex-shrink:0;letter-spacing:0.3px">' + esc(node.status) + '</span>';
+        }
+
+        // Child count
+        if (hasChildren) {
+            html += '<span style="color:var(--subtext);font-size:0.72em;flex-shrink:0">' + children.length + '</span>';
+        }
+
+        html += '</div>'; // close tree-node-box
+
+        // Children container with connecting lines
+        // Active branches get thicker, colored lines
+        if (hasChildren && !isCollapsed) {
+            var vertLineColor = isHot ? (activeLineColor + 'aa') : (borderColor + '44');
+            var vertLineWidth = isHot ? activeLineWidth : inactiveLineWidth;
+            html += '<div class="tree-children" style="margin-left:20px;padding-left:16px;border-left:' + vertLineWidth + ' solid ' + vertLineColor + ';position:relative">';
+            children.forEach(function(child) {
+                var childIsHot = !!hotPathNodes[child.id];
+                var hLineColor = childIsHot ? (activeLineColor + 'aa') : (borderColor + '44');
+                var hLineWidth = childIsHot ? activeLineWidth : inactiveLineWidth;
+                html += '<div style="position:relative">' +
+                    '<div style="position:absolute;top:14px;left:-16px;width:16px;height:0;border-top:' + hLineWidth + ' solid ' + hLineColor + '"></div>' +
+                    buildTreeNodeHtml(child, depth + 1) +
+                    '</div>';
+            });
+            html += '</div>'; // close tree-children
+        } else if (hasChildren && isCollapsed) {
+            var collapsedHot = isHot ? ' style="color:' + activeLineColor + '"' : '';
+            html += '<div style="margin-left:22px;padding:2px 8px;font-size:0.72em;color:' + (isHot ? activeLineColor : 'var(--subtext)') + ';cursor:pointer" onclick="toggleTreeCollapse(\\'' + node.id + '\\')">' +
+                '&#x2514; ' + children.length + ' collapsed ' + (children.length === 1 ? 'child' : 'children') +
+                (isHot ? ' &#x26A1; (active branch)' : '') +
+                ' (click to expand)' +
+                '</div>';
+        }
+
+        html += '</div>'; // close tree-node-wrap
+        return html;
+    }
+
+    // Inject CSS animation for pulsing active nodes (only once)
+    if (!document.getElementById('treePulseStyle')) {
+        var style = document.createElement('style');
+        style.id = 'treePulseStyle';
+        style.textContent = '@keyframes treePulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }';
+        document.head.appendChild(style);
+    }
+
+    var treeHtml = '';
+    rootNodes.forEach(function(root) {
+        treeHtml += buildTreeNodeHtml(root, 0);
+    });
+
+    // Legend
+    var legendHtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 0;font-size:0.75em;color:var(--subtext);border-top:1px solid var(--border);margin-top:12px">' +
+        '<span style="font-weight:600">Status:</span>' +
+        Object.keys(statusDots).map(function(s) {
+            return '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDots[s] + ';vertical-align:middle;margin-right:3px"></span>' + s + '</span>';
+        }).join('') +
+        '<span style="margin-left:12px;font-weight:600">Levels:</span>' +
+        levelNames.map(function(name, i) {
+            return '<span><span style="display:inline-block;width:12px;height:3px;background:' + levelColors[i] + ';vertical-align:middle;margin-right:3px;border-radius:2px"></span>L' + i + ' ' + name + '</span>';
+        }).join('') +
+        (hasActiveNodes ? '<span style="margin-left:12px"><span style="display:inline-block;width:12px;height:3px;background:' + activeLineColor + ';vertical-align:middle;margin-right:3px;border-radius:2px"></span><strong>Active path</strong> (auto-expanded, thick lines)</span>' : '') +
+        '</div>';
+
+    container.innerHTML = statsHtml + '<div style="overflow:auto;max-height:600px;padding:8px">' + treeHtml + '</div>' + legendHtml;
+}
+
+function toggleTreeCollapse(nodeId) {
+    treeCollapsedNodes[nodeId] = !treeCollapsedNodes[nodeId];
+    renderAgentTree(allTreeNodes);
+}
+
+function collapseAllTree() {
+    allTreeNodes.forEach(function(n) {
+        var children = allTreeNodes.filter(function(c) { return c.parent_id === n.id; });
+        if (children.length > 0) treeCollapsedNodes[n.id] = true;
+    });
+    renderAgentTree(allTreeNodes);
+}
+
+function expandAllTree() {
+    treeCollapsedNodes = {};
+    renderAgentTree(allTreeNodes);
+}
+
+function collapseTreeToLevel(maxLevel) {
+    treeCollapsedNodes = {};
+    allTreeNodes.forEach(function(n) {
+        var lvl = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
+        var children = allTreeNodes.filter(function(c) { return c.parent_id === n.id; });
+        if (children.length > 0 && lvl >= maxLevel) {
+            treeCollapsedNodes[n.id] = true;
+        }
+    });
+    renderAgentTree(allTreeNodes);
+}
+
+async function buildDefaultTree() {
+    var container = document.getElementById('agentTreeView');
+    if (container) container.innerHTML = '<div class="empty"><span class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>Building agent hierarchy...</div>';
+    try {
+        var result = await api('v9/tree/build-default', { method: 'POST', body: JSON.stringify({ rebuild: false }) });
+        if (result && result.success) {
+            showToast('Agent tree built: ' + (result.data ? result.data.nodeCount : '?') + ' nodes', 'success');
+            loadAgentTree();
+        } else {
+            showToast('Failed to build tree: ' + (result ? result.error : 'Unknown error'), 'error');
+            loadAgentTree();
+        }
     } catch (err) {
-        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+        showToast('Error building tree: ' + String(err), 'error');
+        if (container) container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+    }
+}
+
+async function rebuildDefaultTree() {
+    if (!confirm('This will delete the existing tree and rebuild it. Continue?')) return;
+    var container = document.getElementById('agentTreeView');
+    if (container) container.innerHTML = '<div class="empty"><span class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>Rebuilding agent hierarchy...</div>';
+    try {
+        var result = await api('v9/tree/build-default', { method: 'POST', body: JSON.stringify({ rebuild: true }) });
+        if (result && result.success) {
+            showToast('Agent tree rebuilt: ' + (result.data ? result.data.nodeCount : '?') + ' nodes', 'success');
+            loadAgentTree();
+        } else {
+            showToast('Failed to rebuild tree: ' + (result ? result.error : 'Unknown error'), 'error');
+            loadAgentTree();
+        }
+    } catch (err) {
+        showToast('Error rebuilding tree: ' + String(err), 'error');
+        if (container) container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
     }
 }
 
@@ -7926,7 +8357,7 @@ async function showTreeNodeDetail(nodeId) {
         detail.innerHTML =
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
             '<h3 style="margin:0">' + esc(node.name || node.agent_type) + '</h3>' +
-            '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\'agentTreeDetail\').style.display=\'none\'">Close</button>' +
+            '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\\'agentTreeDetail\\').style.display=\\'none\\'">Close</button>' +
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85em;margin-bottom:12px">' +
             '<div><strong>Level:</strong> ' + esc(String(node.level)) + '</div>' +
@@ -7984,7 +8415,7 @@ function renderNicheAgents(agents) {
     if (!container) return;
     container.innerHTML = agents.map(function(a) {
         var capColor = a.required_capability === 'reasoning' ? 'var(--blue)' : a.required_capability === 'code' ? 'var(--green)' : a.required_capability === 'fast' ? 'var(--yellow)' : 'var(--overlay)';
-        return '<div class="card" style="cursor:pointer" onclick="editNicheAgent(\'' + a.id + '\')">' +
+        return '<div class="card" style="cursor:pointer" onclick="editNicheAgent(\\'' + a.id + '\\')">' +
             '<div style="display:flex;justify-content:space-between;align-items:center">' +
             '<strong style="font-size:0.9em">' + esc(a.name) + '</strong>' +
             '<span style="font-size:0.75em;padding:2px 6px;border-radius:3px;background:var(--surface0);color:var(--subtext)">L' + (a.level || '?') + '</span>' +
@@ -8033,9 +8464,9 @@ async function loadPermissionsTable() {
                     '<td style="font-weight:500">' + esc(at) + '</td>' +
                     '<td>' + ['read', 'write', 'execute', 'escalate', 'spawn', 'configure', 'approve', 'delete'].map(function(p) {
                         var checked = perms.indexOf(p) >= 0 ? ' checked' : '';
-                        return '<label style="font-size:0.8em;margin-right:6px"><input type="checkbox"' + checked + ' onchange="updateAgentPermission(\'' + at + '\', \'' + p + '\', this.checked)"> ' + p + '</label>';
+                        return '<label style="font-size:0.8em;margin-right:6px"><input type="checkbox"' + checked + ' onchange="updateAgentPermission(\\'' + at + '\\', \\'' + p + '\\', this.checked)"> ' + p + '</label>';
                     }).join('') + '</td>' +
-                    '<td><input type="number" value="' + maxLlm + '" style="width:60px;padding:2px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px" onchange="updateAgentMaxLlm(\'' + at + '\', +this.value)"></td>' +
+                    '<td><input type="number" value="' + maxLlm + '" style="width:60px;padding:2px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px" onchange="updateAgentMaxLlm(\\'' + at + '\\', +this.value)"></td>' +
                     '</tr>';
             } catch(e) {
                 rows += '<tr><td>' + esc(at) + '</td><td colspan="2" style="color:var(--overlay)">No permissions set (using defaults)</td></tr>';
@@ -8088,7 +8519,7 @@ async function loadModelAssignmentsTable() {
             (assignments.length > 0 ? '<table style="width:100%;font-size:0.85em"><thead><tr><th>Agent</th><th>Capability</th><th>Model</th><th>Actions</th></tr></thead><tbody>' +
             assignments.map(function(a) {
                 return '<tr><td>' + esc(a.agent_type) + '</td><td>' + esc(a.capability) + '</td><td>' + esc(a.model_id) + '</td>' +
-                    '<td><button class="btn btn-sm btn-danger" onclick="deleteModelAssignment(\'' + a.agent_type + '\')">Remove</button></td></tr>';
+                    '<td><button class="btn btn-sm btn-danger" onclick="deleteModelAssignment(\\'' + a.agent_type + '\\')">Remove</button></td></tr>';
             }).join('') + '</tbody></table>' : '<div class="empty" style="font-size:0.85em">No custom assignments (using defaults)</div>');
     } catch (err) {
         container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
@@ -8140,21 +8571,21 @@ async function loadUserProfile() {
                 '</select>', 'profile-level') + '</div>' +
             // Communication style
             '<div>' + settingRow('Communication Style', 'How should the AI talk to you?',
-                '<select id="profile-style" onchange="updateProfileField(\'communication_style\', this.value)" style="padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px">' +
+                '<select id="profile-style" onchange="updateProfileField(\\'communication_style\\', this.value)" style="padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px">' +
                 styles.map(function(s) { return '<option value="' + s + '"' + (profile.communication_style === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') +
                 '</select>', 'profile-style') + '</div>' +
             // Strengths
             '<div>' + settingRow('Strengths', 'Technical areas you are strong in (comma-separated)',
-                '<input id="profile-strengths" value="' + esc((profile.strengths || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'strengths\', this.value)">', 'profile-strengths') + '</div>' +
+                '<input id="profile-strengths" value="' + esc((profile.strengths || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\\'strengths\\', this.value)">', 'profile-strengths') + '</div>' +
             // Weaknesses
             '<div>' + settingRow('Weaknesses', 'Areas you need help with',
-                '<input id="profile-weaknesses" value="' + esc((profile.weaknesses || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'weaknesses\', this.value)">', 'profile-weaknesses') + '</div>' +
+                '<input id="profile-weaknesses" value="' + esc((profile.weaknesses || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\\'weaknesses\\', this.value)">', 'profile-weaknesses') + '</div>' +
             // Known areas
             '<div>' + settingRow('Known Areas', 'Areas you know well (AI will ask directly)',
-                '<input id="profile-known" value="' + esc((profile.known_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'known_areas\', this.value)">', 'profile-known') + '</div>' +
+                '<input id="profile-known" value="' + esc((profile.known_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\\'known_areas\\', this.value)">', 'profile-known') + '</div>' +
             // Unknown areas
             '<div>' + settingRow('Unknown Areas', 'Areas you are unfamiliar with (AI will research first)',
-                '<input id="profile-unknown" value="' + esc((profile.unknown_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\'unknown_areas\', this.value)">', 'profile-unknown') + '</div>' +
+                '<input id="profile-unknown" value="' + esc((profile.unknown_areas || []).join(', ')) + '" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateProfileArray(\\'unknown_areas\\', this.value)">', 'profile-unknown') + '</div>' +
             // Area preferences
             '<div style="font-weight:600;margin-top:4px">Area Preferences</div>' +
             '<div style="font-size:0.85em;color:var(--overlay);margin-bottom:8px">Set how the AI handles decisions in specific areas.</div>' +
@@ -8166,7 +8597,7 @@ async function loadUserProfile() {
             '</div>' +
             // Notes
             '<div style="margin-top:8px">' + settingRow('Notes', 'Free-form notes about your preferences',
-                '<textarea id="profile-notes" rows="3" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px;resize:vertical" onchange="updateProfileField(\'notes\', this.value)">' + esc(profile.notes || '') + '</textarea>', 'profile-notes') + '</div>' +
+                '<textarea id="profile-notes" rows="3" style="width:100%;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px;resize:vertical" onchange="updateProfileField(\\'notes\\', this.value)">' + esc(profile.notes || '') + '</textarea>', 'profile-notes') + '</div>' +
             // Repeat answers (read-only)
             '<div style="font-weight:600;margin-top:4px">Repeat Answers (auto-cached)</div>' +
             '<div style="font-size:0.85em;max-height:150px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px">' +
@@ -8187,7 +8618,7 @@ function renderAreaPreferences(prefs) {
     if (keys.length === 0) return '<div style="color:var(--overlay);font-size:0.85em">No area preferences set</div>';
     return '<table style="width:100%;font-size:0.85em"><thead><tr><th>Area</th><th>Action</th><th></th></tr></thead><tbody>' +
         keys.map(function(area) {
-            return '<tr><td>' + esc(area) + '</td><td>' + esc(prefs[area]) + '</td><td><button class="btn btn-sm btn-danger" onclick="removeAreaPreference(\'' + esc(area) + '\')">X</button></td></tr>';
+            return '<tr><td>' + esc(area) + '</td><td>' + esc(prefs[area]) + '</td><td><button class="btn btn-sm btn-danger" onclick="removeAreaPreference(\\'' + esc(area) + '\\')">X</button></td></tr>';
         }).join('') + '</tbody></table>';
 }
 
@@ -8452,6 +8883,40 @@ function initSSE() {
         pollProcessingStatus();
         loadTickets();
     });
+
+    // v9.0: Agent tree live status — update tree nodes in real-time
+    sseConnection.addEventListener('tree:node_activated', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'working');
+        } catch(err) { /* ignore parse errors */ }
+    });
+    sseConnection.addEventListener('tree:node_completed', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'completed');
+        } catch(err) { /* ignore parse errors */ }
+    });
+    sseConnection.addEventListener('tree:node_failed', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'failed');
+        } catch(err) { /* ignore parse errors */ }
+    });
+    sseConnection.addEventListener('tree:node_idle', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'idle');
+        } catch(err) { /* ignore parse errors */ }
+    });
+
+    // v9.0: Refresh agent cards when ticket processing changes
+    sseConnection.addEventListener('ticket:processing_started', function(e) {
+        if (typeof loadAgents === 'function' && loadState('activeTab', 'dashboard') === 'agents') loadAgents();
+    });
+    sseConnection.addEventListener('ticket:processing_completed', function(e) {
+        if (typeof loadAgents === 'function' && loadState('activeTab', 'dashboard') === 'agents') loadAgents();
+    });
 }
 
 // ==================== LIVE PROGRESS DASHBOARD ====================
@@ -8531,7 +8996,7 @@ function showProgressDashboard(show) {
     if (show) {
         pdIsActive = true;
         if (!pdStartTime) {
-            pdStartTime = loadState('pdStartTime', null) || Date.now();
+            pdStartTime = loadState('pdStartTime', null) || loadState('generationStartTime', null) || Date.now();
             saveState('pdStartTime', pdStartTime);
             startElapsedTimer();
         }
@@ -8620,8 +9085,12 @@ function updateProgressDashboard(data) {
     if (text) {
         var resolved = data.resolvedTickets || 0;
         var total = data.totalTickets || 0;
-        if (total > 0) {
+        if (total > 0 && pct > 0) {
             text.textContent = pct + '% complete (' + resolved + '/' + total + ' tickets)';
+        } else if (total > 0) {
+            text.textContent = 'Processing ' + total + ' tickets... (' + resolved + ' resolved)';
+        } else if (loadState('generationInProgress', false)) {
+            text.textContent = 'Generating plan with AI... Waiting for LLM response';
         } else {
             text.textContent = 'No tickets to process';
         }
@@ -9310,17 +9779,27 @@ function showSubPanel(panelName) {
     };
     var sectionId = sections[panelName];
     if (!sectionId) return;
+    // Ensure sub-panel tabs container is visible
+    var subTabs = document.getElementById('v8SubPanelTabs');
+    if (subTabs) subTabs.style.display = '';
     var el = document.getElementById(sectionId);
     if (!el) return;
-    var isVisible = el.style.display !== 'none';
-    // Toggle visibility
-    el.style.display = isVisible ? 'none' : '';
-    currentSubPanels[panelName] = !isVisible;
-    // Update tab button style
-    var tabBtn = document.getElementById('subTab-' + panelName);
-    if (tabBtn) tabBtn.style.opacity = isVisible ? '0.6' : '1';
-    // Load data when showing
-    if (!isVisible) {
+    var wasVisible = el.style.display !== 'none';
+    // v9.0 FIX: Hide ALL panels first (exclusive visibility, not toggle stacking)
+    Object.keys(sections).forEach(function(key) {
+        var s = document.getElementById(sections[key]);
+        if (s) s.style.display = 'none';
+        currentSubPanels[key] = false;
+        var btn = document.getElementById('subTab-' + key);
+        if (btn) btn.style.opacity = '0.6';
+    });
+    // If it was already visible, just close it (toggle off). Otherwise open the selected one.
+    if (!wasVisible) {
+        el.style.display = '';
+        currentSubPanels[panelName] = true;
+        var tabBtn = document.getElementById('subTab-' + panelName);
+        if (tabBtn) tabBtn.style.opacity = '1';
+        // Load data for the newly shown panel
         if (panelName === 'beDesigner') loadBeDesigner();
         if (panelName === 'linkTree') refreshLinkData();
         if (panelName === 'filing') loadFiling();
@@ -9338,6 +9817,10 @@ var beIconMap = {
 };
 
 function loadBeDesigner() {
+    // v9.0: Auto-select active plan if none is set
+    if (!currentDesignerPlanId && activePlanId) {
+        currentDesignerPlanId = activePlanId;
+    }
     if (!currentDesignerPlanId) return;
     api('backend/elements?plan_id=' + currentDesignerPlanId).then(function(data) {
         beElements = Array.isArray(data) ? data : [];
@@ -9373,9 +9856,9 @@ function renderBeSidebar() {
         var groupName = keys[g];
         var items = grouped[groupName];
         html += '<div style="margin-bottom:8px">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:4px 0" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'\':\'none\'">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:4px 0" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\\'none\\'?\\'\\':\\'none\\'">';
         html += '<strong style="font-size:0.85em;text-transform:capitalize">' + groupName + ' <span style="color:var(--subtext)">(' + items.length + ')</span></strong>';
-        html += '<button class="btn btn-sm" onclick="event.stopPropagation();addBeElement(\'' + groupName + '\')" style="padding:0 6px;font-size:0.85em">+</button>';
+        html += '<button class="btn btn-sm" onclick="event.stopPropagation();addBeElement(\\'' + groupName + '\\')" style="padding:0 6px;font-size:0.85em">+</button>';
         html += '</div>';
         html += '<div>';
         for (var m = 0; m < items.length; m++) {
@@ -9383,7 +9866,7 @@ function renderBeSidebar() {
             var icon = beIconMap[el.type] || '●';
             var isDraft = el.is_draft === true || el.is_draft === 1;
             var draftStyle = isDraft ? 'border:1px dashed var(--yellow);' : '';
-            html += '<div class="be-sidebar-item" onclick="selectBeElement(\'' + el.id + '\')" style="padding:4px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + draftStyle + '">';
+            html += '<div class="be-sidebar-item" onclick="selectBeElement(\\'' + el.id + '\\')" style="padding:4px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + draftStyle + '">';
             html += '<span style="margin-right:4px">' + icon + '</span>' + el.name;
             if (isDraft) html += ' <span style="color:var(--yellow);font-size:0.7em">(draft)</span>';
             html += '</div>';
@@ -9411,7 +9894,7 @@ function renderBeCanvas() {
         if (el.type === 'api_route') detail = (config.method || 'GET') + ' ' + (config.path || '/');
         else if (el.type === 'db_table') detail = (config.table_name || el.name);
         else if (el.type === 'service') detail = (config.methods ? config.methods.length + ' methods' : '');
-        html += '<div class="be-card" onclick="selectBeElement(\'' + el.id + '\')" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;background:var(--background);border:' + borderStyle + ';border-radius:8px;padding:10px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2)">';
+        html += '<div class="be-card" onclick="selectBeElement(\\'' + el.id + '\\')" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;background:var(--background);border:' + borderStyle + ';border-radius:8px;padding:10px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2)">';
         html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
         html += '<span style="font-size:1.2em">' + icon + '</span>';
         html += '<strong style="font-size:0.9em">' + el.name + '</strong>';
@@ -9422,7 +9905,7 @@ function renderBeCanvas() {
         html += '</div>';
     }
     if (beElements.length === 0) {
-        html = '<div style="text-align:center;padding:60px 20px;color:var(--subtext)"><p>No backend elements yet</p><button class="btn btn-primary btn-sm" onclick="addBeElement(\'services\')">+ Add First Element</button></div>';
+        html = '<div style="text-align:center;padding:60px 20px;color:var(--subtext)"><p>No backend elements yet</p><button class="btn btn-primary btn-sm" onclick="addBeElement(\\'services\\')">+ Add First Element</button></div>';
     }
     canvas.innerHTML = html;
 }
@@ -9444,21 +9927,21 @@ function renderBeEditor() {
     var el = selectedBeElement;
     var html = '<h3 style="margin-bottom:12px">' + (beIconMap[el.type] || '●') + ' ' + el.name + '</h3>';
     html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Name</label>';
-    html += '<input type="text" value="' + (el.name || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'name\',this.value)"></div>';
+    html += '<input type="text" value="' + (el.name || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\\'' + el.id + '\\',\\'name\\',this.value)"></div>';
     html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Type</label>';
-    html += '<select style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'type\',this.value)">';
+    html += '<select style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\\'' + el.id + '\\',\\'type\\',this.value)">';
     var types = ['api_route','db_table','service','controller','middleware','auth_layer','background_job','cache_strategy','queue_definition'];
     for (var i = 0; i < types.length; i++) {
         html += '<option value="' + types[i] + '"' + (el.type === types[i] ? ' selected' : '') + '>' + types[i].replace(/_/g, ' ') + '</option>';
     }
     html += '</select></div>';
     html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Domain</label>';
-    html += '<input type="text" value="' + (el.domain || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\'' + el.id + '\',\'domain\',this.value)"></div>';
+    html += '<input type="text" value="' + (el.domain || '') + '" style="width:100%;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border)" onchange="updateBeField(\\'' + el.id + '\\',\\'domain\\',this.value)"></div>';
     html += '<div style="margin-bottom:8px"><label style="font-size:0.8em;color:var(--subtext)">Config (JSON)</label>';
-    html += '<textarea style="width:100%;height:120px;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-family:monospace;font-size:0.8em" onchange="updateBeField(\'' + el.id + '\',\'config_json\',this.value)">' + (el.config_json || '{}') + '</textarea></div>';
+    html += '<textarea style="width:100%;height:120px;padding:4px 8px;border-radius:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-family:monospace;font-size:0.8em" onchange="updateBeField(\\'' + el.id + '\\',\\'config_json\\',this.value)">' + (el.config_json || '{}') + '</textarea></div>';
     html += '<div style="display:flex;gap:6px;margin-top:12px">';
-    html += '<button class="btn btn-sm btn-danger" onclick="deleteBeElement(\'' + el.id + '\')">Delete</button>';
-    html += '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\'beEditorPanel\').style.display=\'none\'">Close</button>';
+    html += '<button class="btn btn-sm btn-danger" onclick="deleteBeElement(\\'' + el.id + '\\')">Delete</button>';
+    html += '<button class="btn btn-sm btn-secondary" onclick="document.getElementById(\\'beEditorPanel\\').style.display=\\'none\\'">Close</button>';
     html += '</div>';
     content.innerHTML = html;
 }
@@ -9574,7 +10057,7 @@ function renderLinkMatrix(data) {
             var cell = cellMap[r + ',' + c2];
             if (cell) {
                 var color = colorMap[cell.link_type] || '#888';
-                html += '<td style="padding:4px;border:1px solid var(--border);text-align:center;cursor:pointer" title="' + (cell.label || cell.link_type) + '" onclick="alert(\'Link: ' + (cell.label || cell.link_type).replace(/'/g, '') + '\')"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + '"></span></td>';
+                html += '<td style="padding:4px;border:1px solid var(--border);text-align:center;cursor:pointer" title="' + (cell.label || cell.link_type) + '" onclick="alert(\\'Link: ' + (cell.label || cell.link_type).replace(/'/g, '') + '\\')"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + '"></span></td>';
             } else {
                 html += '<td style="padding:4px;border:1px solid var(--border)"></td>';
             }
@@ -9602,7 +10085,7 @@ function renderLinkTree(data) {
         var linkCount = cat.links ? cat.links.length : 0;
         var color = colorMap[cat.id] || '#888';
         html += '<div style="margin-bottom:12px">';
-        html += '<div style="cursor:pointer;padding:6px 8px;background:var(--background);border-radius:4px;border-left:3px solid ' + color + '" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'\':\'none\'">';
+        html += '<div style="cursor:pointer;padding:6px 8px;background:var(--background);border-radius:4px;border-left:3px solid ' + color + '" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\\'none\\'?\\'\\':\\'none\\'">';
         html += '<strong>' + cat.name + '</strong> <span style="color:var(--subtext);font-size:0.8em">(' + linkCount + ' links)</span></div>';
         html += '<div style="padding-left:16px">';
         if (cat.children) {
@@ -9654,7 +10137,7 @@ function renderFilingFolders(folders) {
     var html = '';
     for (var i = 0; i < folders.length; i++) {
         var isActive = folders[i] === filingCurrentFolder;
-        html += '<div onclick="filingCurrentFolder=\'' + folders[i].replace(/'/g, '') + '\';loadFilingDocs(filingCurrentFolder);renderFilingFolders(' + JSON.stringify(folders).replace(/"/g, '&quot;') + ')" style="padding:6px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + (isActive ? 'background:var(--accent);color:#000' : '') + '">';
+        html += '<div onclick="filingCurrentFolder=\\'' + folders[i].replace(/'/g, '') + '\\';loadFilingDocs(filingCurrentFolder);renderFilingFolders(' + JSON.stringify(folders).replace(/"/g, '&quot;') + ')" style="padding:6px 8px;cursor:pointer;border-radius:4px;margin:2px 0;font-size:0.85em;' + (isActive ? 'background:var(--accent);color:#000' : '') + '">';
         html += '📁 ' + folders[i];
         html += '</div>';
     }
@@ -9692,7 +10175,7 @@ function renderFilingDocs(docs) {
         html += '<div><strong style="font-size:0.9em">' + doc.document_name + '</strong> <span style="display:inline-block;padding:1px 6px;border-radius:10px;font-size:0.7em;background:' + badgeColor + ';color:#fff">' + badgeLabel + '</span> ' + lockIcon + '</div>';
         html += '<div style="display:flex;gap:4px">';
         if (isUser) {
-            html += '<button class="btn btn-sm btn-danger" onclick="deleteFilingDoc(\'' + doc.id + '\')">Delete</button>';
+            html += '<button class="btn btn-sm btn-danger" onclick="deleteFilingDoc(\\'' + doc.id + '\\')">Delete</button>';
         }
         html += '</div></div>';
         if (doc.summary) html += '<div style="font-size:0.8em;color:var(--subtext);margin-top:4px">' + doc.summary + '</div>';
@@ -9731,8 +10214,13 @@ var reviewQueueFilter = 'all';
 var reviewQueueItems = [];
 
 function loadReviewQueue() {
-    if (!currentDesignerPlanId) return;
-    api('review-queue?plan_id=' + currentDesignerPlanId).then(function(items) {
+    var planId = currentDesignerPlanId || activePlanId;
+    if (!planId) {
+        var container = document.getElementById('reviewQueueItems');
+        if (container) container.innerHTML = '<p style="color:var(--subtext);font-size:0.85em">No active plan. Create a plan first to see review items.</p>';
+        return;
+    }
+    api('review-queue?plan_id=' + planId).then(function(items) {
         reviewQueueItems = Array.isArray(items) ? items : [];
         renderReviewQueue();
         updateReviewBadge();
@@ -9775,8 +10263,8 @@ function renderReviewQueue() {
         if (item.source_agent) html += '<div style="font-size:0.75em;color:var(--subtext);margin-top:2px">Source: ' + item.source_agent + '</div>';
         html += '</div>';
         html += '<div style="display:flex;gap:6px;flex-shrink:0">';
-        html += '<button class="btn btn-sm btn-success" onclick="reviewAction(\'' + item.id + '\',\'approve\')">Approve</button>';
-        html += '<button class="btn btn-sm btn-danger" onclick="reviewAction(\'' + item.id + '\',\'reject\')">Reject</button>';
+        html += '<button class="btn btn-sm btn-success" onclick="reviewAction(\\'' + item.id + '\\',\\'approve\\')">Approve</button>';
+        html += '<button class="btn btn-sm btn-danger" onclick="reviewAction(\\'' + item.id + '\\',\\'reject\\')">Reject</button>';
         html += '</div></div>';
     }
     container.innerHTML = html;

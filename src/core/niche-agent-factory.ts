@@ -408,6 +408,10 @@ export class NicheAgentFactory {
             { name: 'AuthSecurityChecker', level: AgentLevel.L9_Checker, specialty: 'backend.auth.checker', domain: d, area: a, promptTemplate: tp('AuthSecurityChecker', 'Verify authentication security'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'SQLInjectionChecker', level: AgentLevel.L9_Checker, specialty: 'backend.database.checker', domain: d, area: a, promptTemplate: tp('SQLInjectionChecker', 'Check for SQL injection vulnerabilities'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'ErrorHandlingChecker', level: AgentLevel.L9_Checker, specialty: 'backend.error.checker', domain: d, area: a, promptTemplate: tp('ErrorHandlingChecker', 'Verify error handling completeness'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +3 to reach 35
+            { name: 'PaginationWorker', level: AgentLevel.L8_Worker, specialty: 'backend.api.pagination', domain: d, area: a, promptTemplate: tp('PaginationWorker', 'Implement API pagination'), defaultCap: ModelCapability.Fast },
+            { name: 'FileUploadWorker', level: AgentLevel.L8_Worker, specialty: 'backend.api.upload', domain: d, area: a, promptTemplate: tp('FileUploadWorker', 'Implement file upload handling'), defaultCap: ModelCapability.Fast },
+            { name: 'SessionWorker', level: AgentLevel.L8_Worker, specialty: 'backend.auth.session', domain: d, area: a, promptTemplate: tp('SessionWorker', 'Implement session management'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -434,6 +438,10 @@ export class NicheAgentFactory {
             // L9 Checkers
             { name: 'CoverageChecker', level: AgentLevel.L9_Checker, specialty: 'testing.coverage.checker', domain: d, area: a, promptTemplate: tp('CoverageChecker', 'Verify test coverage adequacy'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'TestQualityChecker', level: AgentLevel.L9_Checker, specialty: 'testing.quality.checker', domain: d, area: a, promptTemplate: tp('TestQualityChecker', 'Verify test quality and assertions'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +3 to reach 15
+            { name: 'PerformanceTestSub', level: AgentLevel.L5_SubManager, specialty: 'testing.performance', domain: d, area: a, promptTemplate: tp('PerformanceTestSub', 'Manage performance test development') },
+            { name: 'SnapshotTestWorker', level: AgentLevel.L8_Worker, specialty: 'testing.snapshot.writer', domain: d, area: a, promptTemplate: tp('SnapshotTestWorker', 'Write snapshot tests'), defaultCap: ModelCapability.Fast },
+            { name: 'TestDataFactoryWorker', level: AgentLevel.L8_Worker, specialty: 'testing.data.factory', domain: d, area: a, promptTemplate: tp('TestDataFactoryWorker', 'Create test data factories'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -460,6 +468,10 @@ export class NicheAgentFactory {
             // L9 Checkers
             { name: 'SecurityConfigChecker', level: AgentLevel.L9_Checker, specialty: 'infra.security.checker', domain: d, area: a, promptTemplate: tp('SecurityConfigChecker', 'Verify infrastructure security'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'BuildHealthChecker', level: AgentLevel.L9_Checker, specialty: 'infra.build.checker', domain: d, area: a, promptTemplate: tp('BuildHealthChecker', 'Verify build configuration health'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +3 to reach 15
+            { name: 'KubernetesSub', level: AgentLevel.L5_SubManager, specialty: 'infra.k8s', domain: d, area: a, promptTemplate: tp('KubernetesSub', 'Manage Kubernetes configuration') },
+            { name: 'TerraformWorker', level: AgentLevel.L8_Worker, specialty: 'infra.deploy.terraform', domain: d, area: a, promptTemplate: tp('TerraformWorker', 'Write Terraform/IaC configurations'), defaultCap: ModelCapability.Fast },
+            { name: 'SSLCertWorker', level: AgentLevel.L8_Worker, specialty: 'infra.security.ssl', domain: d, area: a, promptTemplate: tp('SSLCertWorker', 'Manage SSL/TLS certificate configuration'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -504,6 +516,12 @@ export class NicheAgentFactory {
             { name: 'UIConsistencyChecker', level: AgentLevel.L9_Checker, specialty: 'ui.consistency.checker', domain: d, area: a, promptTemplate: tp('UIConsistencyChecker', 'Verify UI consistency'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'ContrastRatioChecker', level: AgentLevel.L9_Checker, specialty: 'ui.contrast.checker', domain: d, area: a, promptTemplate: tp('ContrastRatioChecker', 'Verify WCAG contrast ratios'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'DesignTokenChecker', level: AgentLevel.L9_Checker, specialty: 'ui.tokens.checker', domain: d, area: a, promptTemplate: tp('DesignTokenChecker', 'Verify design token usage'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +5 to reach 25
+            { name: 'TableDesignLead', level: AgentLevel.L6_TeamLead, specialty: 'ui.components.table', domain: d, area: a, promptTemplate: tp('TableDesignLead', 'Lead table/data grid design') },
+            { name: 'ModalDesignLead', level: AgentLevel.L6_TeamLead, specialty: 'ui.components.modal', domain: d, area: a, promptTemplate: tp('ModalDesignLead', 'Lead modal/dialog design') },
+            { name: 'GradientWorker', level: AgentLevel.L8_Worker, specialty: 'ui.color.gradient', domain: d, area: a, promptTemplate: tp('GradientWorker', 'Design gradient color schemes'), defaultCap: ModelCapability.Fast },
+            { name: 'ShadowDepthWorker', level: AgentLevel.L8_Worker, specialty: 'ui.spacing.shadows', domain: d, area: a, promptTemplate: tp('ShadowDepthWorker', 'Define shadow and depth tokens'), defaultCap: ModelCapability.Fast },
+            { name: 'BorderRadiusWorker', level: AgentLevel.L8_Worker, specialty: 'ui.spacing.borders', domain: d, area: a, promptTemplate: tp('BorderRadiusWorker', 'Define border radius tokens'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -533,6 +551,12 @@ export class NicheAgentFactory {
             // L9 Checkers
             { name: 'FlowCompletenessChecker', level: AgentLevel.L9_Checker, specialty: 'ux.flow.checker', domain: d, area: a, promptTemplate: tp('FlowCompletenessChecker', 'Verify user flow completeness'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'MicroCopyChecker', level: AgentLevel.L9_Checker, specialty: 'ux.copy.checker', domain: d, area: a, promptTemplate: tp('MicroCopyChecker', 'Verify microcopy quality'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +5 to reach 20
+            { name: 'NavigationFlowLead', level: AgentLevel.L6_TeamLead, specialty: 'ux.flow.navigation', domain: d, area: a, promptTemplate: tp('NavigationFlowLead', 'Lead navigation flow design') },
+            { name: 'CheckoutFlowLead', level: AgentLevel.L6_TeamLead, specialty: 'ux.flow.checkout', domain: d, area: a, promptTemplate: tp('CheckoutFlowLead', 'Lead checkout/wizard flow design') },
+            { name: 'ConfirmationWorker', level: AgentLevel.L8_Worker, specialty: 'ux.interaction.confirmation', domain: d, area: a, promptTemplate: tp('ConfirmationWorker', 'Design confirmation dialog patterns'), defaultCap: ModelCapability.Fast },
+            { name: 'SkeletonScreenWorker', level: AgentLevel.L8_Worker, specialty: 'ux.states.skeleton', domain: d, area: a, promptTemplate: tp('SkeletonScreenWorker', 'Design skeleton screen loading states'), defaultCap: ModelCapability.Fast },
+            { name: 'AccessibilityFlowChecker', level: AgentLevel.L9_Checker, specialty: 'ux.accessibility.flow.checker', domain: d, area: a, promptTemplate: tp('AccessibilityFlowChecker', 'Verify flow accessibility compliance'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
         ];
     }
 
@@ -557,6 +581,12 @@ export class NicheAgentFactory {
             // L9 Checkers
             { name: 'BrandConsistencyChecker', level: AgentLevel.L9_Checker, specialty: 'brand.consistency.checker', domain: d, area: a, promptTemplate: tp('BrandConsistencyChecker', 'Verify brand consistency'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'ToneChecker', level: AgentLevel.L9_Checker, specialty: 'brand.tone.checker', domain: d, area: a, promptTemplate: tp('ToneChecker', 'Verify brand tone consistency'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +5 to reach 15
+            { name: 'StyleGuideSub', level: AgentLevel.L5_SubManager, specialty: 'brand.styleguide', domain: d, area: a, promptTemplate: tp('StyleGuideSub', 'Manage brand style guide') },
+            { name: 'PhotographyLead', level: AgentLevel.L6_TeamLead, specialty: 'brand.photography', domain: d, area: a, promptTemplate: tp('PhotographyLead', 'Lead photography style guidelines') },
+            { name: 'IconographyWorker', level: AgentLevel.L8_Worker, specialty: 'brand.iconography', domain: d, area: a, promptTemplate: tp('IconographyWorker', 'Define branded iconography style'), defaultCap: ModelCapability.Fast },
+            { name: 'MotionBrandWorker', level: AgentLevel.L8_Worker, specialty: 'brand.motion', domain: d, area: a, promptTemplate: tp('MotionBrandWorker', 'Define branded motion principles'), defaultCap: ModelCapability.Fast },
+            { name: 'BrandSpacingWorker', level: AgentLevel.L8_Worker, specialty: 'brand.spacing', domain: d, area: a, promptTemplate: tp('BrandSpacingWorker', 'Define brand spacing standards'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -580,6 +610,11 @@ export class NicheAgentFactory {
             { name: 'IndexWorker', level: AgentLevel.L8_Worker, specialty: 'data.schema.indexes.create', domain: d, area: 'schema', promptTemplate: tp('IndexWorker', 'schema', 'Create indexes'), defaultCap: ModelCapability.Fast },
             { name: 'SchemaValidator', level: AgentLevel.L9_Checker, specialty: 'data.schema.checker', domain: d, area: 'schema', promptTemplate: tp('SchemaValidator', 'schema', 'Validate schema integrity'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'NormalizationChecker', level: AgentLevel.L9_Checker, specialty: 'data.schema.normalization.checker', domain: d, area: 'schema', promptTemplate: tp('NormalizationChecker', 'schema', 'Check schema normalization'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +4 to reach 15
+            { name: 'TriggerSub', level: AgentLevel.L5_SubManager, specialty: 'data.schema.triggers', domain: d, area: 'schema', promptTemplate: tp('TriggerSub', 'schema', 'Manage database trigger design') },
+            { name: 'ViewLead', level: AgentLevel.L6_TeamLead, specialty: 'data.schema.views', domain: d, area: 'schema', promptTemplate: tp('ViewLead', 'schema', 'Lead database view definition') },
+            { name: 'DefaultValueWorker', level: AgentLevel.L8_Worker, specialty: 'data.schema.defaults', domain: d, area: 'schema', promptTemplate: tp('DefaultValueWorker', 'schema', 'Define column default values'), defaultCap: ModelCapability.Fast },
+            { name: 'PartitionWorker', level: AgentLevel.L8_Worker, specialty: 'data.schema.partitions', domain: d, area: 'schema', promptTemplate: tp('PartitionWorker', 'schema', 'Design table partitioning'), defaultCap: ModelCapability.Fast },
 
             // Migration area (~10)
             { name: 'MigrationManager', level: AgentLevel.L4_Manager, specialty: 'data.migration', domain: d, area: 'migration', promptTemplate: tp('MigrationManager', 'migration', 'Manage database migrations') },
@@ -588,6 +623,11 @@ export class NicheAgentFactory {
             { name: 'MigrationUpWorker', level: AgentLevel.L8_Worker, specialty: 'data.migration.up', domain: d, area: 'migration', promptTemplate: tp('MigrationUpWorker', 'migration', 'Write up-migrations'), defaultCap: ModelCapability.Fast },
             { name: 'MigrationDownWorker', level: AgentLevel.L8_Worker, specialty: 'data.migration.down', domain: d, area: 'migration', promptTemplate: tp('MigrationDownWorker', 'migration', 'Write down-migrations'), defaultCap: ModelCapability.Fast },
             { name: 'MigrationSafetyChecker', level: AgentLevel.L9_Checker, specialty: 'data.migration.checker', domain: d, area: 'migration', promptTemplate: tp('MigrationSafetyChecker', 'migration', 'Verify migration safety'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +4 to reach 10
+            { name: 'DataTransformSub', level: AgentLevel.L5_SubManager, specialty: 'data.migration.transform', domain: d, area: 'migration', promptTemplate: tp('DataTransformSub', 'migration', 'Manage data transformation scripts') },
+            { name: 'SchemaDiffLead', level: AgentLevel.L6_TeamLead, specialty: 'data.migration.diff', domain: d, area: 'migration', promptTemplate: tp('SchemaDiffLead', 'migration', 'Lead schema diff analysis') },
+            { name: 'DataBackfillWorker', level: AgentLevel.L8_Worker, specialty: 'data.migration.backfill', domain: d, area: 'migration', promptTemplate: tp('DataBackfillWorker', 'migration', 'Write data backfill scripts'), defaultCap: ModelCapability.Fast },
+            { name: 'MigrationOrderWorker', level: AgentLevel.L8_Worker, specialty: 'data.migration.order', domain: d, area: 'migration', promptTemplate: tp('MigrationOrderWorker', 'migration', 'Determine migration execution order'), defaultCap: ModelCapability.Fast },
 
             // Seed area (~8)
             { name: 'SeedManager', level: AgentLevel.L4_Manager, specialty: 'data.seed', domain: d, area: 'seed', promptTemplate: tp('SeedManager', 'seed', 'Manage seed data') },
@@ -595,6 +635,10 @@ export class NicheAgentFactory {
             { name: 'TestDataWorker', level: AgentLevel.L8_Worker, specialty: 'data.seed.test', domain: d, area: 'seed', promptTemplate: tp('TestDataWorker', 'seed', 'Generate test data'), defaultCap: ModelCapability.Fast },
             { name: 'FixtureDataWorker', level: AgentLevel.L8_Worker, specialty: 'data.seed.fixture', domain: d, area: 'seed', promptTemplate: tp('FixtureDataWorker', 'seed', 'Generate fixture data'), defaultCap: ModelCapability.Fast },
             { name: 'SeedIdempotencyChecker', level: AgentLevel.L9_Checker, specialty: 'data.seed.checker', domain: d, area: 'seed', promptTemplate: tp('SeedIdempotencyChecker', 'seed', 'Verify seed idempotency'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +3 to reach 8
+            { name: 'SeedCleanupLead', level: AgentLevel.L6_TeamLead, specialty: 'data.seed.cleanup', domain: d, area: 'seed', promptTemplate: tp('SeedCleanupLead', 'seed', 'Lead seed data cleanup procedures') },
+            { name: 'DemoDataWorker', level: AgentLevel.L8_Worker, specialty: 'data.seed.demo', domain: d, area: 'seed', promptTemplate: tp('DemoDataWorker', 'seed', 'Generate demo/sample data'), defaultCap: ModelCapability.Fast },
+            { name: 'RelationalSeedWorker', level: AgentLevel.L8_Worker, specialty: 'data.seed.relational', domain: d, area: 'seed', promptTemplate: tp('RelationalSeedWorker', 'seed', 'Generate relationally consistent seed data'), defaultCap: ModelCapability.Fast },
 
             // Query area (~7)
             { name: 'QueryManager', level: AgentLevel.L4_Manager, specialty: 'data.query', domain: d, area: 'query', promptTemplate: tp('QueryManager', 'query', 'Manage query optimization') },
@@ -602,6 +646,9 @@ export class NicheAgentFactory {
             { name: 'SelectQueryWorker', level: AgentLevel.L8_Worker, specialty: 'data.query.select', domain: d, area: 'query', promptTemplate: tp('SelectQueryWorker', 'query', 'Optimize SELECT queries'), defaultCap: ModelCapability.Fast },
             { name: 'JoinQueryWorker', level: AgentLevel.L8_Worker, specialty: 'data.query.join', domain: d, area: 'query', promptTemplate: tp('JoinQueryWorker', 'query', 'Optimize JOIN queries'), defaultCap: ModelCapability.Fast },
             { name: 'QueryPerformanceChecker', level: AgentLevel.L9_Checker, specialty: 'data.query.checker', domain: d, area: 'query', promptTemplate: tp('QueryPerformanceChecker', 'query', 'Check query performance'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +2 to reach 7
+            { name: 'AggregateQueryWorker', level: AgentLevel.L8_Worker, specialty: 'data.query.aggregate', domain: d, area: 'query', promptTemplate: tp('AggregateQueryWorker', 'query', 'Optimize aggregate/GROUP BY queries'), defaultCap: ModelCapability.Fast },
+            { name: 'SubqueryWorker', level: AgentLevel.L8_Worker, specialty: 'data.query.subquery', domain: d, area: 'query', promptTemplate: tp('SubqueryWorker', 'query', 'Optimize subqueries and CTEs'), defaultCap: ModelCapability.Fast },
         ];
     }
 
@@ -624,6 +671,9 @@ export class NicheAgentFactory {
             { name: 'ErrorDocWorker', level: AgentLevel.L8_Worker, specialty: 'docs.api.errors', domain: d, area: 'api', promptTemplate: tp('ErrorDocWorker', 'api', 'Document error responses'), defaultCap: ModelCapability.Fast },
             { name: 'APIDocCompletenessChecker', level: AgentLevel.L9_Checker, specialty: 'docs.api.checker', domain: d, area: 'api', promptTemplate: tp('APIDocCompletenessChecker', 'api', 'Verify API doc completeness'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
             { name: 'APIExampleChecker', level: AgentLevel.L9_Checker, specialty: 'docs.api.examples.checker', domain: d, area: 'api', promptTemplate: tp('APIExampleChecker', 'api', 'Verify code examples work'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +2 to reach 12
+            { name: 'AuthDocLead', level: AgentLevel.L6_TeamLead, specialty: 'docs.api.auth', domain: d, area: 'api', promptTemplate: tp('AuthDocLead', 'api', 'Lead authentication documentation') },
+            { name: 'WebhookDocWorker', level: AgentLevel.L8_Worker, specialty: 'docs.api.webhooks', domain: d, area: 'api', promptTemplate: tp('WebhookDocWorker', 'api', 'Document webhook endpoints'), defaultCap: ModelCapability.Fast },
 
             // User Docs area (~10)
             { name: 'UserDocsManager', level: AgentLevel.L4_Manager, specialty: 'docs.user', domain: d, area: 'user', promptTemplate: tp('UserDocsManager', 'user', 'Manage user documentation') },
@@ -634,6 +684,9 @@ export class NicheAgentFactory {
             { name: 'ScreenshotWorker', level: AgentLevel.L8_Worker, specialty: 'docs.user.screenshots', domain: d, area: 'user', promptTemplate: tp('ScreenshotWorker', 'user', 'Document with screenshots'), defaultCap: ModelCapability.Fast },
             { name: 'FAQWorker', level: AgentLevel.L8_Worker, specialty: 'docs.user.faq', domain: d, area: 'user', promptTemplate: tp('FAQWorker', 'user', 'Write FAQ entries'), defaultCap: ModelCapability.Fast },
             { name: 'ReadabilityChecker', level: AgentLevel.L9_Checker, specialty: 'docs.user.readability.checker', domain: d, area: 'user', promptTemplate: tp('ReadabilityChecker', 'user', 'Check documentation readability'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +2 to reach 10
+            { name: 'TroubleshootingWorker', level: AgentLevel.L8_Worker, specialty: 'docs.user.troubleshooting', domain: d, area: 'user', promptTemplate: tp('TroubleshootingWorker', 'user', 'Write troubleshooting guides'), defaultCap: ModelCapability.Fast },
+            { name: 'ReleaseNotesWorker', level: AgentLevel.L8_Worker, specialty: 'docs.user.releases', domain: d, area: 'user', promptTemplate: tp('ReleaseNotesWorker', 'user', 'Write release notes for users'), defaultCap: ModelCapability.Fast },
 
             // Internal Docs area (~8)
             { name: 'InternalDocsManager', level: AgentLevel.L4_Manager, specialty: 'docs.internal', domain: d, area: 'internal', promptTemplate: tp('InternalDocsManager', 'internal', 'Manage internal documentation') },
@@ -643,6 +696,8 @@ export class NicheAgentFactory {
             { name: 'ArchDiagramWorker', level: AgentLevel.L8_Worker, specialty: 'docs.internal.diagrams', domain: d, area: 'internal', promptTemplate: tp('ArchDiagramWorker', 'internal', 'Create architecture diagrams'), defaultCap: ModelCapability.Fast },
             { name: 'InlineCommentWorker', level: AgentLevel.L8_Worker, specialty: 'docs.internal.comments', domain: d, area: 'internal', promptTemplate: tp('InlineCommentWorker', 'internal', 'Write inline code comments'), defaultCap: ModelCapability.Fast },
             { name: 'InternalDocChecker', level: AgentLevel.L9_Checker, specialty: 'docs.internal.checker', domain: d, area: 'internal', promptTemplate: tp('InternalDocChecker', 'internal', 'Verify internal doc accuracy'), defaultCap: ModelCapability.Reasoning, requiredCap: ModelCapability.Reasoning },
+            // +1 to reach 8
+            { name: 'RunbookWorker', level: AgentLevel.L8_Worker, specialty: 'docs.internal.runbooks', domain: d, area: 'internal', promptTemplate: tp('RunbookWorker', 'internal', 'Write operational runbooks'), defaultCap: ModelCapability.Fast },
         ];
     }
 }

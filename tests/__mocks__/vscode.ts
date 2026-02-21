@@ -18,6 +18,7 @@ export const window = {
 export const workspace = {
     getConfiguration: jest.fn(() => ({
         get: jest.fn(),
+        inspect: jest.fn(() => ({ defaultValue: undefined, globalValue: undefined, workspaceValue: undefined, workspaceFolderValue: undefined })),
     })),
     workspaceFolders: [{ uri: { fsPath: '/tmp/test-workspace' } }],
     createFileSystemWatcher: jest.fn(() => ({
