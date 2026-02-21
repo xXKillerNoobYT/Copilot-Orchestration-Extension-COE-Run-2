@@ -85,6 +85,7 @@ export interface AgentTreeManagerLike {
     activateNode(nodeId: string): void;
     completeNode(nodeId: string, result: string): void;
     failNode(nodeId: string, error: string): void;
+    waitForChildren(nodeId: string): void;
 }
 
 interface QueuedTicket {
@@ -2067,7 +2068,8 @@ export class TicketProcessorService {
             }
 
             // v9.0: Activate matching tree node for live status tracking
-            // Use the primary specialist agent (skip orchestrator wrap steps) for a better tree match
+            // Use the primary specialist agent (skip orchestrator wrap steps) for a better tree match.
+            // Also activate ancestor nodes (WaitingChild) so the full branch lights up in the webapp.
             if (this.agentTreeMgr) {
                 try {
                     // Find the primary specialist agent (not orchestrator wrap)
@@ -2083,7 +2085,27 @@ export class TicketProcessorService {
                             activeTreeNodeId = treeNode.id;
                             this.agentTreeMgr.activateNode(treeNode.id);
                             this.outputChannel.appendLine(
-                                `[TicketProcessor] Tree node activated: ${treeNode.name} (${treeNode.id}) for agent '${primaryAgent}'`
+                                `[TicketProcessor] Tree node activated: ${treeNode.name} (L${treeNode.level}) for agent '${primaryAgent}' on TK-${ticket.ticket_number}`
+                            );
+
+                            // Light up ancestor chain — mark parents as WaitingChild
+                            // so the webapp shows the full active branch from root to leaf
+                            try {
+                                const ancestors = this.database.getTreeAncestors(treeNode.id);
+                                for (const ancestor of ancestors) {
+                                    if (ancestor.status === 'idle') {
+                                        this.agentTreeMgr.waitForChildren(ancestor.id);
+                                    }
+                                }
+                                if (ancestors.length > 0) {
+                                    this.outputChannel.appendLine(
+                                        `[TicketProcessor] Ancestor chain activated: ${ancestors.map(a => a.name).join(' → ')}`
+                                    );
+                                }
+                            } catch { /* non-fatal — ancestor chain is cosmetic */ }
+                        } else {
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] No tree node found for agent '${primaryAgent}' — tree won't update for TK-${ticket.ticket_number}`
                             );
                         }
                     }

@@ -1085,12 +1085,13 @@ export class AgentTreeManager {
         });
 
         // Reset to idle after 10s so the tree refreshes for subsequent tickets
-        setTimeout(() => {
+        const resetTimer = setTimeout(() => {
             try {
                 this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Idle });
                 this.eventBus.emit('tree:node_idle', 'AgentTreeManager', { nodeId, nodeName: node.name, level: node.level });
             } catch { /* non-fatal — node may have been deleted */ }
         }, 10000);
+        if (resetTimer.unref) resetTimer.unref(); // Don't keep process alive for this timer
     }
 
     /**
@@ -1122,12 +1123,13 @@ export class AgentTreeManager {
         });
 
         // Reset to idle after 15s (slightly longer than success so user can see the failure)
-        setTimeout(() => {
+        const failResetTimer = setTimeout(() => {
             try {
                 this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Idle });
                 this.eventBus.emit('tree:node_idle', 'AgentTreeManager', { nodeId, nodeName: node.name, level: node.level });
             } catch { /* non-fatal — node may have been deleted */ }
         }, 15000);
+        if (failResetTimer.unref) failResetTimer.unref(); // Don't keep process alive for this timer
     }
 
     /**

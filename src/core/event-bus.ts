@@ -129,7 +129,7 @@ export type COEEventType =
     | 'review_queue:item_created' | 'review_queue:item_approved' | 'review_queue:item_rejected'
     | 'review_queue:badge_update'
     // v9.0: Agent Tree Hierarchy
-    | 'tree:node_spawned' | 'tree:node_completed' | 'tree:node_failed'
+    | 'tree:node_spawned' | 'tree:node_activated' | 'tree:node_completed' | 'tree:node_failed' | 'tree:node_idle'
     | 'tree:node_escalated' | 'tree:context_sliced'
     | 'tree:skeleton_built' | 'tree:branch_spawned' | 'tree:branch_pruned'
     | 'tree:default_built'

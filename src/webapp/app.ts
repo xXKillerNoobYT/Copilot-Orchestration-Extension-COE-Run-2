@@ -8074,8 +8074,8 @@ function renderAgentTree(nodes) {
     });
 
     // ===== ACTIVE BRANCH DETECTION =====
-    // Nodes that are actively working
-    var activeStatuses = { active: true, working: true };
+    // Nodes that are actively working or waiting for children (part of the active branch)
+    var activeStatuses = { active: true, working: true, waiting_child: true };
     // Build set of all active nodes + their ancestors (the "hot path")
     var hotPathNodes = {};
     function markAncestorsHot(nodeId) {
@@ -8123,7 +8123,7 @@ function renderAgentTree(nodes) {
         // Flat list view (the old view, as a fallback)
         var listHtml = filtered.map(function(n) {
             var indent = n._levelNum * 20;
-            var statusColors = { idle: 'var(--overlay)', active: 'var(--blue)', working: 'var(--yellow)', completed: 'var(--green)', failed: 'var(--red)', escalated: 'var(--orange)' };
+            var statusColors = { idle: 'var(--overlay)', active: 'var(--blue)', working: 'var(--yellow)', waiting_child: 'var(--teal)', completed: 'var(--green)', failed: 'var(--red)', escalated: 'var(--orange)' };
             var color = statusColors[n.status] || 'var(--overlay)';
             var isHot = !!hotPathNodes[n.id];
             var bgStyle = isHot ? 'background:rgba(137,180,250,0.08);' : '';
@@ -8144,7 +8144,7 @@ function renderAgentTree(nodes) {
         '#cba6f7', '#89b4fa', '#74c7ec', '#94e2d5', '#a6e3a1',
         '#f9e2af', '#fab387', '#eba0ac', '#f38ba8', '#f5c2e7'
     ];
-    var statusDots = { idle: '#6c7086', active: '#89b4fa', working: '#f9e2af', completed: '#a6e3a1', failed: '#f38ba8', escalated: '#fab387' };
+    var statusDots = { idle: '#6c7086', active: '#89b4fa', working: '#f9e2af', waiting_child: '#94e2d5', completed: '#a6e3a1', failed: '#f38ba8', escalated: '#fab387' };
     var levelNames = ['Boss', 'Global', 'Domain', 'Area', 'Manager', 'SubMgr', 'Lead', 'WkrGrp', 'Worker', 'Checker'];
 
     // Active branch colors

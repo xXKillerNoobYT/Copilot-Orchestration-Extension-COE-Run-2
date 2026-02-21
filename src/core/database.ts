@@ -5235,55 +5235,79 @@ export class Database {
      * 4. Final fallback to GlobalOrchestrator
      */
     findTreeNodeForAgent(agentName: string, ticketContext?: { title?: string; operation_type?: string; body?: string }): AgentTreeNode | null {
-        // Static mapping: core agent names → preferred tree node names
+        // ===== TIER 1: Direct node name mapping for singleton agents =====
         const AGENT_TO_NODE_NAME: Record<string, string> = {
             'boss': 'BossAgent',
             'orchestrator': 'GlobalOrchestrator',
             'clarity': 'GlobalOrchestrator',
         };
 
-        // Direct name match for well-known agents
         const directName = AGENT_TO_NODE_NAME[agentName];
         if (directName) {
             const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE name = ? LIMIT 1').get(directName) as Record<string, unknown> | undefined;
             if (row) return this.rowToTreeNode(row);
         }
 
-        // For domain-specific agents, pick the right subtree based on ticket context
-        // Agent → domain mapping (which L2 orchestrator subtree they belong under)
-        const AGENT_DOMAIN_HINTS: Record<string, string[]> = {
-            'coding': ['CodeDomainOrchestrator'],
-            'verification': ['TestingArea', 'CodeDomainOrchestrator'],
-            'design_architect': ['DesignDomainOrchestrator'],
-            'planning': [], // planning is cross-domain — use ticket context to decide
+        // ===== TIER 2: Agent → preferred subtree branches (L2 domain, L3 area, L4 manager) =====
+        // Each agent maps to one or more preferred tree branches, ordered from most to least specific.
+        // First match wins. This covers ALL 18 orchestrator agent types.
+        const AGENT_BRANCH_HINTS: Record<string, string[]> = {
+            // Code domain agents
+            'coding':            ['BackendArea', 'FrontendArea', 'CodeDomainOrchestrator'],
+            'coding_director':   ['BackendArea', 'FrontendArea', 'CodeDomainOrchestrator'],
+            'custom':            ['CodeDomainOrchestrator'],
+
+            // Verification/testing agents
+            'verification':      ['UnitTestManager', 'TestingArea', 'CodeDomainOrchestrator'],
+            'ui_testing':        ['E2ETestManager', 'TestingArea', 'CodeDomainOrchestrator'],
+
+            // Design agents
+            'design_architect':  ['UIDesignArea', 'DesignDomainOrchestrator'],
+            'design_hardener':   ['ComponentDesignManager', 'UIDesignArea', 'DesignDomainOrchestrator'],
+            'gap_hunter':        ['DesignDomainOrchestrator', 'CodeDomainOrchestrator'],
+
+            // Backend agents
+            'backend_architect': ['APIManager', 'BackendArea', 'CodeDomainOrchestrator'],
+
+            // Research/observation agents
+            'research':          ['ResearchManager', 'UXDesignArea', 'DesignDomainOrchestrator'],
+            'observation':       ['MonitoringManager', 'InfraArea', 'CodeDomainOrchestrator'],
+
+            // Cross-domain agents — pick based on ticket context
+            'planning':          [],  // skip to context-based matching
+            'decision_memory':   [],  // skip to context-based matching
+            'review':            [],  // skip to context-based matching
+            'user_communication':[],  // skip to context-based matching
         };
 
-        const domainHints = AGENT_DOMAIN_HINTS[agentName];
-        if (domainHints && domainHints.length > 0) {
-            // Try each hint in order
-            for (const nodeName of domainHints) {
+        const branchHints = AGENT_BRANCH_HINTS[agentName];
+        if (branchHints && branchHints.length > 0) {
+            for (const nodeName of branchHints) {
                 const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE name = ? LIMIT 1').get(nodeName) as Record<string, unknown> | undefined;
                 if (row) return this.rowToTreeNode(row);
             }
         }
 
-        // For 'planning' and unknown agents: use ticket context to find the best domain match
+        // ===== TIER 3: Context-based deep matching (L2 → L3 → L4) =====
+        // For cross-domain agents (planning, review, etc.) and when branch hints didn't match,
+        // score ALL skeleton nodes (L2-L4) against ticket context and pick the deepest best match.
         if (ticketContext) {
             const contextText = [
                 ticketContext.title || '',
                 ticketContext.operation_type || '',
-                ticketContext.body?.substring(0, 200) || '',
+                ticketContext.body?.substring(0, 300) || '',
             ].join(' ').toLowerCase();
 
-            // Try to match L2 domain orchestrators by their scope keywords
-            const domainNodes = (this.db.prepare(
-                'SELECT * FROM agent_tree_nodes WHERE level = 2 ORDER BY name ASC'
+            // Fetch L2-L4 nodes (skeleton) — these have meaningful scope keywords
+            const skeletonNodes = (this.db.prepare(
+                'SELECT * FROM agent_tree_nodes WHERE level >= 2 AND level <= 4 ORDER BY level DESC, name ASC'
             ).all() as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
 
             let bestNode: AgentTreeNode | null = null;
             let bestScore = 0;
+            let bestLevel = -1;
 
-            for (const node of domainNodes) {
+            for (const node of skeletonNodes) {
                 const scopeKeywords = (node.scope || '').split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
                 let score = 0;
                 for (const kw of scopeKeywords) {
@@ -5291,9 +5315,12 @@ export class Database {
                         score++;
                     }
                 }
-                if (score > bestScore) {
+                // Prefer deeper nodes (L4 > L3 > L2) when scores are equal
+                // Deeper nodes are more specific and give better tree visualization
+                if (score > bestScore || (score === bestScore && score > 0 && node.level > bestLevel)) {
                     bestScore = score;
                     bestNode = node;
+                    bestLevel = node.level;
                 }
             }
 
@@ -5302,11 +5329,11 @@ export class Database {
             }
         }
 
-        // Fallback: try exact agent_type match (original behavior)
+        // ===== TIER 4: Fallback — agent_type exact match =====
         const typeMatch = this.getTreeNodeByAgentType(agentName);
         if (typeMatch) return typeMatch;
 
-        // Final fallback: GlobalOrchestrator
+        // ===== TIER 5: Final fallback — GlobalOrchestrator =====
         const fallback = this.db.prepare("SELECT * FROM agent_tree_nodes WHERE name = 'GlobalOrchestrator' LIMIT 1").get() as Record<string, unknown> | undefined;
         if (fallback) return this.rowToTreeNode(fallback);
 
