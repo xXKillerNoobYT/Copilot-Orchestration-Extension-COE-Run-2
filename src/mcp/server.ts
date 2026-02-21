@@ -617,6 +617,142 @@ export class MCPServer {
                 },
             };
         });
+
+        // Tool 10: addTicketNote (v11.0 — agent note-taking)
+        this.registerTool({
+            name: 'addTicketNote',
+            description: 'Add a timestamped note to a ticket. Use this to record observations, progress updates, warnings, or context that future agents should know about. Notes are permanently stored on the ticket and visible to all subsequent agents.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    ticket_id: { type: 'string', description: 'ID of the ticket to annotate' },
+                    note: { type: 'string', description: 'The note content — what happened, what was observed, what should be done next' },
+                    author: { type: 'string', description: 'Name of the agent or entity adding the note (defaults to "mcp-agent")' },
+                    error_context: { type: 'string', description: 'Optional: If this note is about an error, describe the error context' },
+                    suggested_actions: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional: If there was an issue, list suggested corrective actions',
+                    },
+                },
+                required: ['ticket_id', 'note'],
+            },
+        }, async (args) => {
+            const ticketId = args.ticket_id as string;
+            const noteText = args.note as string;
+            const author = (args.author as string) || 'mcp-agent';
+            const errorContext = args.error_context as string | undefined;
+            const suggestedActions = args.suggested_actions as string[] | undefined;
+
+            const ticket = this.database.getTicket(ticketId);
+            if (!ticket) {
+                return { success: false, error: `Ticket not found: ${ticketId}`, error_code: 'NOT_FOUND' };
+            }
+
+            this.database.addAgentNote(ticketId, {
+                author,
+                note: noteText,
+                errorContext,
+                suggestedActions,
+            });
+
+            const eventBus = getEventBus();
+            eventBus.emit('ticket:note_added' as any, 'mcp-server', {
+                ticketId,
+                author,
+                note: noteText.substring(0, 200),
+            });
+
+            this.database.addAuditLog('mcp', 'add_ticket_note', `Note added to ticket ${ticketId} by ${author}: ${noteText.substring(0, 100)}`);
+
+            return {
+                success: true,
+                data: {
+                    ticket_id: ticketId,
+                    ticket_number: ticket.ticket_number,
+                    author,
+                    note_preview: noteText.substring(0, 200),
+                    timestamp: new Date().toISOString(),
+                },
+            };
+        });
+
+        // Tool 11: addTicketReference (v11.0 — cross-ticket linking)
+        this.registerTool({
+            name: 'addTicketReference',
+            description: 'Link two tickets together with a relationship type. Use this to track dependencies, blockers, sub-tasks, and related work across tickets. Both tickets are updated with the reference.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    ticket_id: { type: 'string', description: 'ID of the ticket to add a reference FROM' },
+                    referenced_ticket_id: { type: 'string', description: 'ID of the ticket being referenced (the target)' },
+                    relationship: {
+                        type: 'string',
+                        description: 'Type of relationship: related_to, depends_on, blocks, subtask_of, parent_of, duplicate_of',
+                        enum: ['related_to', 'depends_on', 'blocks', 'subtask_of', 'parent_of', 'duplicate_of'],
+                    },
+                },
+                required: ['ticket_id', 'referenced_ticket_id'],
+            },
+        }, async (args) => {
+            const ticketId = args.ticket_id as string;
+            const referencedTicketId = args.referenced_ticket_id as string;
+            const relationship = (args.relationship as string) || 'related_to';
+
+            const ticket = this.database.getTicket(ticketId);
+            if (!ticket) {
+                return { success: false, error: `Ticket not found: ${ticketId}`, error_code: 'NOT_FOUND' };
+            }
+
+            const referencedTicket = this.database.getTicket(referencedTicketId);
+            if (!referencedTicket) {
+                return { success: false, error: `Referenced ticket not found: ${referencedTicketId}`, error_code: 'NOT_FOUND' };
+            }
+
+            // Add the reference (forward direction)
+            this.database.addTicketReference(ticketId, referencedTicketId);
+
+            // Add reverse reference too (if A references B, B should reference A)
+            this.database.addTicketReference(referencedTicketId, ticketId);
+
+            // If it's a blocking relationship, update the blocking_ticket_id field
+            if (relationship === 'depends_on' || relationship === 'blocks') {
+                const blockingId = relationship === 'depends_on' ? referencedTicketId : ticketId;
+                const blockedId = relationship === 'depends_on' ? ticketId : referencedTicketId;
+                this.database.updateTicket(blockedId, { blocking_ticket_id: blockingId });
+            }
+
+            // Add agent notes for audit trail
+            this.database.addAgentNote(ticketId, {
+                author: 'mcp-server',
+                note: `Reference added: ${relationship} → TK-${referencedTicket.ticket_number} (${referencedTicketId})`,
+            });
+            this.database.addAgentNote(referencedTicketId, {
+                author: 'mcp-server',
+                note: `Referenced by: TK-${ticket.ticket_number} (${ticketId}) — relationship: ${relationship}`,
+            });
+
+            const eventBus = getEventBus();
+            eventBus.emit('ticket:reference_added' as any, 'mcp-server', {
+                ticketId,
+                referencedTicketId,
+                relationship,
+            });
+
+            this.database.addAuditLog('mcp', 'add_ticket_reference',
+                `Reference: ${ticketId} ${relationship} ${referencedTicketId}`);
+
+            return {
+                success: true,
+                data: {
+                    ticket_id: ticketId,
+                    referenced_ticket_id: referencedTicketId,
+                    relationship,
+                    ticket_number: ticket.ticket_number,
+                    referenced_ticket_number: referencedTicket.ticket_number,
+                },
+            };
+        });
     }
 
     private registerTool(

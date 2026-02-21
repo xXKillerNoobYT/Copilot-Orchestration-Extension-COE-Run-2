@@ -19,9 +19,11 @@
 import { Database } from './database';
 import { EventBus, COEEvent, COEEventType } from './event-bus';
 import { ConfigManager } from './config';
+import { TicketTagger } from './ticket-tagger';
 import {
     Ticket, TicketStatus, TicketPriority, AgentContext, AgentResponse, AgentAction, TicketRun,
     ProjectPhase, PHASE_ORDER, PhaseGateResult, LeadAgentQueue, TeamQueueStatus,
+    TreeRoutedPipeline, BossPreDispatchValidation, BubbleResult, BossCompletionAssessment,
 } from '../types';
 
 // ==================== INTERFACES ====================
@@ -52,6 +54,33 @@ export interface BossAgentLike {
         lastError: string | null;
         createdAt: string;
     }>): Promise<string | null>;
+    /** v11.0: Boss validates queue order before each ticket dispatch */
+    validateNextTicket?(ticket: {
+        id: string;
+        ticketNumber: number;
+        title: string;
+        priority: string;
+        operationType: string;
+        body: string;
+        blockingTicketId: string | null;
+        ticketCategory: string | null;
+        ticketStage: string | null;
+    }, queueSnapshot: Array<{
+        ticketNumber: number;
+        title: string;
+        priority: string;
+        operationType: string;
+        ticketCategory: string | null;
+        blockingTicketId: string | null;
+    }>, activeTicketSummaries: string[]): Promise<BossPreDispatchValidation>;
+    /** v11.0: Boss assesses whether a ticket is truly done after bubble-up */
+    assessTicketCompletion?(ticketSummary: {
+        ticketNumber: number;
+        title: string;
+        operationType: string;
+        acceptanceCriteria: string | null;
+        body: string;
+    }, bubbleChain: BubbleResult[], leafResult: string): Promise<BossCompletionAssessment>;
 }
 
 /** v4.3: Minimal interface for ClarityAgent, used for friendly message rewrites */
@@ -80,12 +109,22 @@ export interface DocumentManagerLike {
     ): import('../types').SupportDocument;
 }
 
-/** v9.0: Minimal interface for AgentTreeManager, avoiding tight coupling */
+/** v9.0/v11.0: Minimal interface for AgentTreeManager, avoiding tight coupling */
 export interface AgentTreeManagerLike {
     activateNode(nodeId: string): void;
     completeNode(nodeId: string, result: string): void;
     failNode(nodeId: string, error: string): void;
     waitForChildren(nodeId: string): void;
+    /** v11.0: Find best leaf node for a task by walking Boss→leaf through keyword scoring */
+    findBestLeaf?(taskDescription: string, taskId?: string): TreeRoutedPipeline | null;
+    /** v11.0: Get the path from a leaf node back to Boss for result bubble-up */
+    getBubbleUpPath?(leafNodeId: string): BubbleResult[];
+    /** v11.0: Find the review-capable node in the same branch */
+    getBranchReviewer?(nodeId: string): import('../types').AgentTreeNode | null;
+    /** v11.0: Activate all nodes along a tree-routed pipeline path */
+    activatePipelinePath?(pipeline: TreeRoutedPipeline, ticketTitle: string): void;
+    /** v11.0: Reset all nodes along a tree-routed pipeline path back to idle */
+    resetPipelinePath?(pipeline: TreeRoutedPipeline): void;
 }
 
 interface QueuedTicket {
@@ -321,6 +360,71 @@ function routeTicketToPipeline(ticket: Ticket): AgentPipeline | null {
     };
 }
 
+// ==================== TREE-BASED ROUTING (v11.0) ====================
+
+/**
+ * v11.0: Route a ticket through the agent tree hierarchy (Boss → leaf).
+ *
+ * Uses `AgentTreeManager.findBestLeaf()` to walk the tree from Boss (L0)
+ * down to the best-matching leaf node via keyword scoring.
+ *
+ * Falls back to `routeTicketToPipeline()` if:
+ * - No tree manager is available
+ * - Tree can't find a matching path (no keyword overlap)
+ * - Special tickets that bypass tree routing (boss_directive, ghost, phase:config)
+ *
+ * Returns a `TreeRoutedPipeline` with the full Boss→leaf path, or null if
+ * the ticket should use the legacy deterministic pipeline.
+ */
+function routeTicketViaTree(
+    ticket: Ticket,
+    treeMgr: AgentTreeManagerLike | null,
+    outputChannel: OutputChannelLike
+): TreeRoutedPipeline | null {
+    // Skip tree routing for special ticket types that have dedicated handling
+    const op = ticket.operation_type || '';
+    const title = ticket.title.toLowerCase();
+
+    // Boss directives go directly to Boss — no tree traversal needed
+    if (op === 'boss_directive') return null;
+
+    // Ghost tickets go to clarity agent — lightweight, no tree needed
+    if (ticket.is_ghost || op === 'ghost_ticket') return null;
+
+    // Phase: Configuration — always skipped
+    if (title.startsWith('phase: configuration')) return null;
+
+    // No tree manager available — fallback
+    if (!treeMgr || !treeMgr.findBestLeaf) {
+        return null;
+    }
+
+    // Build task description for tree keyword matching
+    const taskDescription = `${ticket.title}\n${ticket.body || ''}\nOperation: ${op}`;
+
+    try {
+        const treeRoute = treeMgr.findBestLeaf(taskDescription, ticket.task_id ?? undefined);
+        if (treeRoute) {
+            outputChannel.appendLine(
+                `[TicketProcessor] Tree route found for TK-${ticket.ticket_number}: ${treeRoute.agentPath.join(' → ')} ` +
+                `(${treeRoute.delegationReason})`
+            );
+            return treeRoute;
+        }
+
+        // No tree match — will fall back to deterministic routing
+        outputChannel.appendLine(
+            `[TicketProcessor] No tree route for TK-${ticket.ticket_number} — falling back to deterministic pipeline`
+        );
+        return null;
+    } catch (err) {
+        outputChannel.appendLine(
+            `[TicketProcessor] Tree routing error (non-fatal, using fallback): ${err}`
+        );
+        return null;
+    }
+}
+
 // ==================== TICKET PROCESSOR SERVICE ====================
 
 export class TicketProcessorService {
@@ -381,6 +485,8 @@ export class TicketProcessorService {
     private documentManager: DocumentManagerLike | null = null;
     /** v9.0: Agent tree manager for live status tracking during ticket processing */
     private agentTreeMgr: AgentTreeManagerLike | null = null;
+    /** v11.0: Ticket tagger for deterministic category/stage enforcement */
+    private ticketTagger = new TicketTagger();
 
     constructor(
         private database: Database,
@@ -410,6 +516,25 @@ export class TicketProcessorService {
     setAgentTreeManager(atm: AgentTreeManagerLike): void {
         this.agentTreeMgr = atm;
         this.outputChannel.appendLine('[TicketProcessor] AgentTreeManager injected for live status.');
+    }
+
+    /**
+     * v11.0: Log a key event to the ticket_activity table for historical viewing.
+     * Called alongside eventBus.emit() for events worth persisting.
+     */
+    private logTicketActivity(ticketId: string, eventType: string, summary: string, agentName?: string, treeNodeId?: string, details?: Record<string, unknown>): void {
+        try {
+            this.database.addTicketActivity({
+                ticket_id: ticketId,
+                event_type: eventType,
+                agent_name: agentName,
+                summary,
+                details_json: details ? JSON.stringify(details) : undefined,
+                tree_node_id: treeNodeId,
+            });
+        } catch {
+            // Non-critical — don't let activity logging break the pipeline
+        }
     }
 
     // ==================== TEAM QUEUE MANAGEMENT (v7.0) ====================
@@ -890,14 +1015,24 @@ export class TicketProcessorService {
             // Asynchronous: create a sub-ticket that will be processed in a team queue
             try {
                 const parentTicket = call.ticket_id ? this.database.getTicket(call.ticket_id) : null;
+                const supportTitle = `[Support] ${call.agent_name}: ${call.query.substring(0, 80)}`;
+                const supportBody = `Support agent call from ticket ${parentTicket?.ticket_number || '?'}.\n\nQuery: ${call.query}`;
+                const supportOpType = call.agent_name === 'research' ? 'research' : 'ai_question';
+                const supportTags = this.ticketTagger.tagTicket({
+                    title: supportTitle, body: supportBody,
+                    operation_type: supportOpType, parent_ticket_id: call.ticket_id || null,
+                });
                 const subTicket = this.database.createTicket({
-                    title: `[Support] ${call.agent_name}: ${call.query.substring(0, 80)}`,
-                    body: `Support agent call from ticket ${parentTicket?.ticket_number || '?'}.\n\nQuery: ${call.query}`,
+                    title: supportTitle,
+                    body: supportBody,
                     priority: (parentTicket?.priority as TicketPriority) || TicketPriority.P2,
-                    operation_type: call.agent_name === 'research' ? 'research' : 'ai_question',
+                    operation_type: supportOpType,
                     auto_created: true,
                     parent_ticket_id: call.ticket_id || null,
                     blocking_ticket_id: call.callback_action === 'block' ? call.ticket_id : null,
+                    ticket_category: supportTags.ticket_category,
+                    ticket_stage: supportTags.ticket_stage,
+                    related_ticket_ids: supportTags.related_ticket_ids.length > 0 ? JSON.stringify(supportTags.related_ticket_ids) : undefined,
                 });
 
                 // If the parent should be blocked waiting for this result
@@ -1404,6 +1539,25 @@ export class TicketProcessorService {
                     // AI mode checks — may skip/defer the ticket
                     if (ticket && !this.checkAIModeForSlot(ticket, entry, index, team)) {
                         continue; // Ticket was handled — try next team
+                    }
+
+                    // v11.0: Tag enforcement — ensure ticket has proper tags before dispatch
+                    if (ticket) {
+                        const tagValidation = this.ticketTagger.validateTags(ticket);
+                        if (!tagValidation.isValid && tagValidation.correctedTags) {
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Tag corrections for TK-${ticket.ticket_number}: ${tagValidation.corrections.join('; ')}`
+                            );
+                            // Apply tag corrections to database
+                            const corrections = tagValidation.correctedTags;
+                            this.database.updateTicketTags(ticket.id, {
+                                ticket_category: corrections.ticket_category,
+                                ticket_stage: corrections.ticket_stage,
+                                related_ticket_ids: corrections.related_ticket_ids
+                                    ? JSON.stringify(corrections.related_ticket_ids)
+                                    : undefined,
+                            });
+                        }
                     }
 
                     // Remove from team queue and add to active slot
@@ -2013,6 +2167,189 @@ export class TicketProcessorService {
                 for (const q of this.teamQueues.values()) this.sortQueue(q);
             }
 
+            // ==================== v11.0: TIMER ZERO RECOVERY ====================
+            // When the boss countdown fires, it means the system has been idle.
+            // Scan for ALL tickets stuck in processing for >10 minutes — these may have
+            // had their LLM call hang, the agent crash, or the slot leak.
+            const timerZeroRecovery: { ticketId: string; ticketNumber: number; stuckMinutes: number; action: string }[] = [];
+            const stuckThresholdMs = 10 * 60 * 1000; // 10 minutes
+            const now = Date.now();
+
+            // Check active slots for stalled processing
+            for (const [slotId, slot] of this.activeSlots) {
+                const stuckMs = now - slot.startedAt;
+                if (stuckMs > stuckThresholdMs) {
+                    const stuckTicket = this.database.getTicket(slot.ticketId);
+                    if (stuckTicket) {
+                        const stuckMinutes = Math.round(stuckMs / 60000);
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Timer zero: Slot ${slotId} stalled for ${stuckMinutes}m on TK-${stuckTicket.ticket_number} — recovering`
+                        );
+                        // Mark as failed, add error context, re-enqueue
+                        this.database.updateTicket(stuckTicket.id, {
+                            status: TicketStatus.Open,
+                            processing_status: 'queued',
+                            last_error: `Timer zero recovery: processing stalled for ${stuckMinutes} minutes`,
+                            last_error_at: new Date().toISOString(),
+                        });
+                        this.database.addAgentNote(stuckTicket.id, {
+                            author: 'Boss AI (Timer Zero)',
+                            note: `Processing stalled for ${stuckMinutes} minutes in slot ${slotId}. Ticket recovered and re-queued. Possible causes: LLM timeout, agent crash, network issue.`,
+                            errorContext: `Stalled in slot ${slotId} for ${stuckMinutes}m. Team: ${slot.team}`,
+                            suggestedActions: [
+                                'Check LLM endpoint availability',
+                                'Review previous run logs for errors',
+                                'Ensure the agent type is valid and responsive',
+                            ],
+                        });
+                        // Re-queue to team
+                        const team = this.routeToTeamQueue(stuckTicket);
+                        this.database.updateTicket(stuckTicket.id, { assigned_queue: team });
+                        this.getTeamQueue(team).push({
+                            ticketId: stuckTicket.id,
+                            priority: stuckTicket.priority,
+                            enqueuedAt: Date.now(),
+                            operationType: stuckTicket.operation_type || 'unknown',
+                            errorRetryCount: (stuckTicket.retry_count ?? 0) + 1,
+                        });
+                        timerZeroRecovery.push({
+                            ticketId: stuckTicket.id,
+                            ticketNumber: stuckTicket.ticket_number,
+                            stuckMinutes,
+                            action: 're-queued',
+                        });
+                    }
+                    // Free the slot
+                    this.activeSlots.delete(slotId);
+                }
+            }
+
+            // Also check DB for tickets in 'processing' status that aren't in any active slot
+            // (leaked tickets that somehow lost their slot reference)
+            const allProcessing = this.database.getTicketsByStatus('open')
+                .filter(t => t.processing_status === 'processing');
+            const activeSlotTicketIds = new Set(
+                Array.from(this.activeSlots.values()).map(s => s.ticketId)
+            );
+            for (const orphanTicket of allProcessing) {
+                if (!activeSlotTicketIds.has(orphanTicket.id)) {
+                    // This ticket thinks it's processing but has no active slot — it's orphaned
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Timer zero: Orphaned processing ticket TK-${orphanTicket.ticket_number} — no active slot, recovering`
+                    );
+                    this.database.updateTicket(orphanTicket.id, {
+                        processing_status: 'queued',
+                        last_error: 'Timer zero recovery: orphaned processing ticket (no active slot)',
+                        last_error_at: new Date().toISOString(),
+                    });
+                    this.database.addAgentNote(orphanTicket.id, {
+                        author: 'Boss AI (Timer Zero)',
+                        note: 'Ticket was in processing state but had no active slot. Recovered and re-queued.',
+                        errorContext: 'Orphaned processing ticket — slot was freed but status was not updated',
+                        suggestedActions: ['Check for race conditions in slot management'],
+                    });
+                    if (!this.isInAnyQueue(orphanTicket.id)) {
+                        const team = this.routeToTeamQueue(orphanTicket);
+                        this.database.updateTicket(orphanTicket.id, { assigned_queue: team });
+                        this.getTeamQueue(team).push({
+                            ticketId: orphanTicket.id,
+                            priority: orphanTicket.priority,
+                            enqueuedAt: Date.now(),
+                            operationType: orphanTicket.operation_type || 'unknown',
+                            errorRetryCount: 0,
+                        });
+                    }
+                    timerZeroRecovery.push({
+                        ticketId: orphanTicket.id,
+                        ticketNumber: orphanTicket.ticket_number,
+                        stuckMinutes: 0,
+                        action: 'orphan-recovered',
+                    });
+                }
+            }
+
+            // Emit timer zero recovery summary
+            if (timerZeroRecovery.length > 0) {
+                for (const q of this.teamQueues.values()) this.sortQueue(q);
+                this.eventBus.emit('boss:timer_zero_recovery' as COEEventType, 'ticket-processor', {
+                    recoveredCount: timerZeroRecovery.length,
+                    tickets: timerZeroRecovery,
+                    timestamp: new Date().toISOString(),
+                });
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Timer zero recovery: ${timerZeroRecovery.length} ticket(s) recovered — ${timerZeroRecovery.map(t => `TK-${t.ticketNumber}(${t.action})`).join(', ')}`
+                );
+                this.database.addAuditLog('boss-ai', 'timer_zero_recovery',
+                    `Recovered ${timerZeroRecovery.length} ticket(s): ${timerZeroRecovery.map(t => `TK-${t.ticketNumber}`).join(', ')}`
+                );
+            }
+
+            // v10.1: Safety net — scan DB for tickets that somehow never got into in-memory queues.
+            // This catches tickets created by createAutoTicket before the event emission fix,
+            // tickets from older sessions, or any race condition that drops events.
+            if (this.getTotalQueueSize() === 0) {
+                const openUnqueued = this.database.getTicketsByStatus('open')
+                    .filter(t => !t.processing_status || t.processing_status === 'queued')
+                    .filter(t => !this.isInAnyQueue(t.id));
+                const onHoldTickets = this.database.getTicketsByStatus('on_hold');
+
+                let rescuedCount = 0;
+                for (const ticket of openUnqueued) {
+                    const aiLevel = this.getAILevel(ticket);
+                    if (aiLevel === 'manual') continue;
+                    this.database.updateTicket(ticket.id, { processing_status: 'queued' });
+                    const team = this.routeToTeamQueue(ticket);
+                    this.database.updateTicket(ticket.id, { assigned_queue: team });
+                    this.getTeamQueue(team).push({
+                        ticketId: ticket.id,
+                        priority: ticket.priority,
+                        enqueuedAt: Date.now(),
+                        operationType: ticket.operation_type || 'unknown',
+                        errorRetryCount: 0,
+                    });
+                    rescuedCount++;
+                }
+
+                // v10.1: Boss AI ticket review — check on_hold tickets that might need reactivation
+                for (const ticket of onHoldTickets) {
+                    // Check if blocker is now resolved
+                    if (ticket.blocking_ticket_id) {
+                        const blocker = this.database.getTicket(ticket.blocking_ticket_id);
+                        if (blocker && blocker.status === TicketStatus.Resolved) {
+                            // Blocker resolved — reactivate this ticket
+                            this.database.updateTicket(ticket.id, {
+                                status: TicketStatus.Open,
+                                processing_status: 'queued',
+                            });
+                            this.database.addTicketReply(ticket.id, 'system',
+                                `Reactivated by Boss AI: blocking ticket TK-${blocker.ticket_number} is now resolved.`
+                            );
+                            const team = this.routeToTeamQueue(ticket);
+                            this.database.updateTicket(ticket.id, { assigned_queue: team });
+                            this.getTeamQueue(team).push({
+                                ticketId: ticket.id,
+                                priority: ticket.priority,
+                                enqueuedAt: Date.now(),
+                                operationType: ticket.operation_type || 'unknown',
+                                errorRetryCount: 0,
+                            });
+                            rescuedCount++;
+                            this.eventBus.emit('ticket:recovered', 'ticket-processor', {
+                                ticketId: ticket.id, ticketNumber: ticket.ticket_number, team,
+                                reason: 'blocker_resolved',
+                            });
+                        }
+                    }
+                }
+
+                if (rescuedCount > 0) {
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Boss countdown DB scan: rescued ${rescuedCount} ticket(s) into queue`
+                    );
+                    for (const q of this.teamQueues.values()) this.sortQueue(q);
+                }
+            }
+
             // If tickets are now available, start the Boss cycle
             if (this.getTotalQueueSize() > 0 && this.activeSlots.size < this.maxParallelTickets) {
                 this.bossCycle();
@@ -2073,31 +2410,183 @@ export class TicketProcessorService {
             }
         }
 
-        // Get full pipeline for intelligent multi-agent routing
-        const pipeline = routeTicketToPipeline(ticket);
-        if (!pipeline) {
+        // =====================================================
+        // v11.0: Boss Pre-Dispatch Validation
+        // Boss reviews whether THIS ticket should be next.
+        // If Boss says "process a different ticket", we swap.
+        // =====================================================
+        const bossAgent = this.orchestrator.getBossAgent();
+        if (bossAgent?.validateNextTicket) {
+            try {
+                // Build a queue snapshot for Boss context (top 8 tickets from all teams)
+                const queueSnapshot: Array<{
+                    ticketNumber: number; title: string; priority: string;
+                    operationType: string; ticketCategory: string | null;
+                    blockingTicketId: string | null;
+                }> = [];
+                for (const team of [LeadAgentQueue.Planning, LeadAgentQueue.Verification, LeadAgentQueue.CodingDirector, LeadAgentQueue.Orchestrator]) {
+                    const teamQ = this.getTeamQueue(team);
+                    for (const q of teamQ.slice(0, 2)) {
+                        const t = this.database.getTicket(q.ticketId);
+                        if (t) {
+                            queueSnapshot.push({
+                                ticketNumber: t.ticket_number,
+                                title: t.title,
+                                priority: t.priority,
+                                operationType: t.operation_type || 'unknown',
+                                ticketCategory: t.ticket_category || null,
+                                blockingTicketId: t.blocking_ticket_id,
+                            });
+                        }
+                    }
+                }
+
+                // Build active ticket summaries for Boss context
+                const activeTicketSummaries: string[] = [];
+                for (const [slotTicketId] of this.activeSlots) {
+                    const slotTicket = this.database.getTicket(slotTicketId);
+                    if (slotTicket) {
+                        activeTicketSummaries.push(`TK-${slotTicket.ticket_number}: ${slotTicket.title} (${slotTicket.operation_type || 'unknown'})`);
+                    }
+                }
+
+                const validation = await bossAgent.validateNextTicket(
+                    {
+                        id: ticket.id,
+                        ticketNumber: ticket.ticket_number,
+                        title: ticket.title,
+                        priority: ticket.priority,
+                        operationType: ticket.operation_type || 'unknown',
+                        body: ticket.body || '',
+                        blockingTicketId: ticket.blocking_ticket_id,
+                        ticketCategory: ticket.ticket_category || null,
+                        ticketStage: ticket.ticket_stage || null,
+                    },
+                    queueSnapshot, activeTicketSummaries
+                );
+
+                this.eventBus.emit('boss:pre_dispatch_validation' as COEEventType, 'ticket-processor', {
+                    ticketId,
+                    ticketNumber: ticket.ticket_number,
+                    shouldProcess: validation.shouldProcess,
+                    reason: validation.reason,
+                    alternateTicketId: validation.alternateTicketId,
+                });
+                this.logTicketActivity(ticketId, 'boss_validation',
+                    `Boss pre-dispatch: ${validation.shouldProcess ? 'APPROVED' : 'REJECTED'} — ${validation.reason}`,
+                    'Boss AI', undefined, {
+                        shouldProcess: validation.shouldProcess, alternateTicketId: validation.alternateTicketId,
+                        blockingTicketIds: validation.blockingTicketIds, priorityOverride: validation.priorityOverride,
+                    },
+                );
+
+                if (!validation.shouldProcess) {
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Boss says SKIP TK-${ticket.ticket_number}: ${validation.reason}`
+                    );
+
+                    // If Boss identified blocking tickets, set the relationship
+                    if (validation.blockingTicketIds && validation.blockingTicketIds.length > 0) {
+                        this.database.updateTicket(ticketId, {
+                            blocking_ticket_id: validation.blockingTicketIds[0],
+                        });
+                    }
+
+                    // If Boss suggested priority override, apply it
+                    if (validation.priorityOverride) {
+                        this.database.updateTicket(ticketId, {
+                            priority: validation.priorityOverride as TicketPriority,
+                        });
+                    }
+
+                    // Move to back of queue and try alternate if specified
+                    if (queueEntry) {
+                        const team = this.routeToTeamQueue(ticket);
+                        const teamQueue = this.getTeamQueue(team);
+                        const idx = teamQueue.indexOf(queueEntry);
+                        if (idx >= 0) {
+                            teamQueue.splice(idx, 1);
+                            teamQueue.push(queueEntry);
+                        }
+                    }
+
+                    return false; // Signal caller to try next ticket
+                }
+
+                // Boss approved — add any notes Boss provided
+                if (validation.notesForAgent) {
+                    this.database.addAgentNote(ticketId, {
+                        author: 'Boss AI',
+                        note: validation.notesForAgent,
+                    });
+                }
+
+                // Apply priority override if Boss wants it
+                if (validation.priorityOverride) {
+                    this.database.updateTicket(ticketId, {
+                        priority: validation.priorityOverride as TicketPriority,
+                    });
+                }
+
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Boss approved TK-${ticket.ticket_number}: ${validation.reason}`
+                );
+            } catch (bossErr) {
+                // Boss validation failure is NON-FATAL — proceed with deterministic order
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Boss pre-dispatch validation failed (non-fatal, proceeding): ${bossErr}`
+                );
+            }
+        }
+
+        // =====================================================
+        // v11.0: Tree-Based Routing (with deterministic fallback)
+        // Try tree hierarchy first, fall back to routeTicketToPipeline()
+        // =====================================================
+        const treeRoute = routeTicketViaTree(ticket, this.agentTreeMgr, this.outputChannel);
+        const pipeline = treeRoute ? null : routeTicketToPipeline(ticket);
+
+        // If neither tree nor deterministic routing found a path, skip
+        if (!treeRoute && !pipeline) {
             this.outputChannel.appendLine(`[TicketProcessor] No agent route for ticket TK-${ticket.ticket_number}, skipping`);
             return true;
         }
 
-        const route = pipeline.steps[0];
+        // Determine the primary agent name and pipeline label
+        const primaryAgent = treeRoute
+            ? treeRoute.agentPath[treeRoute.agentPath.length - 1]  // Leaf agent
+            : pipeline!.steps[0].agentName;
+        const pipelineLabel = treeRoute
+            ? `TREE: ${treeRoute.agentPath.join(' → ')}`
+            : pipeline!.steps.map(s => s.agentName).join(' → ');
+        const route: AgentRoute = treeRoute
+            ? { agentName: primaryAgent, deliverableType: ticket.operation_type || 'implementation', stage: 0 }
+            : pipeline!.steps[0];
+
+        // Store tree route path on ticket for audit trail
+        if (treeRoute) {
+            this.database.updateTicketTags(ticketId, {
+                tree_route_path: JSON.stringify(treeRoute.treeNodePath),
+            });
+        }
 
         // Update ticket status
         this.database.updateTicket(ticketId, {
             status: 'in_review' as TicketStatus,
-            processing_agent: route.agentName,
+            processing_agent: primaryAgent,
             processing_status: 'processing',
-            deliverable_type: pipeline.deliverableType as any,
+            deliverable_type: (treeRoute ? ticket.operation_type || 'implementation' : pipeline!.deliverableType) as any,
             stage: route.stage,
         });
-        const pipelineLabel = pipeline.steps.map(s => s.agentName).join(' → ');
+
         this.eventBus.emit('ticket:processing_started', 'ticket-processor', {
             ticketId, ticketNumber: ticket.ticket_number,
-            processing_agent: route.agentName, processing_status: 'processing',
+            processing_agent: primaryAgent, processing_status: 'processing',
             title: ticket.title, pipeline: pipelineLabel,
+            treeRouted: !!treeRoute,
         });
         this.outputChannel.appendLine(
-            `[TicketProcessor] Processing TK-${ticket.ticket_number} via pipeline: ${pipelineLabel}`
+            `[TicketProcessor] Processing TK-${ticket.ticket_number} via ${treeRoute ? 'TREE' : 'pipeline'}: ${pipelineLabel}`
         );
 
         // v4.1: Create a run log entry for this attempt
@@ -2175,46 +2664,60 @@ export class TicketProcessorService {
                 }
             }
 
-            // v9.0: Activate matching tree node for live status tracking
-            // Use the primary specialist agent (skip orchestrator wrap steps) for a better tree match.
-            // Also activate ancestor nodes (WaitingChild) so the full branch lights up in the webapp.
+            // =====================================================
+            // v11.0: Tree Node Activation — activate the full path
+            // For tree-routed tickets: activate entire Boss→leaf path
+            // For pipeline tickets: find matching tree node (cosmetic, like v9.0)
+            // =====================================================
             if (this.agentTreeMgr) {
                 try {
-                    // Find the primary specialist agent (not orchestrator wrap)
-                    const specialistStep = pipeline.steps.find(s => s.agentName !== 'orchestrator') || pipeline.steps[0];
-                    const primaryAgent = specialistStep?.agentName;
-                    if (primaryAgent) {
-                        const treeNode = this.database.findTreeNodeForAgent(primaryAgent, {
-                            title: ticket.title,
-                            operation_type: ticket.operation_type,
-                            body: ticket.body,
-                        });
-                        if (treeNode) {
-                            activeTreeNodeId = treeNode.id;
-                            this.agentTreeMgr.activateNode(treeNode.id);
-                            this.outputChannel.appendLine(
-                                `[TicketProcessor] Tree node activated: ${treeNode.name} (L${treeNode.level}) for agent '${primaryAgent}' on TK-${ticket.ticket_number}`
-                            );
-
-                            // Light up ancestor chain — mark parents as WaitingChild
-                            // so the webapp shows the full active branch from root to leaf
-                            try {
-                                const ancestors = this.database.getTreeAncestors(treeNode.id);
-                                for (const ancestor of ancestors) {
-                                    if (ancestor.status === 'idle') {
-                                        this.agentTreeMgr.waitForChildren(ancestor.id);
-                                    }
-                                }
-                                if (ancestors.length > 0) {
-                                    this.outputChannel.appendLine(
-                                        `[TicketProcessor] Ancestor chain activated: ${ancestors.map(a => a.name).join(' → ')}`
-                                    );
-                                }
-                            } catch { /* non-fatal — ancestor chain is cosmetic */ }
+                    if (treeRoute) {
+                        // v11.0: Activate the entire tree path from Boss to leaf
+                        activeTreeNodeId = treeRoute.leafNodeId;
+                        if (this.agentTreeMgr.activatePipelinePath) {
+                            this.agentTreeMgr.activatePipelinePath(treeRoute, ticket.title);
                         } else {
-                            this.outputChannel.appendLine(
-                                `[TicketProcessor] No tree node found for agent '${primaryAgent}' — tree won't update for TK-${ticket.ticket_number}`
-                            );
+                            // Fallback: activate just the leaf
+                            this.agentTreeMgr.activateNode(treeRoute.leafNodeId);
+                        }
+                        this.eventBus.emit('ticket:tree_delegation' as COEEventType, 'ticket-processor', {
+                            ticketId,
+                            ticketNumber: ticket.ticket_number,
+                            fromNode: treeRoute.treeNodePath[0],
+                            toNode: treeRoute.leafNodeId,
+                            path: treeRoute.agentPath,
+                            reason: treeRoute.delegationReason,
+                        });
+                        this.logTicketActivity(ticketId, 'tree_delegation',
+                            `Delegated via tree: ${treeRoute.agentPath.join(' → ')} (${treeRoute.delegationReason})`,
+                            'Boss AI', treeRoute.leafNodeId, { path: treeRoute.agentPath },
+                        );
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Tree path activated: ${treeRoute.agentPath.join(' → ')} (L0→L${treeRoute.treeNodePath.length - 1})`
+                        );
+                    } else if (pipeline) {
+                        // v9.0 fallback: find matching tree node for cosmetic tracking
+                        const specialistStep = pipeline.steps.find(s => s.agentName !== 'orchestrator') || pipeline.steps[0];
+                        const specialistAgent = specialistStep?.agentName;
+                        if (specialistAgent) {
+                            const treeNode = this.database.findTreeNodeForAgent(specialistAgent, {
+                                title: ticket.title,
+                                operation_type: ticket.operation_type,
+                                body: ticket.body,
+                            });
+                            if (treeNode) {
+                                activeTreeNodeId = treeNode.id;
+                                this.agentTreeMgr.activateNode(treeNode.id);
+                                // Light up ancestor chain
+                                try {
+                                    const ancestors = this.database.getTreeAncestors(treeNode.id);
+                                    for (const ancestor of ancestors) {
+                                        if (ancestor.status === 'idle') {
+                                            this.agentTreeMgr.waitForChildren(ancestor.id);
+                                        }
+                                    }
+                                } catch { /* non-fatal */ }
+                            }
                         }
                     }
                 } catch (treeErr) {
@@ -2222,101 +2725,342 @@ export class TicketProcessorService {
                 }
             }
 
-            // Execute agent pipeline — each step feeds its output to the next step
-            // v4.2: Orchestrator wraps as first step (assessment) and last step (completion review)
+            // =====================================================
+            // v11.0: Execute Work — Tree-Routed OR Linear Pipeline
+            // =====================================================
             let response: AgentResponse = { content: '' };
             let pipelineContext = agentMessage;
 
-            for (let stepIdx = 0; stepIdx < pipeline.steps.length; stepIdx++) {
-                const step = pipeline.steps[stepIdx];
-                const isLastStep = stepIdx === pipeline.steps.length - 1;
-                const isFirstStep = stepIdx === 0;
+            if (treeRoute) {
+                // ─── TREE-ROUTED EXECUTION ───
+                // 1. Execute work at the leaf node via the appropriate agent
+                // 2. Bubble results UP through the tree path
+                // 3. Each parent reviews before passing up
+                // 4. Boss makes final completion decision
 
-                // Update processing_agent for current step
-                this.database.updateTicket(ticketId, { processing_agent: step.agentName });
+                const leafAgent = treeRoute.leafAgentType;
+                this.database.updateTicket(ticketId, { processing_agent: leafAgent });
 
-                // v4.2: Build orchestrator-specific prompts for first/last pipeline steps
-                let stepMessage = pipelineContext;
-                if (step.agentName === 'orchestrator' && step.deliverableType === 'assessment' && isFirstStep) {
-                    // Orchestrator FIRST step: assess the ticket and build an execution plan
-                    const middleSteps = pipeline.steps.filter(s => s.agentName !== 'orchestrator' || s.deliverableType !== 'assessment' && s.deliverableType !== 'completion_review');
-                    const agentList = middleSteps.map(s => s.agentName).join(' → ');
-                    stepMessage = `TICKET ASSESSMENT — You are the Orchestrator assessing a ticket before specialist agents work on it.\n\n` +
-                        `Ticket: "${ticket.title}" (TK-${ticket.ticket_number})\n` +
-                        `Type: ${ticket.operation_type || 'general'}\n` +
-                        `Priority: ${ticket.priority}\n` +
-                        `Acceptance Criteria: ${ticket.acceptance_criteria || 'None specified'}\n\n` +
-                        `Pipeline: ${agentList}\n\n` +
-                        `Task: Analyze this ticket and provide:\n` +
-                        `1. A brief assessment of what needs to be done\n` +
-                        `2. Key requirements and constraints for the specialist agents\n` +
-                        `3. Any risks or dependencies to watch for\n` +
-                        `4. Success criteria the final output should meet\n\n` +
-                        `Original ticket body:\n${pipelineContext}`;
-                } else if (step.agentName === 'orchestrator' && step.deliverableType === 'completion_review' && isLastStep) {
-                    // Orchestrator LAST step: review the pipeline output for completeness
-                    stepMessage = `COMPLETION REVIEW — You are the Orchestrator reviewing the final output of a ticket pipeline.\n\n` +
-                        `Ticket: "${ticket.title}" (TK-${ticket.ticket_number})\n` +
-                        `Acceptance Criteria: ${ticket.acceptance_criteria || 'None specified'}\n\n` +
-                        `Task: Review the pipeline output below and verify:\n` +
-                        `1. Does the output address the ticket's requirements?\n` +
-                        `2. Is the output complete and coherent?\n` +
-                        `3. Are there any gaps, inconsistencies, or quality issues?\n` +
-                        `4. VERDICT: PASS (output is good) or NEEDS_WORK (issues found)\n\n` +
-                        `Pipeline output to review:\n${pipelineContext}`;
-                }
+                this.eventBus.emit('ticket:agent_step_started' as COEEventType, 'ticket-processor', {
+                    ticketId, agentName: leafAgent, stepIndex: 0, totalSteps: treeRoute.agentPath.length,
+                    treeNodeId: treeRoute.leafNodeId,
+                });
+                this.logTicketActivity(ticketId, 'agent_step_started', `Leaf agent '${leafAgent}' started (tree-routed)`, leafAgent, treeRoute.leafNodeId, {
+                    treePath: treeRoute.agentPath.join(' → '), delegationReason: treeRoute.delegationReason,
+                });
 
-                // Build context for this step
-                const context: AgentContext = {
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] TK-${ticket.ticket_number} tree execution: leaf agent '${leafAgent}'`
+                );
+
+                // Create run step for leaf execution
+                const leafStepStart = Date.now();
+                const leafRunStep = this.database.createRunStep({
+                    run_id: run.id,
+                    step_number: 1,
+                    agent_name: leafAgent,
+                    deliverable_type: ticket.operation_type || 'implementation',
+                });
+
+                // Build leaf agent prompt with full context
+                const leafContext: AgentContext = {
                     ticket,
                     conversationHistory: [],
                     additionalContext: {
                         acceptance_criteria: ticket.acceptance_criteria,
-                        deliverable_type: step.deliverableType,
-                        stage: step.stage,
+                        deliverable_type: ticket.operation_type || 'implementation',
+                        stage: route.stage,
                         run_number: run.run_number,
                         previous_failures: failedRuns.length,
-                        pipeline_step: stepIdx + 1,
-                        pipeline_total: pipeline.steps.length,
+                        tree_route: treeRoute.agentPath.join(' → '),
+                        tree_level: treeRoute.treeNodePath.length - 1,
+                        delegation_reason: treeRoute.delegationReason,
                     },
                 };
 
-                this.outputChannel.appendLine(
-                    `[TicketProcessor] TK-${ticket.ticket_number} step ${stepIdx + 1}: ${step.agentName} (${step.deliverableType})`
-                );
+                // Call the leaf agent
+                response = await this.orchestrator.callAgent(leafAgent, pipelineContext, leafContext);
 
-                // v5.0: Create a run step entry BEFORE the agent call
-                const stepStart = Date.now();
-                const runStep = this.database.createRunStep({
-                    run_id: run.id,
-                    step_number: stepIdx + 1,
-                    agent_name: step.agentName,
-                    deliverable_type: step.deliverableType,
-                });
-
-                // Call the agent with pipeline context
-                response = await this.orchestrator.callAgent(step.agentName, stepMessage, context);
-
-                // v5.0: Complete the run step entry
-                this.database.completeRunStep(runStep.id, {
+                // Complete leaf run step
+                this.database.completeRunStep(leafRunStep.id, {
                     status: 'completed',
                     response: response.content.substring(0, 2000),
                     tokens_used: response.tokensUsed ?? undefined,
-                    duration_ms: Date.now() - stepStart,
+                    duration_ms: Date.now() - leafStepStart,
                 });
 
-                // v5.0: Modular reply label — just the agent name, no hardcoded step counts
-                this.database.addTicketReply(ticketId, step.agentName, response.content);
-                this.eventBus.emit('ticket:replied', 'ticket-processor', { ticketId, author: step.agentName });
+                this.database.addTicketReply(ticketId, leafAgent, response.content);
+                this.eventBus.emit('ticket:replied', 'ticket-processor', { ticketId, author: leafAgent });
+                this.eventBus.emit('ticket:agent_step_completed' as COEEventType, 'ticket-processor', {
+                    ticketId, agentName: leafAgent,
+                    resultSummary: response.content.substring(0, 200),
+                    durationMs: Date.now() - leafStepStart,
+                });
+                this.logTicketActivity(ticketId, 'agent_step_completed', `Leaf agent '${leafAgent}' completed (${Date.now() - leafStepStart}ms)`, leafAgent, treeRoute.leafNodeId, {
+                    durationMs: Date.now() - leafStepStart, outputLength: response.content.length,
+                });
 
-                // Feed this step's output as context for the next step
-                if (!isLastStep) {
-                    const nextStep = pipeline.steps[stepIdx + 1];
-                    if (step.agentName === 'orchestrator' && step.deliverableType === 'assessment') {
-                        // After orchestrator assessment, pass both original ticket AND assessment to next agent
-                        pipelineContext = `${promptText}\n\n--- Orchestrator Assessment ---\n${response.content}\n\n--- Your Task (${nextStep.agentName}) ---\nUsing the orchestrator's assessment above as guidance, complete the ${nextStep.deliverableType} work for: ${ticket.title}`;
-                    } else {
-                        pipelineContext = `${promptText}\n\n--- ${step.agentName} Output (Requirements/Plan) ---\n${response.content}\n\n--- Your Task (${nextStep.agentName}) ---\nUsing the above output as your input, complete the ${nextStep.deliverableType} work for: ${ticket.title}`;
+                // Auto-add agent note about what the leaf did
+                this.database.addAgentNote(ticketId, {
+                    author: leafAgent,
+                    note: `Completed leaf execution. Output: ${response.content.substring(0, 300)}${response.content.length > 300 ? '...' : ''}`,
+                });
+
+                // ─── BUBBLE RESULTS UP ───
+                // Walk from leaf back to Boss. Each parent reviews the child's work.
+                // The branch reviewer (if different from parent) also gets a shot.
+                if (this.agentTreeMgr?.getBubbleUpPath) {
+                    const bubblePath = this.agentTreeMgr.getBubbleUpPath(treeRoute.leafNodeId);
+                    let currentResult = response.content;
+
+                    for (let bIdx = 0; bIdx < bubblePath.length; bIdx++) {
+                        const bubbleNode = bubblePath[bIdx];
+                        const parentAgent = bubbleNode.agentName;
+
+                        this.eventBus.emit('ticket:bubble_up' as COEEventType, 'ticket-processor', {
+                            ticketId,
+                            fromNode: bIdx === 0 ? treeRoute.leafNodeId : bubblePath[bIdx - 1].nodeId,
+                            toNode: bubbleNode.nodeId,
+                            level: bubbleNode.level,
+                            status: 'in_progress',
+                        });
+                        this.logTicketActivity(ticketId, 'bubble_up', `Result bubbling up to L${bubbleNode.level} reviewer '${parentAgent}'`, parentAgent, bubbleNode.nodeId);
+
+                        // Parent reviews child's output
+                        const reviewStepStart = Date.now();
+                        const reviewRunStep = this.database.createRunStep({
+                            run_id: run.id,
+                            step_number: bIdx + 2, // +2 because leaf was step 1
+                            agent_name: parentAgent,
+                            deliverable_type: 'tree_review',
+                        });
+
+                        this.database.updateTicket(ticketId, { processing_agent: parentAgent });
+
+                        const parentMessage = `TREE REVIEW (Level ${bubbleNode.level}) — You are reviewing work from a subordinate agent.\n\n` +
+                            `Ticket: "${ticket.title}" (TK-${ticket.ticket_number})\n` +
+                            `Your Role: ${parentAgent} (tree level ${bubbleNode.level})\n` +
+                            `Subordinate: ${bIdx === 0 ? leafAgent : bubblePath[bIdx - 1].agentName}\n` +
+                            `Acceptance Criteria: ${ticket.acceptance_criteria || 'None specified'}\n\n` +
+                            `Review the output below. Provide:\n` +
+                            `1. Quality assessment (is the work correct and complete?)\n` +
+                            `2. Any issues or gaps found\n` +
+                            `3. VERDICT: APPROVE (pass up) or NEEDS_REWORK (send back with feedback)\n` +
+                            `4. If NEEDS_REWORK: specific instructions for what to fix\n` +
+                            `5. If there are issues, EXPLAIN what went wrong and SUGGEST how to fix them.\n\n` +
+                            `Subordinate's output:\n${currentResult}`;
+
+                        try {
+                            const parentReview = await this.orchestrator.callAgent(
+                                parentAgent, parentMessage, { ticket, conversationHistory: [] }
+                            );
+
+                            this.database.completeRunStep(reviewRunStep.id, {
+                                status: 'completed',
+                                response: parentReview.content.substring(0, 2000),
+                                tokens_used: parentReview.tokensUsed ?? undefined,
+                                duration_ms: Date.now() - reviewStepStart,
+                            });
+
+                            this.database.addTicketReply(ticketId, parentAgent, parentReview.content);
+
+                            bubbleNode.summary = parentReview.content.substring(0, 500);
+                            bubbleNode.status = parentReview.content.toLowerCase().includes('needs_rework')
+                                ? 'needs_review' : 'success';
+                            bubbleNode.reviewNotes = parentReview.content;
+
+                            // Add agent note for the review
+                            this.database.addAgentNote(ticketId, {
+                                author: parentAgent,
+                                note: `Tree review (L${bubbleNode.level}): ${bubbleNode.status === 'success' ? 'APPROVED' : 'NEEDS_REWORK'}. ${parentReview.content.substring(0, 200)}`,
+                            });
+
+                            this.eventBus.emit('ticket:bubble_up' as COEEventType, 'ticket-processor', {
+                                ticketId,
+                                fromNode: bubbleNode.nodeId,
+                                toNode: bIdx < bubblePath.length - 1 ? bubblePath[bIdx + 1].nodeId : 'boss',
+                                level: bubbleNode.level,
+                                status: bubbleNode.status,
+                                reviewSummary: bubbleNode.summary,
+                            });
+
+                            // Pass the review result up as context for the next level
+                            currentResult = parentReview.content;
+                        } catch (reviewErr) {
+                            // Parent review failure: mark as needing review but continue up
+                            const reviewErrMsg = reviewErr instanceof Error ? reviewErr.message : String(reviewErr);
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Tree review at L${bubbleNode.level} failed (continuing): ${reviewErrMsg}`
+                            );
+                            bubbleNode.status = 'needs_review';
+                            bubbleNode.summary = `Review failed: ${reviewErrMsg}`;
+                            this.database.completeRunStep(reviewRunStep.id, {
+                                status: 'failed',
+                                response: `Review error: ${reviewErrMsg}`,
+                                duration_ms: Date.now() - reviewStepStart,
+                            });
+
+                            // v11.0: Add detailed review failure context with explanations + suggestions
+                            const reviewFailSuggestions: string[] = [];
+                            const errLower = reviewErrMsg.toLowerCase();
+                            if (errLower.includes('timeout') || errLower.includes('etimedout')) {
+                                reviewFailSuggestions.push('Review agent timed out — the output may be too large for review; consider breaking into smaller deliverables');
+                                reviewFailSuggestions.push('Check LLM endpoint availability and increase review timeout if needed');
+                            }
+                            if (errLower.includes('json') || errLower.includes('parse')) {
+                                reviewFailSuggestions.push('Review agent returned malformed output — retry may resolve this (transient LLM issue)');
+                            }
+                            if (errLower.includes('token') || errLower.includes('context length')) {
+                                reviewFailSuggestions.push('Review input exceeded token limit — summarize the work output before sending to review');
+                            }
+                            if (reviewFailSuggestions.length === 0) {
+                                reviewFailSuggestions.push('Review agent encountered an unexpected error — check agent logs for details');
+                                reviewFailSuggestions.push('The work output will continue bubbling up; the next reviewer should re-check this level\'s work');
+                            }
+
+                            this.database.addAgentNote(ticketId, {
+                                author: `${parentAgent} (Tree Review L${bubbleNode.level})`,
+                                note: `TREE REVIEW FAILED at level ${bubbleNode.level}\n` +
+                                    `Reviewer: ${parentAgent}\n` +
+                                    `Error: ${reviewErrMsg.substring(0, 300)}\n` +
+                                    `The work output was NOT reviewed at this level and will continue up the tree.\n` +
+                                    `The next reviewer in the chain should pay extra attention to this work.`,
+                                errorContext: `Tree review L${bubbleNode.level} by ${parentAgent} | Duration: ${Math.round((Date.now() - reviewStepStart) / 1000)}s`,
+                                suggestedActions: reviewFailSuggestions,
+                            });
+
+                            // Emit error event for live output tracking
+                            this.eventBus.emit('agent:error' as COEEventType, 'ticket-processor', {
+                                agentName: parentAgent,
+                                ticketId,
+                                error: reviewErrMsg,
+                                timestamp: new Date().toISOString(),
+                                treeNodeId: bubbleNode.nodeId,
+                                treeLevel: bubbleNode.level,
+                                phase: 'tree_review_bubble_up',
+                            });
+                        }
+                    }
+
+                    // Store bubble chain for Boss completion assessment
+                    (response as any)._bubbleChain = bubblePath;
+                    (response as any)._finalBubbleOutput = currentResult;
+                }
+            } else {
+                // ─── LINEAR PIPELINE EXECUTION (existing v4.2 logic) ───
+                for (let stepIdx = 0; stepIdx < pipeline!.steps.length; stepIdx++) {
+                    const step = pipeline!.steps[stepIdx];
+                    const isLastStep = stepIdx === pipeline!.steps.length - 1;
+                    const isFirstStep = stepIdx === 0;
+
+                    // Update processing_agent for current step
+                    this.database.updateTicket(ticketId, { processing_agent: step.agentName });
+
+                    // v11.0: Emit granular step events
+                    this.eventBus.emit('ticket:agent_step_started' as COEEventType, 'ticket-processor', {
+                        ticketId, agentName: step.agentName,
+                        stepIndex: stepIdx, totalSteps: pipeline!.steps.length,
+                    });
+                    this.logTicketActivity(ticketId, 'agent_step_started',
+                        `Pipeline step ${stepIdx + 1}/${pipeline!.steps.length}: '${step.agentName}' started (${step.deliverableType})`,
+                        step.agentName,
+                    );
+
+                    // v4.2: Build orchestrator-specific prompts for first/last pipeline steps
+                    let stepMessage = pipelineContext;
+                    if (step.agentName === 'orchestrator' && step.deliverableType === 'assessment' && isFirstStep) {
+                        const middleSteps = pipeline!.steps.filter(s => s.agentName !== 'orchestrator' || s.deliverableType !== 'assessment' && s.deliverableType !== 'completion_review');
+                        const agentList = middleSteps.map(s => s.agentName).join(' → ');
+                        stepMessage = `TICKET ASSESSMENT — You are the Orchestrator assessing a ticket before specialist agents work on it.\n\n` +
+                            `Ticket: "${ticket.title}" (TK-${ticket.ticket_number})\n` +
+                            `Type: ${ticket.operation_type || 'general'}\n` +
+                            `Priority: ${ticket.priority}\n` +
+                            `Acceptance Criteria: ${ticket.acceptance_criteria || 'None specified'}\n\n` +
+                            `Pipeline: ${agentList}\n\n` +
+                            `Task: Analyze this ticket and provide:\n` +
+                            `1. A brief assessment of what needs to be done\n` +
+                            `2. Key requirements and constraints for the specialist agents\n` +
+                            `3. Any risks or dependencies to watch for\n` +
+                            `4. Success criteria the final output should meet\n\n` +
+                            `Original ticket body:\n${pipelineContext}`;
+                    } else if (step.agentName === 'orchestrator' && step.deliverableType === 'completion_review' && isLastStep) {
+                        stepMessage = `COMPLETION REVIEW — You are the Orchestrator reviewing the final output of a ticket pipeline.\n\n` +
+                            `Ticket: "${ticket.title}" (TK-${ticket.ticket_number})\n` +
+                            `Acceptance Criteria: ${ticket.acceptance_criteria || 'None specified'}\n\n` +
+                            `Task: Review the pipeline output below and verify:\n` +
+                            `1. Does the output address the ticket's requirements?\n` +
+                            `2. Is the output complete and coherent?\n` +
+                            `3. Are there any gaps, inconsistencies, or quality issues?\n` +
+                            `4. VERDICT: PASS (output is good) or NEEDS_WORK (issues found)\n\n` +
+                            `Pipeline output to review:\n${pipelineContext}`;
+                    }
+
+                    // Build context for this step
+                    const context: AgentContext = {
+                        ticket,
+                        conversationHistory: [],
+                        additionalContext: {
+                            acceptance_criteria: ticket.acceptance_criteria,
+                            deliverable_type: step.deliverableType,
+                            stage: step.stage,
+                            run_number: run.run_number,
+                            previous_failures: failedRuns.length,
+                            pipeline_step: stepIdx + 1,
+                            pipeline_total: pipeline!.steps.length,
+                        },
+                    };
+
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] TK-${ticket.ticket_number} step ${stepIdx + 1}: ${step.agentName} (${step.deliverableType})`
+                    );
+
+                    // v5.0: Create a run step entry BEFORE the agent call
+                    const stepStart = Date.now();
+                    const runStep = this.database.createRunStep({
+                        run_id: run.id,
+                        step_number: stepIdx + 1,
+                        agent_name: step.agentName,
+                        deliverable_type: step.deliverableType,
+                    });
+
+                    // Call the agent with pipeline context
+                    response = await this.orchestrator.callAgent(step.agentName, stepMessage, context);
+
+                    // v5.0: Complete the run step entry
+                    this.database.completeRunStep(runStep.id, {
+                        status: 'completed',
+                        response: response.content.substring(0, 2000),
+                        tokens_used: response.tokensUsed ?? undefined,
+                        duration_ms: Date.now() - stepStart,
+                    });
+
+                    // v5.0: Modular reply label — just the agent name, no hardcoded step counts
+                    this.database.addTicketReply(ticketId, step.agentName, response.content);
+                    this.eventBus.emit('ticket:replied', 'ticket-processor', { ticketId, author: step.agentName });
+
+                    // v11.0: Emit step completed event
+                    const linearStepDuration = Date.now() - stepStart;
+                    this.eventBus.emit('ticket:agent_step_completed' as COEEventType, 'ticket-processor', {
+                        ticketId, agentName: step.agentName,
+                        resultSummary: response.content.substring(0, 200),
+                        durationMs: linearStepDuration,
+                    });
+                    this.logTicketActivity(ticketId, 'agent_step_completed',
+                        `Agent '${step.agentName}' completed step ${stepIdx + 1}/${pipeline!.steps.length} (${linearStepDuration}ms)`,
+                        step.agentName, undefined, {
+                            stepIndex: stepIdx + 1, totalSteps: pipeline!.steps.length,
+                            deliverableType: step.deliverableType, durationMs: linearStepDuration,
+                            outputLength: response.content.length,
+                        });
+
+                    // Feed this step's output as context for the next step
+                    if (!isLastStep) {
+                        const nextStep = pipeline!.steps[stepIdx + 1];
+                        if (step.agentName === 'orchestrator' && step.deliverableType === 'assessment') {
+                            pipelineContext = `${promptText}\n\n--- Orchestrator Assessment ---\n${response.content}\n\n--- Your Task (${nextStep.agentName}) ---\nUsing the orchestrator's assessment above as guidance, complete the ${nextStep.deliverableType} work for: ${ticket.title}`;
+                        } else {
+                            pipelineContext = `${promptText}\n\n--- ${step.agentName} Output (Requirements/Plan) ---\n${response.content}\n\n--- Your Task (${nextStep.agentName}) ---\nUsing the above output as your input, complete the ${nextStep.deliverableType} work for: ${ticket.title}`;
+                        }
                     }
                 }
             }
@@ -2356,10 +3100,160 @@ export class TicketProcessorService {
                 duration_ms: Date.now() - startTime,
             });
 
-            // Run review agent for non-communication tickets
-            // v4.1 (WS5B): Use dedicated reviewTicket() for full ticket context + complexity classification
+            // =====================================================
+            // v11.0: Review & Completion — Boss assessment for tree-routed,
+            // ReviewAgent for pipeline-routed tickets
+            // =====================================================
             let reviewResult: string | null = null;
-            if (pipeline.deliverableType !== 'communication') {
+            const effectiveDeliverableType = treeRoute
+                ? (ticket.operation_type || 'implementation')
+                : pipeline!.deliverableType;
+
+            // v11.0: For tree-routed tickets, Boss does the final completion assessment
+            // (bubble-up already included per-level review, so Boss just confirms)
+            const completionBoss = this.orchestrator.getBossAgent();
+            if (treeRoute && completionBoss?.assessTicketCompletion) {
+                try {
+                    const bubbleChain: BubbleResult[] = (response as any)._bubbleChain || [];
+                    const finalOutput = (response as any)._finalBubbleOutput || response.content;
+
+                    const bossAssessment = await completionBoss.assessTicketCompletion(
+                        {
+                            ticketNumber: ticket.ticket_number,
+                            title: ticket.title,
+                            operationType: ticket.operation_type || 'unknown',
+                            acceptanceCriteria: ticket.acceptance_criteria || null,
+                            body: ticket.body || '',
+                        },
+                        bubbleChain, finalOutput
+                    );
+
+                    this.eventBus.emit('ticket:boss_completion' as COEEventType, 'ticket-processor', {
+                        ticketId,
+                        ticketNumber: ticket.ticket_number,
+                        verdict: bossAssessment.verdict,
+                        reason: bossAssessment.reason,
+                    });
+                    this.logTicketActivity(ticketId, 'boss_completion',
+                        `Boss verdict: ${bossAssessment.verdict.toUpperCase()} — ${bossAssessment.reason.substring(0, 200)}`,
+                        'Boss AI', undefined, {
+                            verdict: bossAssessment.verdict,
+                            reworkInstructions: bossAssessment.reworkInstructions,
+                            escalationMessage: bossAssessment.escalationMessage,
+                        },
+                    );
+
+                    // Add Boss assessment as a note
+                    this.database.addAgentNote(ticketId, {
+                        author: 'Boss AI',
+                        note: `Completion assessment: ${bossAssessment.verdict} — ${bossAssessment.reason}`,
+                    });
+
+                    this.database.addTicketReply(ticketId, 'Boss AI',
+                        `Completion Assessment: ${bossAssessment.verdict}\n\n${bossAssessment.reason}` +
+                        (bossAssessment.reworkInstructions ? `\n\nRework Instructions: ${bossAssessment.reworkInstructions}` : '') +
+                        (bossAssessment.escalationMessage ? `\n\nEscalation: ${bossAssessment.escalationMessage}` : '')
+                    );
+
+                    if (bossAssessment.verdict === 'done') {
+                        // Boss approved — resolve
+                        this.database.updateTicket(ticketId, {
+                            status: TicketStatus.Resolved,
+                            processing_status: null as any,
+                            last_error: null,
+                            last_error_at: null,
+                        });
+                        this.database.completeTicketRun(run.id, {
+                            status: 'completed',
+                            response_received: response.content,
+                            review_result: bossAssessment.reason,
+                            tokens_used: response.tokensUsed ?? undefined,
+                            duration_ms: Date.now() - startTime,
+                        });
+                        this.eventBus.emit('ticket:processing_completed', 'ticket-processor', {
+                            ticketId, ticketNumber: ticket.ticket_number, title: ticket.title,
+                        });
+                        this.logTicketActivity(ticketId, 'ticket_resolved',
+                            `Ticket resolved — Boss approved via tree hierarchy (${Math.round((Date.now() - startTime) / 1000)}s total)`,
+                            'Boss', undefined, { verdict: 'done', reason: bossAssessment.reason, totalDurationMs: Date.now() - startTime });
+
+                        // Complete tree nodes
+                        if (this.agentTreeMgr && activeTreeNodeId) {
+                            try { this.agentTreeMgr.completeNode(activeTreeNodeId, `Boss approved TK-${ticket.ticket_number}`); }
+                            catch { /* non-fatal */ }
+                        }
+                        if (this.agentTreeMgr?.resetPipelinePath && treeRoute) {
+                            try { this.agentTreeMgr.resetPipelinePath(treeRoute); }
+                            catch { /* non-fatal */ }
+                        }
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] TK-${ticket.ticket_number} RESOLVED (Boss approved via tree hierarchy)`
+                        );
+                        this.unblockDependentTickets(ticketId, ticket.ticket_number);
+                        this.enqueueChildTickets(ticketId, ticket.ticket_number);
+                        return true;
+                    } else if (bossAssessment.verdict === 'needs_rework') {
+                        // Boss wants rework — fail the run with instructions
+                        this.database.completeTicketRun(run.id, {
+                            status: 'failed',
+                            response_received: response.content,
+                            review_result: bossAssessment.reason,
+                            error_message: `Boss: needs rework — ${bossAssessment.reworkInstructions || bossAssessment.reason}`,
+                            tokens_used: response.tokensUsed ?? undefined,
+                            duration_ms: Date.now() - startTime,
+                        });
+
+                        // Re-enqueue for another attempt with Boss's feedback
+                        this.database.updateTicket(ticketId, {
+                            status: TicketStatus.Open,
+                            processing_status: 'queued',
+                            last_error: `Boss rework: ${bossAssessment.reworkInstructions || bossAssessment.reason}`,
+                            last_error_at: new Date().toISOString(),
+                        });
+
+                        if (this.agentTreeMgr && activeTreeNodeId) {
+                            try { this.agentTreeMgr.failNode(activeTreeNodeId, 'Boss requested rework'); }
+                            catch { /* non-fatal */ }
+                        }
+
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] TK-${ticket.ticket_number} needs rework (Boss decision): ${bossAssessment.reworkInstructions || bossAssessment.reason}`
+                        );
+                        return true; // Run is done; ticket will be re-picked from queue
+                    } else {
+                        // Boss wants escalation to user
+                        this.database.updateTicket(ticketId, {
+                            status: TicketStatus.Escalated,
+                            processing_status: 'awaiting_user',
+                        });
+                        this.database.completeTicketRun(run.id, {
+                            status: 'failed',
+                            response_received: response.content,
+                            review_result: bossAssessment.reason,
+                            error_message: `Boss escalated: ${bossAssessment.escalationMessage || bossAssessment.reason}`,
+                            tokens_used: response.tokensUsed ?? undefined,
+                            duration_ms: Date.now() - startTime,
+                        });
+                        this.eventBus.emit('ticket:escalated', 'ticket-processor', {
+                            ticketId,
+                            reason: `Boss escalation: ${bossAssessment.escalationMessage || bossAssessment.reason}`,
+                        });
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] TK-${ticket.ticket_number} ESCALATED to user by Boss: ${bossAssessment.escalationMessage || bossAssessment.reason}`
+                        );
+                        return true;
+                    }
+                } catch (bossErr) {
+                    // Boss assessment failed — fall through to normal review+verification
+                    this.outputChannel.appendLine(
+                        `[TicketProcessor] Boss completion assessment failed (falling back to ReviewAgent): ${bossErr}`
+                    );
+                }
+            }
+
+            // ─── PIPELINE-ROUTED: ReviewAgent + Verification (existing logic) ───
+            if (!treeRoute && pipeline && pipeline.deliverableType !== 'communication') {
                 try {
                     // v5.0: Create a run step for the review agent
                     const reviewStepStart = Date.now();
@@ -2519,68 +3413,168 @@ export class TicketProcessorService {
                 }
             }
 
-            // Run verification — use the pipeline's final deliverable type
-            const finalRoute: AgentRoute = {
-                agentName: pipeline.steps[pipeline.steps.length - 1].agentName,
-                deliverableType: pipeline.deliverableType,
-                stage: pipeline.steps[pipeline.steps.length - 1].stage,
-            };
-            const verResult = await this.verifyTicket(ticket, response, finalRoute);
+            // ─── VERIFICATION + RESOLUTION ───
+            // v11.0: Only runs for pipeline-routed tickets, OR tree-routed tickets
+            // that fell through Boss assessment (Boss threw an error)
+            if (pipeline) {
+                // Pipeline-routed: use the pipeline's final deliverable type for verification
+                const finalRoute: AgentRoute = {
+                    agentName: pipeline.steps[pipeline.steps.length - 1].agentName,
+                    deliverableType: pipeline.deliverableType,
+                    stage: pipeline.steps[pipeline.steps.length - 1].stage,
+                };
+                const verResult = await this.verifyTicket(ticket, response, finalRoute);
 
-            if (verResult.passed) {
+                if (verResult.passed) {
+                    this.database.updateTicket(ticketId, {
+                        status: TicketStatus.Resolved,
+                        processing_status: null as any,
+                        verification_result: JSON.stringify(verResult),
+                        // v4.1: Clear error on successful resolution
+                        last_error: null,
+                        last_error_at: null,
+                    });
+                    // v4.1: Update run with verification passed
+                    this.database.completeTicketRun(run.id, {
+                        status: 'completed',
+                        response_received: response.content,
+                        review_result: reviewResult ?? undefined,
+                        verification_result: JSON.stringify(verResult),
+                        tokens_used: response.tokensUsed ?? undefined,
+                        duration_ms: Date.now() - startTime,
+                    });
+                    this.eventBus.emit('ticket:processing_completed', 'ticket-processor', {
+                        ticketId, ticketNumber: ticket.ticket_number, title: ticket.title,
+                    });
+                    this.eventBus.emit('ticket:verification_passed', 'ticket-processor', { ticketId });
+                    this.logTicketActivity(ticketId, 'ticket_resolved',
+                        `Ticket resolved — verification passed (${Math.round((Date.now() - startTime) / 1000)}s total)`,
+                        finalRoute.agentName, undefined, { totalDurationMs: Date.now() - startTime });
+                    // v9.0: Complete tree node on successful resolution
+                    if (this.agentTreeMgr && activeTreeNodeId) {
+                        try { this.agentTreeMgr.completeNode(activeTreeNodeId, `Resolved TK-${ticket.ticket_number}`); }
+                        catch (treeErr) { /* non-fatal */ }
+                    }
+                    this.outputChannel.appendLine(`[TicketProcessor] TK-${ticket.ticket_number} resolved (verified)`);
+
+                    // v4.1: Unblock any tickets that were blocked by this resolved ticket
+                    this.unblockDependentTickets(ticketId, ticket.ticket_number);
+
+                    // v4.3: Auto-enqueue child/sub-tickets when parent resolves
+                    this.enqueueChildTickets(ticketId, ticket.ticket_number);
+                } else {
+                    // v4.1: Update run with verification failed
+                    this.database.completeTicketRun(run.id, {
+                        status: 'failed',
+                        response_received: response.content,
+                        review_result: reviewResult ?? undefined,
+                        verification_result: JSON.stringify(verResult),
+                        error_message: verResult.failure_details ?? 'Verification failed',
+                        tokens_used: response.tokensUsed ?? undefined,
+                        duration_ms: Date.now() - startTime,
+                    });
+                    await this.handleVerificationFailure(ticket, verResult, finalRoute);
+                }
+            } else if (treeRoute) {
+                // v11.0: Tree-routed ticket where Boss assessment failed (threw error above).
+                // The work was done by the tree but Boss couldn't assess it.
+                // Resolve with a note that Boss assessment was skipped.
                 this.database.updateTicket(ticketId, {
                     status: TicketStatus.Resolved,
                     processing_status: null as any,
-                    verification_result: JSON.stringify(verResult),
-                    // v4.1: Clear error on successful resolution
                     last_error: null,
                     last_error_at: null,
                 });
-                // v4.1: Update run with verification passed
                 this.database.completeTicketRun(run.id, {
                     status: 'completed',
                     response_received: response.content,
-                    review_result: reviewResult ?? undefined,
-                    verification_result: JSON.stringify(verResult),
+                    review_result: 'Boss assessment failed — auto-resolved after tree execution completed',
                     tokens_used: response.tokensUsed ?? undefined,
                     duration_ms: Date.now() - startTime,
                 });
+                this.database.addAgentNote(ticketId, {
+                    author: 'system',
+                    note: 'Tree execution completed but Boss assessment failed. Ticket auto-resolved. Manual review recommended.',
+                });
+                this.logTicketActivity(ticketId, 'ticket_resolved',
+                    `Ticket auto-resolved — tree execution completed but Boss assessment failed (${Math.round((Date.now() - startTime) / 1000)}s total)`,
+                    'system', undefined, { autoResolved: true, totalDurationMs: Date.now() - startTime });
+                if (this.agentTreeMgr && activeTreeNodeId) {
+                    try { this.agentTreeMgr.completeNode(activeTreeNodeId, `Auto-resolved TK-${ticket.ticket_number} (Boss assessment failed)`); }
+                    catch (treeErr) { /* non-fatal */ }
+                }
+                // Reset tree path nodes
+                if (this.agentTreeMgr?.resetPipelinePath && treeRoute) {
+                    try { this.agentTreeMgr.resetPipelinePath(treeRoute); }
+                    catch { /* non-fatal */ }
+                }
                 this.eventBus.emit('ticket:processing_completed', 'ticket-processor', {
                     ticketId, ticketNumber: ticket.ticket_number, title: ticket.title,
                 });
-                this.eventBus.emit('ticket:verification_passed', 'ticket-processor', { ticketId });
-                // v9.0: Complete tree node on successful resolution
-                if (this.agentTreeMgr && activeTreeNodeId) {
-                    try { this.agentTreeMgr.completeNode(activeTreeNodeId, `Resolved TK-${ticket.ticket_number}`); }
-                    catch (treeErr) { /* non-fatal */ }
-                }
-                this.outputChannel.appendLine(`[TicketProcessor] TK-${ticket.ticket_number} resolved (verified)`);
-
-                // v4.1: Unblock any tickets that were blocked by this resolved ticket
                 this.unblockDependentTickets(ticketId, ticket.ticket_number);
-
-                // v4.3: Auto-enqueue child/sub-tickets when parent resolves
                 this.enqueueChildTickets(ticketId, ticket.ticket_number);
-            } else {
-                // v4.1: Update run with verification failed
-                this.database.completeTicketRun(run.id, {
-                    status: 'failed',
-                    response_received: response.content,
-                    review_result: reviewResult ?? undefined,
-                    verification_result: JSON.stringify(verResult),
-                    error_message: verResult.failure_details ?? 'Verification failed',
-                    tokens_used: response.tokensUsed ?? undefined,
-                    duration_ms: Date.now() - startTime,
-                });
-                await this.handleVerificationFailure(ticket, verResult, finalRoute);
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] TK-${ticket.ticket_number} auto-resolved after tree execution (Boss assessment unavailable)`
+                );
             }
             return true;
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error ? error.stack ?? '' : '';
-            this.outputChannel.appendLine(`[TicketProcessor] Error processing TK-${ticket.ticket_number}: ${msg}`);
-            this.database.addTicketReply(ticketId, 'system', `Processing error: ${msg}`);
-            this.eventBus.emit('agent:error', 'ticket-processor', { ticketId, error: msg, stack });
+            // v11.0: Determine which agent was active when the error occurred
+            const failedAgentName = treeRoute
+                ? treeRoute.agentPath[treeRoute.agentPath.length - 1] || 'unknown-tree-agent'
+                : (pipeline ? pipeline.steps[pipeline.steps.length - 1]?.agentName || 'unknown-agent' : 'unknown-agent');
+            const retryCount = queueEntry?.errorRetryCount ?? 0;
+
+            this.outputChannel.appendLine(`[TicketProcessor] Error processing TK-${ticket.ticket_number} (agent: ${failedAgentName}): ${msg}`);
+            this.database.addTicketReply(ticketId, 'system', `Processing error (agent: ${failedAgentName}): ${msg}`);
+
+            // v11.0: Structured agent error event with full context
+            this.eventBus.emit('agent:error', 'ticket-processor', {
+                ticketId,
+                ticketNumber: ticket.ticket_number,
+                agentName: failedAgentName,
+                error: msg,
+                stack: stack.substring(0, 500),
+                retryCount,
+                timestamp: new Date().toISOString(),
+                treeNodeId: activeTreeNodeId || null,
+                treeRoute: treeRoute ? {
+                    path: treeRoute.agentPath,
+                    leafAgent: treeRoute.leafAgentType,
+                } : null,
+            });
+
+            // v11.0: Add detailed agent note with error context and suggestions
+            const errorSuggestions: string[] = [];
+            if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('stall')) {
+                errorSuggestions.push('LLM may be overloaded — consider reducing parallel slots or increasing timeout');
+            }
+            if (msg.includes('JSON') || msg.includes('parse')) {
+                errorSuggestions.push('LLM returned malformed output — consider adding JSON repair or retrying with clearer prompt');
+            }
+            if (msg.includes('rate limit') || msg.includes('429')) {
+                errorSuggestions.push('Rate limited — wait before retrying, consider reducing request frequency');
+            }
+            if (msg.includes('context') || msg.includes('token')) {
+                errorSuggestions.push('Token limit exceeded — consider reducing prompt size or splitting the task');
+            }
+            if (retryCount >= 2) {
+                errorSuggestions.push('Multiple failures — consider escalating to Boss for re-evaluation or decomposing into smaller tasks');
+            }
+            if (errorSuggestions.length === 0) {
+                errorSuggestions.push('Review the error stack trace for root cause');
+                errorSuggestions.push('Check if the agent type is properly configured');
+            }
+
+            this.database.addAgentNote(ticketId, {
+                author: failedAgentName,
+                note: `ERROR (attempt ${retryCount + 1}): ${msg.substring(0, 500)}`,
+                errorContext: `Agent: ${failedAgentName} | Tree node: ${activeTreeNodeId || 'N/A'} | Duration: ${Math.round((Date.now() - startTime) / 1000)}s`,
+                suggestedActions: errorSuggestions,
+            });
+
             // v9.0: Fail tree node on error
             if (this.agentTreeMgr && activeTreeNodeId) {
                 try { this.agentTreeMgr.failNode(activeTreeNodeId, msg.substring(0, 200)); }
@@ -2879,13 +3873,56 @@ export class TicketProcessorService {
             ticketId: ticket.id, attempt: currentRetry + 1, failure_details: verResult.failure_details,
         });
 
+        // v11.0: Build detailed failure explanation and suggestions for the next agent
+        const failureDetails = verResult.failure_details || 'Quality below threshold';
+        const retrySuggestions: string[] = [];
+
+        // Analyze the failure details to provide targeted suggestions
+        if (failureDetails.toLowerCase().includes('clarity') || (verResult.clarity_score !== null && verResult.clarity_score < 0.6)) {
+            retrySuggestions.push('Output lacked clarity — be more specific and structured in the response');
+            retrySuggestions.push('Use clear headings, bullet points, and code blocks to organize output');
+        }
+        if (failureDetails.toLowerCase().includes('incomplete') || failureDetails.toLowerCase().includes('missing')) {
+            retrySuggestions.push('Output was incomplete — ensure ALL acceptance criteria are addressed');
+            retrySuggestions.push('Re-read the ticket body and check each requirement is fulfilled');
+        }
+        if (failureDetails.toLowerCase().includes('test') || failureDetails.toLowerCase().includes('coverage')) {
+            retrySuggestions.push('Tests are insufficient — add unit tests covering edge cases and error paths');
+            retrySuggestions.push('Aim for >80% coverage of the modified code');
+        }
+        if (failureDetails.toLowerCase().includes('format') || failureDetails.toLowerCase().includes('style')) {
+            retrySuggestions.push('Output format did not match expectations — follow the deliverable type guidelines');
+        }
+        if (failureDetails.toLowerCase().includes('error') || failureDetails.toLowerCase().includes('bug') || failureDetails.toLowerCase().includes('broken')) {
+            retrySuggestions.push('The code has errors — fix compilation/runtime errors before resubmitting');
+            retrySuggestions.push('Run the code locally or mentally trace through it to find issues');
+        }
+        if (retrySuggestions.length === 0) {
+            retrySuggestions.push('Review the failure details carefully and address each point');
+            retrySuggestions.push('If the requirements are unclear, add a note explaining what needs clarification');
+        }
+
+        // Add a comprehensive agent note that the next agent will see
+        this.database.addAgentNote(ticket.id, {
+            author: `ReviewAgent (${route.agentName})`,
+            note: `VERIFICATION FAILED (attempt ${currentRetry + 1}/${maxRetries})\n` +
+                  `Reason: ${failureDetails}\n` +
+                  `Clarity score: ${verResult.clarity_score ?? 'N/A'}\n` +
+                  `The next agent MUST address these issues before resubmitting.`,
+            errorContext: `Verification by ${route.agentName} | clarity=${verResult.clarity_score} | attempt=${currentRetry + 1}`,
+            suggestedActions: retrySuggestions,
+        });
+
         if (currentRetry < maxRetries) {
             // Auto-retry: re-enqueue with failure context
             this.outputChannel.appendLine(`[TicketProcessor] TK-${ticket.ticket_number} verification failed, auto-retry ${currentRetry + 1}/${maxRetries}`);
 
-            // Add retry context to ticket body
+            // v11.0: Add rich retry context to ticket body — including what went wrong and how to fix it
             this.database.addTicketReply(ticket.id, 'system',
-                `Verification failed (attempt ${currentRetry + 1}/${maxRetries}): ${verResult.failure_details || 'Quality below threshold'}. Retrying...`
+                `Verification failed (attempt ${currentRetry + 1}/${maxRetries}):\n` +
+                `WHAT FAILED: ${failureDetails}\n` +
+                `SUGGESTIONS FOR NEXT ATTEMPT:\n${retrySuggestions.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n` +
+                `The next agent should focus on addressing these specific issues.`
             );
             this.eventBus.emit('ticket:retry', 'ticket-processor', { ticketId: ticket.id, attempt: currentRetry + 1 });
 
@@ -2908,14 +3945,15 @@ export class TicketProcessorService {
             const planId = this.findPlanIdForTicket(ticket);
             if (planId) {
                 const question = `The system tried to complete "${ticket.title}" ${maxRetries} times but couldn't get it right.\n\n` +
-                    `What went wrong: ${verResult.failure_details || 'The output didn\'t meet quality standards.'}\n\n` +
+                    `What went wrong: ${failureDetails}\n\n` +
+                    `Suggestions that were tried:\n${retrySuggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n` +
                     `What would you like to do?`;
 
                 const technicalContext = `Ticket ID: ${ticket.id}\n` +
                     `Agent: ${route.agentName}\n` +
                     `Attempts: ${currentRetry + 1}\n` +
                     `Verification: clarity_score=${verResult.clarity_score}, deliverable_check=${verResult.passed}\n` +
-                    `Last error: ${verResult.failure_details}`;
+                    `Last error: ${failureDetails}`;
 
                 this.database.createGhostTicket(
                     ticket.id,
@@ -3209,20 +4247,61 @@ export class TicketProcessorService {
                             break;
                         }
 
+                        // v11.0: Enrich Boss-created sub-tickets with parent context
+                        let enrichedBody = (payload.body as string) || `Created by Boss AI (${trigger})`;
+                        const parentId = (payload.parent_ticket_id as string) || undefined;
+                        if (parentId) {
+                            const parentTicket = this.database.getTicket(parentId);
+                            if (parentTicket) {
+                                // Include relevant parent context in the sub-ticket body
+                                const parentContextParts: string[] = [
+                                    '',
+                                    '---',
+                                    '',
+                                    '**Parent Ticket Context**:',
+                                    `- Parent: TK-${parentTicket.ticket_number} — ${parentTicket.title}`,
+                                ];
+                                if (parentTicket.ticket_category) parentContextParts.push(`- Parent Category: ${parentTicket.ticket_category}`);
+                                if (parentTicket.ticket_stage) parentContextParts.push(`- Parent Stage: ${parentTicket.ticket_stage}`);
+                                // Extract a relevant section from parent body (first 500 chars for context)
+                                if (parentTicket.body && parentTicket.body.length > 0) {
+                                    const bodySnippet = parentTicket.body.length > 500
+                                        ? parentTicket.body.substring(0, 500) + '...'
+                                        : parentTicket.body;
+                                    parentContextParts.push('', '**Parent Description (excerpt)**:', bodySnippet);
+                                }
+                                enrichedBody += parentContextParts.join('\n');
+                            }
+                        }
+
+                        // v11.0: Tag ticket at creation time — HARD RULE
+                        const opType = (payload.operation_type as string) || 'boss_directive';
+                        const tags = this.ticketTagger.tagTicket({
+                            title,
+                            body: enrichedBody,
+                            operation_type: opType,
+                            parent_ticket_id: parentId ?? null,
+                        });
+
                         const ticket = this.database.createTicket({
                             title,
-                            body: (payload.body as string) || `Created by Boss AI (${trigger})`,
+                            body: enrichedBody,
                             priority: (payload.priority as TicketPriority) || TicketPriority.P2,
                             creator: 'boss-ai',
                             auto_created: true,
-                            operation_type: (payload.operation_type as string) || 'boss_directive',
+                            operation_type: opType,
                             deliverable_type: (payload.deliverable_type as Ticket['deliverable_type']) ?? undefined,
                             blocking_ticket_id: (payload.blocking_ticket_id as string) || undefined,
                             acceptance_criteria: (payload.acceptance_criteria as string) || undefined,
+                            parent_ticket_id: parentId ?? null,
+                            // v11.0: Apply tags at creation
+                            ticket_category: tags.ticket_category,
+                            ticket_stage: tags.ticket_stage,
+                            related_ticket_ids: tags.related_ticket_ids.length > 0 ? JSON.stringify(tags.related_ticket_ids) : undefined,
                         });
 
                         this.outputChannel.appendLine(
-                            `[TicketProcessor] Boss created ticket TK-${ticket.ticket_number}: ${title}`
+                            `[TicketProcessor] Boss created ticket TK-${ticket.ticket_number}: ${title} [${tags.ticket_category}/${tags.ticket_stage}]`
                         );
                         this.eventBus.emit('ticket:created', 'boss-ai', {
                             ticketId: ticket.id,
@@ -3296,13 +4375,20 @@ export class TicketProcessorService {
                         }
 
                         // Always create a lightweight tracking ticket for audit trail
+                        const dispatchTitle = `Boss dispatch: ${agentName} \u2014 ${message.substring(0, 60)}`;
+                        const dispatchBody = `Boss AI directly dispatched agent "${agentName}" during ${trigger}.\n\n${message}`;
+                        const dispatchTags = this.ticketTagger.tagTicket({
+                            title: dispatchTitle, body: dispatchBody, operation_type: 'boss_directive',
+                        });
                         const trackingTicket = this.database.createTicket({
-                            title: `Boss dispatch: ${agentName} — ${message.substring(0, 60)}`,
-                            body: `Boss AI directly dispatched agent "${agentName}" during ${trigger}.\n\n${message}`,
+                            title: dispatchTitle,
+                            body: dispatchBody,
                             priority: TicketPriority.P2,
                             creator: 'boss-ai',
                             auto_created: true,
                             operation_type: 'boss_directive',
+                            ticket_category: dispatchTags.ticket_category,
+                            ticket_stage: dispatchTags.ticket_stage,
                         });
 
                         this.outputChannel.appendLine(
@@ -3653,13 +4739,21 @@ export class TicketProcessorService {
                                 this.database.addTicketReply(ticketId, 'lead-agent', `Escalated to Boss: ${reason}`);
 
                                 // Create boss directive ticket pointing to the blocker
+                                const escTitle = `[Boss] Escalation: ${reason.substring(0, 80)}`;
+                                const escBody = `Escalated from ticket ${ticket.ticket_number}: ${ticket.title}\n\nReason: ${reason}${blockingInfoNeeded ? `\n\nBlocking info needed: ${blockingInfoNeeded}` : ''}${recommendedTarget ? `\n\nRecommended target queue: ${recommendedTarget}` : ''}`;
+                                const escTags = this.ticketTagger.tagTicket({
+                                    title: escTitle, body: escBody, operation_type: 'boss_directive', parent_ticket_id: ticketId,
+                                });
                                 const bossDirective = this.database.createTicket({
-                                    title: `[Boss] Escalation: ${reason.substring(0, 80)}`,
-                                    body: `Escalated from ticket ${ticket.ticket_number}: ${ticket.title}\n\nReason: ${reason}${blockingInfoNeeded ? `\n\nBlocking info needed: ${blockingInfoNeeded}` : ''}${recommendedTarget ? `\n\nRecommended target queue: ${recommendedTarget}` : ''}`,
+                                    title: escTitle,
+                                    body: escBody,
                                     priority: ticket.priority as TicketPriority || TicketPriority.P2,
                                     operation_type: 'boss_directive',
                                     auto_created: true,
                                     parent_ticket_id: ticketId,
+                                    ticket_category: escTags.ticket_category,
+                                    ticket_stage: escTags.ticket_stage,
+                                    related_ticket_ids: escTags.related_ticket_ids.length > 0 ? JSON.stringify(escTags.related_ticket_ids) : undefined,
                                 });
 
                                 this.eventBus.emit('queue:escalation_received', 'ticket-processor', {
@@ -3761,6 +4855,118 @@ export class TicketProcessorService {
 
                         this.outputChannel.appendLine(
                             `[TicketProcessor] Document saved: ${folderName}/${docName} (${content.length} chars)`
+                        );
+                        executed++;
+                        break;
+                    }
+
+                    // ==================== v11.0: AGENT NOTE-TAKING ACTIONS ====================
+
+                    case 'add_note': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const noteTicketId = payload.ticket_id as string;
+                        const note = payload.note as string;
+                        const author = (payload.author as string) || 'boss-ai';
+
+                        if (!noteTicketId || !note) {
+                            this.outputChannel.appendLine('[TicketProcessor] add_note: missing ticket_id or note');
+                            break;
+                        }
+
+                        this.database.addAgentNote(noteTicketId, {
+                            author,
+                            note,
+                        });
+                        this.eventBus.emit('ticket:note_added' as COEEventType, 'ticket-processor', {
+                            ticketId: noteTicketId, author, note: note.substring(0, 200),
+                        });
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Note added to ${noteTicketId} by ${author}: ${note.substring(0, 80)}`
+                        );
+                        executed++;
+                        break;
+                    }
+
+                    case 'add_reference': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const refTicketId = payload.ticket_id as string;
+                        const referencedTicketId = payload.referenced_ticket_id as string;
+                        const relationship = (payload.relationship as string) || 'related_to';
+
+                        if (!refTicketId || !referencedTicketId) {
+                            this.outputChannel.appendLine('[TicketProcessor] add_reference: missing ticket_id or referenced_ticket_id');
+                            break;
+                        }
+
+                        // Update related_ticket_ids on the ticket
+                        const refTicket = this.database.getTicket(refTicketId);
+                        if (refTicket) {
+                            let existingRefs: string[] = [];
+                            try {
+                                existingRefs = refTicket.related_ticket_ids ? JSON.parse(refTicket.related_ticket_ids) : [];
+                            } catch { existingRefs = []; }
+
+                            if (!existingRefs.includes(referencedTicketId)) {
+                                existingRefs.push(referencedTicketId);
+                                this.database.updateTicketTags(refTicketId, {
+                                    related_ticket_ids: JSON.stringify(existingRefs),
+                                });
+                            }
+
+                            // Also add as an agent note for audit trail
+                            this.database.addAgentNote(refTicketId, {
+                                author: trigger,
+                                note: `Reference added: ${relationship} → ${referencedTicketId}`,
+                            });
+
+                            // If relationship is blocking, set the blocking_ticket_id
+                            if (relationship === 'depends_on' || relationship === 'blocked_by') {
+                                this.database.updateTicket(refTicketId, {
+                                    blocking_ticket_id: referencedTicketId,
+                                });
+                            }
+
+                            this.eventBus.emit('ticket:reference_added' as COEEventType, 'ticket-processor', {
+                                ticketId: refTicketId, referencedTicketId, relationship,
+                            });
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] Reference: ${refTicketId} ${relationship} ${referencedTicketId}`
+                            );
+                        }
+                        executed++;
+                        break;
+                    }
+
+                    case 'update_stage': {
+                        const payload = action.payload as Record<string, unknown>;
+                        const stageTicketId = payload.ticket_id as string;
+                        const newStage = payload.stage as string;
+
+                        if (!stageTicketId || !newStage) {
+                            this.outputChannel.appendLine('[TicketProcessor] update_stage: missing ticket_id or stage');
+                            break;
+                        }
+
+                        const validStages = ['analysis', 'design', 'implementation', 'testing', 'review', 'deployment'];
+                        if (!validStages.includes(newStage)) {
+                            this.outputChannel.appendLine(`[TicketProcessor] update_stage: invalid stage "${newStage}"`);
+                            break;
+                        }
+
+                        this.database.updateTicketTags(stageTicketId, {
+                            ticket_stage: newStage,
+                        });
+
+                        this.database.addAgentNote(stageTicketId, {
+                            author: trigger,
+                            note: `Stage updated to '${newStage}'`,
+                        });
+
+                        this.eventBus.emit('ticket:stage_updated' as COEEventType, 'ticket-processor', {
+                            ticketId: stageTicketId, stage: newStage,
+                        });
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] Stage updated: ${stageTicketId} → ${newStage}`
                         );
                         executed++;
                         break;
@@ -4218,11 +5424,13 @@ export class TicketProcessorService {
         switch (phase) {
             case ProjectPhase.Designing: {
                 const ticket = this.database.createTicket({
-                    title: 'Phase: Design — Create program design',
+                    title: 'Phase: Design \u2014 Create program design',
                     body: `Create the program design for "${planName}". Define all pages, components, data models, and their relationships. Follow the design QA criteria.`,
                     priority: TicketPriority.P1,
                     auto_created: true,
                     operation_type: 'design_change',
+                    ticket_category: 'design',
+                    ticket_stage: 'design',
                 });
                 this.eventBus.emit('ticket:created', 'ticket-processor', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
                 break;
@@ -4243,11 +5451,13 @@ export class TicketProcessorService {
 
             case ProjectPhase.TaskGeneration: {
                 const ticket = this.database.createTicket({
-                    title: 'Phase: Task Generation — Create coding tasks from design',
+                    title: 'Phase: Task Generation \u2014 Create coding tasks from design',
                     body: `Generate coding tasks for plan "${planName}". Create Layer 1 (scaffold) tasks first, then Layer 2 (feature) tasks. Each task must have acceptance criteria, file lists, and step-by-step instructions.`,
                     priority: TicketPriority.P1,
                     auto_created: true,
                     operation_type: 'plan_generation',
+                    ticket_category: 'task_creation',
+                    ticket_stage: 'analysis',
                 });
                 this.eventBus.emit('ticket:created', 'ticket-processor', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
                 break;
@@ -4275,6 +5485,8 @@ export class TicketProcessorService {
                         operation_type: 'code_generation',
                         task_id: task.id,
                         acceptance_criteria: task.acceptance_criteria,
+                        ticket_category: 'coding',
+                        ticket_stage: 'implementation',
                     });
                     this.eventBus.emit('ticket:created', 'ticket-processor', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
                     created++;
@@ -4288,11 +5500,13 @@ export class TicketProcessorService {
             case ProjectPhase.Verification: {
                 // Create a verification ticket for Boss AI health check
                 const ticket = this.database.createTicket({
-                    title: 'Phase: Verification — Final system verification',
+                    title: 'Phase: Verification \u2014 Final system verification',
                     body: `Run final verification on plan "${planName}". Check all P1 tickets resolved, run Boss AI health check, verify no failed tasks.`,
                     priority: TicketPriority.P1,
                     auto_created: true,
                     operation_type: 'verification',
+                    ticket_category: 'verification',
+                    ticket_stage: 'testing',
                 });
                 this.eventBus.emit('ticket:created', 'ticket-processor', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
                 break;

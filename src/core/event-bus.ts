@@ -165,6 +165,12 @@ export type COEEventType =
     // v9.0: Permissions
     | 'permission:granted' | 'permission:revoked'
     | 'permission:check_failed' | 'permission:enforced'
+    // v11.0: Tree-Routed Ticket Processing
+    | 'ticket:tree_delegation' | 'ticket:bubble_up'
+    | 'ticket:agent_step_started' | 'ticket:agent_step_completed'
+    | 'ticket:boss_completion' | 'ticket:note_added'
+    | 'ticket:reference_added' | 'ticket:stage_updated'
+    | 'boss:pre_dispatch_validation' | 'boss:timer_zero_recovery'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

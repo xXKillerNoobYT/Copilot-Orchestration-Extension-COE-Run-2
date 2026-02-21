@@ -1,5 +1,5 @@
 import { BaseAgent } from './base-agent';
-import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus, WorkflowExecutionStatus, TreeNodeStatus } from '../types';
+import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus, WorkflowExecutionStatus, TreeNodeStatus, BossPreDispatchValidation, BossCompletionAssessment, BubbleResult } from '../types';
 import type { AgentTreeManager } from '../core/agent-tree-manager';
 import type { WorkflowEngine } from '../core/workflow-engine';
 
@@ -606,6 +606,254 @@ SELECTED: TK-<number>`;
         } catch (err) {
             // LLM failure is non-fatal — fall back to deterministic sort
             return null;
+        }
+    }
+
+    // ==================== v11.0: Boss Pre-Dispatch Validation ====================
+
+    /**
+     * v11.0: Validate that a ticket should be processed NEXT.
+     *
+     * Called in fillSlots() AFTER selecting a ticket but BEFORE dispatching.
+     * Boss confirms: "Yes, process this ticket now" or "No, process ticket X instead"
+     * or "Wait — ticket Y is blocking this, set the relationship first."
+     *
+     * Uses a focused LLM prompt (faster than full inter-ticket review).
+     * Times out at 10s — if LLM is slow, returns approval to avoid blocking.
+     *
+     * @param ticket The ticket about to be dispatched
+     * @param queueSnapshot Top N tickets in the queue (for comparison)
+     * @param activeTicketSummaries Summary of currently processing tickets
+     * @returns BossPreDispatchValidation — approve, redirect, or block
+     */
+    async validateNextTicket(
+        ticket: {
+            id: string;
+            ticketNumber: number;
+            title: string;
+            priority: string;
+            operationType: string;
+            body: string;
+            blockingTicketId: string | null;
+            ticketCategory: string | null;
+            ticketStage: string | null;
+        },
+        queueSnapshot: Array<{
+            ticketNumber: number;
+            title: string;
+            priority: string;
+            operationType: string;
+            ticketCategory: string | null;
+            blockingTicketId: string | null;
+        }>,
+        activeTicketSummaries: string[]
+    ): Promise<BossPreDispatchValidation> {
+        // Default: approve (safe fallback if LLM fails or times out)
+        const defaultApproval: BossPreDispatchValidation = {
+            shouldProcess: true,
+            reason: 'Approved by default (deterministic fallback)',
+        };
+
+        if (queueSnapshot.length === 0) {
+            return { ...defaultApproval, reason: 'Only ticket in queue — approved' };
+        }
+
+        try {
+            const queueSummary = queueSnapshot.slice(0, 8).map((q, i) =>
+                `  ${i + 1}. TK-${q.ticketNumber} [${q.priority}] ${q.title.substring(0, 60)} (${q.operationType}${q.ticketCategory ? ', ' + q.ticketCategory : ''}${q.blockingTicketId ? ', BLOCKED' : ''})`
+            ).join('\n');
+
+            const activeSummary = activeTicketSummaries.length > 0
+                ? activeTicketSummaries.join('\n')
+                : '  (none currently processing)';
+
+            const prompt = `QUICK VALIDATION: Should this ticket be processed NEXT?
+
+TICKET TO PROCESS:
+  TK-${ticket.ticketNumber} [${ticket.priority}] "${ticket.title}"
+  Type: ${ticket.operationType} | Category: ${ticket.ticketCategory ?? 'untagged'} | Stage: ${ticket.ticketStage ?? 'unknown'}
+  ${ticket.blockingTicketId ? 'BLOCKED BY another ticket' : 'No blockers'}
+  Body: ${(ticket.body ?? '').substring(0, 200)}
+
+QUEUE (next ${queueSnapshot.length} tickets):
+${queueSummary}
+
+CURRENTLY PROCESSING:
+${activeSummary}
+
+RULES:
+1. If this ticket is BLOCKED, it should NOT be processed. Answer NO.
+2. If a higher-priority ticket in the queue would be better to process first, answer NO and specify which.
+3. If this ticket has dependencies that should complete first, answer NO and explain.
+4. Otherwise, answer YES.
+
+RESPOND IN EXACTLY THIS FORMAT:
+SHOULD_PROCESS: YES or NO
+REASON: [1 sentence]
+ALTERNATE_TICKET: TK-<number> (only if NO)
+NOTES_FOR_AGENT: [optional guidance for the processing agent]`;
+
+            // Race against 10s timeout
+            const context = { conversationHistory: [] };
+            const timeoutMs = 10000;
+
+            const llmPromise = this.processMessage(prompt, context);
+            const timeoutPromise = new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), timeoutMs)
+            );
+
+            const result = await Promise.race([llmPromise, timeoutPromise]);
+            if (!result) {
+                // Timeout — approve by default
+                return { ...defaultApproval, reason: 'Approved (Boss validation timed out after 10s)' };
+            }
+
+            // Parse the response
+            const content = result.content;
+            const shouldProcess = /SHOULD_PROCESS:\s*YES/i.test(content);
+            const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
+            const alternateMatch = content.match(/ALTERNATE_TICKET:\s*TK-(\d+)/i);
+            const notesMatch = content.match(/NOTES_FOR_AGENT:\s*(.+?)(?:\n|$)/i);
+
+            const validation: BossPreDispatchValidation = {
+                shouldProcess,
+                reason: reasonMatch?.[1]?.trim() ?? (shouldProcess ? 'Approved' : 'Rejected by Boss'),
+            };
+
+            if (!shouldProcess && alternateMatch) {
+                const altNumber = parseInt(alternateMatch[1], 10);
+                const altTicket = queueSnapshot.find(q => q.ticketNumber === altNumber);
+                if (altTicket) {
+                    // We'd need the ticket ID — for now store the number so caller can look it up
+                    validation.alternateTicketId = `TK-${altNumber}`;
+                }
+            }
+
+            if (notesMatch?.[1]?.trim()) {
+                validation.notesForAgent = notesMatch[1].trim();
+            }
+
+            return validation;
+        } catch (err) {
+            // LLM failure is non-fatal — approve by default
+            return { ...defaultApproval, reason: 'Approved (Boss validation failed — fallback)' };
+        }
+    }
+
+    /**
+     * v11.0: Assess whether a ticket is truly complete based on the bubble-up chain.
+     *
+     * Called after results have bubbled from the leaf all the way up to L0.
+     * Boss reviews the full execution chain and decides: DONE, NEEDS_REWORK, or ESCALATE.
+     *
+     * Only the Boss can set TicketStatus.Resolved — this is the gatekeeper.
+     *
+     * @param ticketSummary Basic ticket info
+     * @param bubbleChain Results from each level as they reviewed the work
+     * @param leafResult The actual work output from the leaf agent
+     * @returns BossCompletionAssessment
+     */
+    async assessTicketCompletion(
+        ticketSummary: {
+            ticketNumber: number;
+            title: string;
+            operationType: string;
+            acceptanceCriteria: string | null;
+            body: string;
+        },
+        bubbleChain: BubbleResult[],
+        leafResult: string
+    ): Promise<BossCompletionAssessment> {
+        // Default: approve (safe fallback)
+        const defaultAssessment: BossCompletionAssessment = {
+            verdict: 'done',
+            reason: 'Approved by default (deterministic fallback)',
+            qualityScore: 70,
+        };
+
+        try {
+            const chainSummary = bubbleChain.map((b, i) =>
+                `  L${b.level} ${b.agentName}: [${b.status}] ${b.summary.substring(0, 150)}${b.reviewNotes ? ' | Review: ' + b.reviewNotes.substring(0, 100) : ''}${b.errorExplanation ? ' | ERROR: ' + b.errorExplanation.substring(0, 100) : ''}`
+            ).join('\n');
+
+            const hasErrors = bubbleChain.some(b => b.status === 'failed' || b.status === 'escalate');
+            const hasReworkRequests = bubbleChain.some(b => b.status === 'needs_rework');
+
+            const prompt = `COMPLETION ASSESSMENT: Is this ticket's work done and correct?
+
+TICKET: TK-${ticketSummary.ticketNumber} "${ticketSummary.title}"
+Type: ${ticketSummary.operationType}
+Acceptance Criteria: ${ticketSummary.acceptanceCriteria ?? 'None specified'}
+Body: ${(ticketSummary.body ?? '').substring(0, 300)}
+
+LEAF AGENT OUTPUT (the actual work):
+${leafResult.substring(0, 600)}
+
+REVIEW CHAIN (leaf → Boss):
+${chainSummary || '  (no intermediate reviews)'}
+
+${hasErrors ? '⚠️ ERRORS were reported in the chain — review carefully.' : ''}
+${hasReworkRequests ? '⚠️ REWORK was requested by an intermediate reviewer.' : ''}
+
+ASSESS THE WORK:
+1. Does the output address the ticket's requirements?
+2. Did intermediate reviewers approve or flag issues?
+3. Are there any error explanations that suggest incomplete work?
+4. Quality score 0-100?
+
+RESPOND IN EXACTLY THIS FORMAT:
+VERDICT: DONE or NEEDS_REWORK or ESCALATE
+REASON: [1-2 sentences]
+QUALITY_SCORE: <number 0-100>
+REWORK_INSTRUCTIONS: [only if NEEDS_REWORK — what should be fixed]
+ESCALATION_MESSAGE: [only if ESCALATE — what to tell the user]`;
+
+            const context = { conversationHistory: [] };
+            const timeoutMs = 15000;
+
+            const llmPromise = this.processMessage(prompt, context);
+            const timeoutPromise = new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), timeoutMs)
+            );
+
+            const result = await Promise.race([llmPromise, timeoutPromise]);
+            if (!result) {
+                return { ...defaultAssessment, reason: 'Approved (Boss assessment timed out after 15s)' };
+            }
+
+            const content = result.content;
+
+            // Parse verdict
+            let verdict: BossCompletionAssessment['verdict'] = 'done';
+            if (/VERDICT:\s*NEEDS_REWORK/i.test(content)) {
+                verdict = 'needs_rework';
+            } else if (/VERDICT:\s*ESCALATE/i.test(content)) {
+                verdict = 'escalate_to_user';
+            }
+
+            const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
+            const scoreMatch = content.match(/QUALITY_SCORE:\s*(\d+)/i);
+            const reworkMatch = content.match(/REWORK_INSTRUCTIONS:\s*(.+?)(?:\n|$)/i);
+            const escalateMatch = content.match(/ESCALATION_MESSAGE:\s*(.+?)(?:\n|$)/i);
+
+            const assessment: BossCompletionAssessment = {
+                verdict,
+                reason: reasonMatch?.[1]?.trim() ?? (verdict === 'done' ? 'Work approved' : 'Issues found'),
+                qualityScore: scoreMatch ? Math.min(100, Math.max(0, parseInt(scoreMatch[1], 10))) : 70,
+            };
+
+            if (verdict === 'needs_rework' && reworkMatch?.[1]?.trim()) {
+                assessment.reworkInstructions = reworkMatch[1].trim();
+            }
+
+            if (verdict === 'escalate_to_user' && escalateMatch?.[1]?.trim()) {
+                assessment.escalationMessage = escalateMatch[1].trim();
+            }
+
+            return assessment;
+        } catch (err) {
+            // LLM failure — approve by default to not block the pipeline
+            return { ...defaultAssessment, reason: 'Approved (Boss assessment failed — fallback)' };
         }
     }
 }

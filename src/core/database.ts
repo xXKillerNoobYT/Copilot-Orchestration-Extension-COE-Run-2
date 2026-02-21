@@ -1458,6 +1458,36 @@ export class Database {
             )
         `);
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_mcp_confirm_status ON mcp_confirmations(status)'); } catch { /* */ }
+
+        // ==================== v11.0: Boss-First, Tree-Routed Processing ====================
+
+        // v11.0: Ticket activity log — granular event tracking per ticket
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS ticket_activity (
+                id TEXT PRIMARY KEY,
+                ticket_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                agent_name TEXT,
+                summary TEXT NOT NULL DEFAULT '',
+                details_json TEXT,
+                tree_node_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_ticket ON ticket_activity(ticket_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_type ON ticket_activity(event_type)'); } catch { /* */ }
+
+        // v11.0: Add tagging and tree-routing columns to tickets table
+        const v11TicketCols: [string, string][] = [
+            ['ticket_category', 'TEXT DEFAULT NULL'],
+            ['ticket_stage', 'TEXT DEFAULT NULL'],
+            ['related_ticket_ids', 'TEXT DEFAULT NULL'],
+            ['agent_notes', 'TEXT DEFAULT NULL'],
+            ['tree_route_path', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, colType] of v11TicketCols) {
+            try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${colType}`); } catch { /* already exists */ }
+        }
     }
 
     private genId(): string {
@@ -1623,8 +1653,10 @@ export class Database {
                 processing_status, deliverable_type, verification_result,
                 source_page_ids, source_component_ids, retry_count, max_retries, stage,
                 last_error, last_error_at,
+                assigned_queue, cancellation_reason,
+                ticket_category, ticket_stage, related_ticket_ids, agent_notes, tree_route_path,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             id,
             ticketNumber,
@@ -1652,6 +1684,13 @@ export class Database {
             data.stage ?? null,
             data.last_error ?? null,
             data.last_error_at ?? null,
+            data.assigned_queue ?? null,
+            data.cancellation_reason ?? null,
+            data.ticket_category ?? null,
+            data.ticket_stage ?? null,
+            data.related_ticket_ids ?? null,
+            data.agent_notes ?? null,
+            data.tree_route_path ?? null,
             now,
             now
         );
@@ -1738,6 +1777,12 @@ export class Database {
         // v7.0: Team queue fields
         if (updates.assigned_queue !== undefined) { fields.push('assigned_queue = ?'); values.push(updates.assigned_queue); }
         if (updates.cancellation_reason !== undefined) { fields.push('cancellation_reason = ?'); values.push(updates.cancellation_reason); }
+        // v11.0: Tree-routed processing + tagging
+        if (updates.ticket_category !== undefined) { fields.push('ticket_category = ?'); values.push(updates.ticket_category); }
+        if (updates.ticket_stage !== undefined) { fields.push('ticket_stage = ?'); values.push(updates.ticket_stage); }
+        if (updates.related_ticket_ids !== undefined) { fields.push('related_ticket_ids = ?'); values.push(updates.related_ticket_ids); }
+        if (updates.agent_notes !== undefined) { fields.push('agent_notes = ?'); values.push(updates.agent_notes); }
+        if (updates.tree_route_path !== undefined) { fields.push('tree_route_path = ?'); values.push(updates.tree_route_path); }
 
         if (fields.length === 0) return existing;
 
@@ -1790,6 +1835,12 @@ export class Database {
             // v7.0: Team queue fields
             assigned_queue: (row.assigned_queue as string | null) ?? null,
             cancellation_reason: (row.cancellation_reason as string | null) ?? null,
+            // v11.0: Tree-routed processing + tagging
+            ticket_category: (row.ticket_category as string | null) ?? null,
+            ticket_stage: (row.ticket_stage as string | null) ?? null,
+            related_ticket_ids: (row.related_ticket_ids as string | null) ?? null,
+            agent_notes: (row.agent_notes as string | null) ?? null,
+            tree_route_path: (row.tree_route_path as string | null) ?? null,
             created_at: row.created_at as string,
             updated_at: row.updated_at as string,
         };
@@ -1937,6 +1988,108 @@ export class Database {
             started_at: r.started_at as string,
             completed_at: (r.completed_at as string) ?? null,
         }));
+    }
+
+    // ==================== v11.0: TICKET ACTIVITY LOG ====================
+
+    /**
+     * Add an activity entry to the ticket activity log.
+     */
+    addTicketActivity(data: {
+        ticket_id: string;
+        event_type: string;
+        agent_name?: string;
+        summary: string;
+        details_json?: string;
+        tree_node_id?: string;
+    }): string {
+        const id = this.genId();
+        this.db.prepare(`
+            INSERT INTO ticket_activity (id, ticket_id, event_type, agent_name, summary, details_json, tree_node_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(id, data.ticket_id, data.event_type, data.agent_name ?? null, data.summary, data.details_json ?? null, data.tree_node_id ?? null);
+        return id;
+    }
+
+    /**
+     * Get all activity entries for a ticket, ordered chronologically.
+     */
+    getTicketActivities(ticketId: string, limit?: number): Array<{
+        id: string; ticket_id: string; event_type: string; agent_name: string | null;
+        summary: string; details_json: string | null; tree_node_id: string | null; created_at: string;
+    }> {
+        const sql = limit
+            ? 'SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at ASC LIMIT ?'
+            : 'SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at ASC';
+        const rows = (limit ? this.db.prepare(sql).all(ticketId, limit) : this.db.prepare(sql).all(ticketId)) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            ticket_id: r.ticket_id as string,
+            event_type: r.event_type as string,
+            agent_name: (r.agent_name as string) ?? null,
+            summary: r.summary as string,
+            details_json: (r.details_json as string) ?? null,
+            tree_node_id: (r.tree_node_id as string) ?? null,
+            created_at: r.created_at as string,
+        }));
+    }
+
+    /**
+     * Update ticket tagging fields (v11.0).
+     */
+    updateTicketTags(ticketId: string, updates: {
+        ticket_category?: string | null;
+        ticket_stage?: string | null;
+        related_ticket_ids?: string | null;
+        agent_notes?: string | null;
+        tree_route_path?: string | null;
+    }): void {
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        if (updates.ticket_category !== undefined) { fields.push('ticket_category = ?'); values.push(updates.ticket_category); }
+        if (updates.ticket_stage !== undefined) { fields.push('ticket_stage = ?'); values.push(updates.ticket_stage); }
+        if (updates.related_ticket_ids !== undefined) { fields.push('related_ticket_ids = ?'); values.push(updates.related_ticket_ids); }
+        if (updates.agent_notes !== undefined) { fields.push('agent_notes = ?'); values.push(updates.agent_notes); }
+        if (updates.tree_route_path !== undefined) { fields.push('tree_route_path = ?'); values.push(updates.tree_route_path); }
+        if (fields.length === 0) return;
+        fields.push('updated_at = ?');
+        values.push(new Date().toISOString());
+        values.push(ticketId);
+        this.db.prepare(`UPDATE tickets SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    /**
+     * Add an agent note to a ticket (v11.0).
+     * Appends to the existing agent_notes JSON array.
+     */
+    addAgentNote(ticketId: string, note: { author: string; note: string; errorContext?: string; suggestedActions?: string[] }): void {
+        const ticket = this.getTicket(ticketId);
+        if (!ticket) return;
+        const existing: Array<Record<string, unknown>> = ticket.agent_notes ? JSON.parse(ticket.agent_notes) : [];
+        existing.push({
+            author: note.author,
+            note: note.note,
+            timestamp: new Date().toISOString(),
+            errorContext: note.errorContext,
+            suggestedActions: note.suggestedActions,
+        });
+        this.db.prepare('UPDATE tickets SET agent_notes = ?, updated_at = ? WHERE id = ?')
+            .run(JSON.stringify(existing), new Date().toISOString(), ticketId);
+    }
+
+    /**
+     * Add a related ticket reference (v11.0).
+     * Appends to the existing related_ticket_ids JSON array.
+     */
+    addTicketReference(ticketId: string, referencedTicketId: string): void {
+        const ticket = this.getTicket(ticketId);
+        if (!ticket) return;
+        const existing: string[] = ticket.related_ticket_ids ? JSON.parse(ticket.related_ticket_ids) : [];
+        if (!existing.includes(referencedTicketId)) {
+            existing.push(referencedTicketId);
+            this.db.prepare('UPDATE tickets SET related_ticket_ids = ?, updated_at = ? WHERE id = ?')
+                .run(JSON.stringify(existing), new Date().toISOString(), ticketId);
+        }
     }
 
     // ==================== TRANSACTION HELPER ====================

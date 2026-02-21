@@ -320,6 +320,12 @@ export interface Ticket {
     // v7.0 — Team queue assignment
     assigned_queue: string | null;       // Which lead agent queue this ticket belongs to
     cancellation_reason: string | null;  // Why this ticket was cancelled (for re-engagement review)
+    // v11.0 — Tree-routed processing + tagging
+    ticket_category: string | null;      // TicketCategory — planning, coding, verification, etc.
+    ticket_stage: string | null;         // TicketStage — analysis, design, implementation, etc.
+    related_ticket_ids: string | null;   // JSON array of related ticket IDs
+    agent_notes: string | null;          // JSON array of AgentNote objects
+    tree_route_path: string | null;      // JSON array of node IDs used for routing
     created_at: string;
     updated_at: string;
 }
@@ -2979,4 +2985,157 @@ export interface ProfileSuggestion {
     /** Whether the user has responded */
     status: 'pending' | 'accepted' | 'dismissed';
     created_at: string;
+}
+
+// ============================================================
+// v11.0: Boss-First, Tree-Routed Ticket Processing
+// ============================================================
+
+/** Ticket category tags — enforced at creation and pre-dispatch */
+export type TicketCategory =
+    | 'planning'
+    | 'coding'
+    | 'verification'
+    | 'review'
+    | 'design'
+    | 'data_model'
+    | 'task_creation'
+    | 'infrastructure'
+    | 'documentation'
+    | 'communication'
+    | 'boss_directive';
+
+/** Ticket processing stage — tracks where in the lifecycle a ticket is */
+export type TicketStage =
+    | 'analysis'
+    | 'design'
+    | 'implementation'
+    | 'testing'
+    | 'review'
+    | 'deployment';
+
+/** Tree-routed pipeline — replaces hardcoded AgentPipeline routing */
+export interface TreeRoutedPipeline {
+    /** Node IDs from Boss → leaf */
+    treeNodePath: string[];
+    /** Agent names along the path */
+    agentPath: string[];
+    /** The leaf node that does the work */
+    leafNodeId: string;
+    /** The agent type at the leaf */
+    leafAgentType: string;
+    /** Why this path was chosen */
+    delegationReason: string;
+    /** Whether this used fallback routing (tree couldn't route) */
+    usedFallback: boolean;
+}
+
+/** Boss pre-dispatch validation — Boss confirms a ticket should be processed next */
+export interface BossPreDispatchValidation {
+    /** Should this ticket be next? */
+    shouldProcess: boolean;
+    /** Why or why not */
+    reason: string;
+    /** If not, which ticket should go first */
+    alternateTicketId?: string;
+    /** Newly discovered blockers */
+    blockingTicketIds?: string[];
+    /** If Boss wants to change priority */
+    priorityOverride?: string;
+    /** Boss notes to add to ticket context */
+    notesForAgent?: string;
+}
+
+/** Result at each level as it bubbles up from leaf → Boss */
+export interface BubbleResult {
+    /** Node ID in the agent tree */
+    nodeId: string;
+    /** Level in the tree (0-9) */
+    level: number;
+    /** Agent name at this node */
+    agentName: string;
+    /** Summary of work done or review notes */
+    summary: string;
+    /** Status after this node's review */
+    status: 'success' | 'needs_review' | 'needs_rework' | 'escalate' | 'failed';
+    /** Review notes from this level */
+    reviewNotes?: string;
+    /** Duration in ms for this level's processing */
+    durationMs?: number;
+    /** If there was an error, explain what went wrong and suggest fixes */
+    errorExplanation?: string;
+    /** Suggestions for the next agent/level to fix the issue */
+    suggestedFixes?: string[];
+}
+
+/** Boss completion assessment — Boss decides when a ticket is truly done */
+export interface BossCompletionAssessment {
+    /** Final verdict */
+    verdict: 'done' | 'needs_rework' | 'escalate_to_user';
+    /** Explanation of decision */
+    reason: string;
+    /** If needs_rework, which branch should handle it */
+    reworkBranchNodeId?: string;
+    /** If needs_rework, specific instructions for the rework */
+    reworkInstructions?: string;
+    /** If escalate, the question/issue for the user */
+    escalationMessage?: string;
+    /** Quality score 0-100 */
+    qualityScore?: number;
+}
+
+/** Ticket activity log entry — stored in ticket_activity table */
+export interface TicketActivity {
+    id: string;
+    ticket_id: string;
+    event_type: string;
+    agent_name: string | null;
+    summary: string;
+    details_json: string | null;
+    tree_node_id: string | null;
+    created_at: string;
+}
+
+/** Agent note on a ticket — stored in agent_notes JSON array */
+export interface AgentNote {
+    author: string;
+    note: string;
+    timestamp: string;
+    /** If this note is about an error, explain the issue and suggest fixes */
+    errorContext?: string;
+    suggestedActions?: string[];
+}
+
+/** Cross-ticket reference — stored in related_ticket_ids or as a note */
+export interface TicketReference {
+    /** The ticket being referenced */
+    referencedTicketId: string;
+    /** Relationship type */
+    relationship: 'depends_on' | 'blocks' | 'related_to' | 'subtask_of' | 'parent_of' | 'duplicates';
+    /** Who created the reference */
+    createdBy: string;
+    /** When the reference was created */
+    createdAt: string;
+}
+
+/** Error context passed between agents when issues occur — explains what went wrong and suggests fixes */
+export interface AgentErrorContext {
+    /** The agent that encountered the error */
+    agentName: string;
+    /** The ticket being processed */
+    ticketId: string;
+    /** What the agent was trying to do */
+    attemptedAction: string;
+    /** What went wrong */
+    errorMessage: string;
+    /** Stack trace if available */
+    errorStack?: string;
+    /** Suggestions for the next agent or level to resolve the issue */
+    suggestedFixes: string[];
+    /** What was already tried */
+    attemptsMade: string[];
+    /** Severity assessment */
+    severity: 'recoverable' | 'needs_human' | 'blocking';
+    /** Timestamp */
+    timestamp: string;
 }

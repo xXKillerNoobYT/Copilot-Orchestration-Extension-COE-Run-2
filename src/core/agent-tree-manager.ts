@@ -27,7 +27,8 @@ import {
     AgentTreeNode, AgentTreeTemplate, AgentLevel, AgentPermission,
     TreeNodeStatus, EscalationChain, EscalationChainStatus,
     AgentConversation, AgentContext, NicheAgentDefinition,
-    ConversationRole, ModelCapability
+    ConversationRole, ModelCapability,
+    TreeRoutedPipeline, BubbleResult
 } from '../types';
 import { randomUUID } from 'crypto';
 
@@ -1160,6 +1161,216 @@ export class AgentTreeManager {
             reason,
             escalationCount: node.escalations + 1,
         });
+    }
+
+    // ==================== v11.0: TREE-ROUTED PIPELINE ====================
+
+    /**
+     * Find the best leaf node for a task description, routing from Boss (L0) all the way down.
+     *
+     * Walks the tree top-down, at each level picking the child with the best
+     * keyword match against the task description. Continues until reaching a leaf
+     * (no children) or no children match (broadcasts to first child).
+     *
+     * @param taskDescription Combined ticket title + body for keyword scoring
+     * @param taskId Optional task ID for auto-spawning deeper branches
+     * @returns TreeRoutedPipeline with the full path from Boss → leaf
+     */
+    findBestLeaf(taskDescription: string, taskId?: string): TreeRoutedPipeline | null {
+        // Find the Boss (L0) root node
+        const roots = this.database.getTreeNodesByLevel(AgentLevel.L0_Boss);
+        if (roots.length === 0) {
+            this.outputChannel.appendLine('[AgentTree] No L0 Boss node found — cannot route via tree');
+            return null;
+        }
+        const boss = roots[0];
+
+        const treeNodePath: string[] = [boss.id];
+        const agentPath: string[] = [boss.agent_type];
+        let currentNode = boss;
+        const taskKeywords = this.extractKeywords(taskDescription.toLowerCase());
+
+        // Walk down the tree, picking the best child at each level
+        while (currentNode.level < AgentLevel.L9_Checker) {
+            let children = this.getChildren(currentNode.id);
+
+            // If no children and we can spawn, try auto-spawning
+            if (children.length === 0 && currentNode.level < AgentLevel.L9_Checker) {
+                try {
+                    this.spawnBranch(currentNode.id, AgentLevel.L9_Checker);
+                    children = this.getChildren(currentNode.id);
+                } catch {
+                    // If spawn fails, current node is the effective leaf
+                    break;
+                }
+            }
+
+            if (children.length === 0) break; // Current node is a leaf
+
+            // Score children by keyword overlap
+            const scoredChildren = children.map(child => {
+                const childKeywords = child.scope
+                    .split(',')
+                    .map(s => s.trim().toLowerCase())
+                    .filter(Boolean);
+                let score = 0;
+                for (const tk of taskKeywords) {
+                    for (const ck of childKeywords) {
+                        if (ck.includes(tk) || tk.includes(ck)) {
+                            score++;
+                            break; // Don't double-count same task keyword
+                        }
+                    }
+                }
+                return { child, score };
+            });
+
+            // Sort by score descending
+            scoredChildren.sort((a, b) => b.score - a.score);
+
+            // Pick the best match, or first child if no matches
+            const best = scoredChildren[0];
+            currentNode = best.child;
+            treeNodePath.push(currentNode.id);
+            agentPath.push(currentNode.agent_type);
+        }
+
+        const delegationReason = `Routed via tree: ${agentPath.join(' → ')} (${taskKeywords.slice(0, 5).join(', ')})`;
+
+        this.outputChannel.appendLine(`[AgentTree] findBestLeaf: ${agentPath.join(' → ')}`);
+
+        return {
+            treeNodePath,
+            agentPath,
+            leafNodeId: currentNode.id,
+            leafAgentType: currentNode.agent_type,
+            delegationReason,
+            usedFallback: false
+        };
+    }
+
+    /**
+     * Get the bubble-up path from a leaf node back to the Boss (L0).
+     *
+     * Returns the list of ancestor nodes that will review the leaf's result,
+     * from the leaf's parent up to L0. Each node in the path will get a chance
+     * to review the child's work before passing it up.
+     *
+     * @param leafNodeId The node that completed work
+     * @returns Array of BubbleResult stubs (summaries filled in by TicketProcessor)
+     */
+    getBubbleUpPath(leafNodeId: string): BubbleResult[] {
+        const path: BubbleResult[] = [];
+        let currentNode = this.getNode(leafNodeId);
+        if (!currentNode) return path;
+
+        // Walk up from the leaf to the root
+        while (currentNode.parent_id) {
+            const parent = this.getNode(currentNode.parent_id);
+            if (!parent) break;
+
+            path.push({
+                nodeId: parent.id,
+                level: parent.level,
+                agentName: parent.agent_type,
+                summary: '', // Filled by TicketProcessor when the parent agent runs
+                status: 'success', // Updated after parent reviews
+            });
+
+            currentNode = parent;
+        }
+
+        return path;
+    }
+
+    /**
+     * Find the best reviewer node for work done in a specific branch.
+     *
+     * Walks UP from the executing node looking for:
+     * 1. A sibling node with a "review" or "verification" agent_type
+     * 2. The parent node itself (every parent reviews its children's work)
+     *
+     * This replaces the global ReviewAgent for in-pipeline review —
+     * review happens within the branch, not globally.
+     *
+     * @param nodeId The node whose work needs review
+     * @returns The reviewer node, or null if none found (shouldn't happen — parent always exists)
+     */
+    getBranchReviewer(nodeId: string): AgentTreeNode | null {
+        const node = this.getNode(nodeId);
+        if (!node || !node.parent_id) return null;
+
+        // First, check siblings for a dedicated review/verification node
+        const siblings = this.getSiblings(nodeId);
+        const reviewSibling = siblings.find(s =>
+            s.agent_type === 'verification' ||
+            s.agent_type === 'review' ||
+            s.scope.toLowerCase().includes('review') ||
+            s.scope.toLowerCase().includes('verification') ||
+            s.scope.toLowerCase().includes('qa')
+        );
+
+        if (reviewSibling) {
+            return reviewSibling;
+        }
+
+        // No dedicated reviewer sibling — parent reviews the work
+        return this.getNode(node.parent_id);
+    }
+
+    /**
+     * Activate all nodes along a tree-routed pipeline path.
+     * Sets each node to Working status and records the delegation.
+     *
+     * @param pipeline The pipeline returned by findBestLeaf()
+     * @param ticketTitle Short description for delegation logging
+     */
+    activatePipelinePath(pipeline: TreeRoutedPipeline, ticketTitle: string): void {
+        for (let i = 0; i < pipeline.treeNodePath.length; i++) {
+            const nodeId = pipeline.treeNodePath[i];
+            const node = this.getNode(nodeId);
+            if (!node) continue;
+
+            // Leaf node is "Working", intermediate nodes are "WaitingChild"
+            const isLeaf = i === pipeline.treeNodePath.length - 1;
+            const status = isLeaf ? TreeNodeStatus.Working : TreeNodeStatus.WaitingChild;
+
+            this.database.updateTreeNode(nodeId, { status });
+
+            // Record delegation in conversation
+            if (i > 0) {
+                const parentId = pipeline.treeNodePath[i - 1];
+                this.database.createAgentConversation({
+                    tree_node_id: parentId,
+                    level: node.level - 1,
+                    role: ConversationRole.Agent,
+                    content: `[DELEGATING to ${node.name}] ${ticketTitle.substring(0, 200)}`,
+                });
+            }
+
+            this.eventBus.emit('tree:node_activated', 'AgentTreeManager', {
+                nodeId,
+                nodeName: node.name,
+                level: node.level,
+                parentId: node.parent_id,
+                pipelinePosition: i,
+                isLeaf,
+            });
+        }
+    }
+
+    /**
+     * Reset all nodes along a pipeline path back to idle.
+     * Called after a ticket finishes processing (success or failure).
+     */
+    resetPipelinePath(pipeline: TreeRoutedPipeline): void {
+        for (const nodeId of pipeline.treeNodePath) {
+            try {
+                this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.Idle });
+            } catch {
+                // Non-fatal — node may have been deleted
+            }
+        }
     }
 
     // ==================== TELEMETRY ====================

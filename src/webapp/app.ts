@@ -864,7 +864,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </label>
     </div>
     <table>
-        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Team</th><th>Type</th><th>Actions</th></tr></thead>
+        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Team</th><th>Type</th><th>Category</th><th>Actions</th></tr></thead>
         <tbody id="ticketTableBody"></tbody>
     </table>
     <div id="ticketDetail"></div>
@@ -2332,11 +2332,11 @@ async function loadTickets() {
                 });
             }
         });
-        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="8" class="empty">No tickets</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="9" class="empty">No tickets</td></tr>';
         // v7.0: Load team queue status bar
         loadTeamQueueBar();
     } catch (err) {
-        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="8" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="9" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
     }
 }
 
@@ -2353,6 +2353,7 @@ function ticketRow(t, depth, hasChildren, isExpanded, childCount) {
         '<td>' + prioBadge(t.priority) + '</td>' +
         '<td>' + teamQueueBadge(t.assigned_queue) + '</td>' +
         '<td style="font-size:0.8em;text-transform:capitalize">' + esc((t.operation_type || 'user created').replace(/_/g, ' ')) + (t.auto_created ? '<span style="font-size:0.7em;color:var(--overlay);margin-left:4px">(auto)</span>' : '') + '</td>' +
+        '<td style="font-size:0.8em;text-transform:capitalize">' + (t.ticket_category ? esc(t.ticket_category.replace(/_/g, ' ')) : '<span style="color:var(--overlay)">--</span>') + '</td>' +
         '<td>' + ticketActions(t) + '</td>' +
         '</tr>';
 }
@@ -2428,6 +2429,28 @@ async function showTicketDetail(id) {
     if (data.stage_label) {
         stageBadge = '<div class="detail-row"><span>Stage</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;background:var(--bg3);color:var(--text)">' + esc(data.stage_label) + '</span></div>';
     }
+    // v11.0: Ticket tagging badges (category + stage tag)
+    var tagBadges = '';
+    if (data.ticket_category) {
+        var catColors = { planning:'var(--mauve)', coding:'var(--blue)', verification:'var(--green)', review:'#d97706', design:'#ec4899', data_model:'var(--mauve)', task_creation:'var(--teal)', infrastructure:'#64748b', documentation:'var(--teal)', communication:'var(--yellow)', boss_directive:'var(--red)' };
+        var catColor = catColors[data.ticket_category] || 'var(--overlay)';
+        tagBadges += '<div class="detail-row"><span>Category</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;font-weight:600;background:' + catColor + ';color:var(--bg)">' + esc(data.ticket_category) + '</span></div>';
+    }
+    if (data.ticket_stage) {
+        tagBadges += '<div class="detail-row"><span>Pipeline Stage</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;background:var(--bg3);color:var(--text)">' + esc(data.ticket_stage) + '</span></div>';
+    }
+    // v11.0: Related tickets (clickable links)
+    if (data.related_ticket_ids) {
+        try {
+            var relatedIds = typeof data.related_ticket_ids === 'string' ? JSON.parse(data.related_ticket_ids) : data.related_ticket_ids;
+            if (Array.isArray(relatedIds) && relatedIds.length > 0) {
+                var relLinks = relatedIds.map(function(rid) {
+                    return '<a href="#" onclick="showTicketDetail(\\'' + esc(rid) + '\\');return false;" style="color:var(--blue);text-decoration:underline;cursor:pointer;margin-right:6px">' + esc(rid.substring(0, 8)) + '</a>';
+                }).join('');
+                tagBadges += '<div class="detail-row"><span>Related Tickets</span><span>' + relLinks + '</span></div>';
+            }
+        } catch(e) { /* ignore parse errors */ }
+    }
     // Acceptance criteria
     var criteriaSection = '';
     if (data.acceptance_criteria) {
@@ -2499,10 +2522,20 @@ async function showTicketDetail(id) {
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
         '<div class="detail-row"><span>Priority</span>' + prioBadge(data.priority) + '</div>' +
         '<div class="detail-row"><span>Creator</span><span>' + esc(data.creator) + '</span></div>' +
-        agentBadge + processingRow + stageBadge +
+        agentBadge + processingRow + stageBadge + tagBadges +
         parentInfo + childInfo +
         (data.body ? '<div style="margin-top:12px;white-space:pre-wrap;color:var(--subtext);padding:12px;background:var(--bg);border-radius:6px">' + esc(data.body) + '</div>' : '') +
         criteriaSection + verificationSection + errorSection + runHistoryHtml +
+        '<h3 id="liveActivityToggle" role="button" tabindex="0" aria-expanded="false" aria-controls="liveActivityPanel" style="margin-top:16px;cursor:pointer" onclick="toggleLiveActivity(\\'' + id + '\\')" onkeydown="if(event.key===\\'Enter\\'||event.key===\\' \\'){event.preventDefault();toggleLiveActivity(\\'' + id + '\\')}">' +
+            '<span id="liveActivityArrow" style="margin-right:6px;display:inline-block;transition:transform 0.2s">&#9656;</span>Live Activity <span id="liveActivityCount" style="color:var(--overlay);font-size:0.8em"></span></h3>' +
+        '<div id="liveActivityPanel" role="log" aria-live="polite" aria-label="Live ticket activity log" style="display:none;margin-bottom:16px">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+                '<span id="liveActivityStatus" role="status" aria-label="Connection status" style="width:8px;height:8px;border-radius:50%;background:var(--overlay)"></span>' +
+                '<span id="liveActivityStatusText" style="font-size:0.8em;color:var(--subtext)">Click to load activity</span>' +
+                '<button class="btn" style="margin-left:auto;font-size:0.75em;padding:2px 8px" onclick="toggleLiveAutoScroll(event)" aria-label="Toggle auto-scroll">Auto-scroll: ON</button>' +
+            '</div>' +
+            '<div id="liveActivityLog" style="max-height:400px;overflow-y:auto;background:var(--bg);border-radius:6px;padding:8px;font-family:monospace;font-size:0.8em;line-height:1.6"></div>' +
+        '</div>' +
         '<h3 style="margin-top:16px">Thread (' + replies.length + ')</h3>' +
         replies.map(r =>
             '<div class="thread-reply ' + (r.author === 'user' ? 'user' : r.author === 'system' ? 'system' : 'agent') + '">' +
@@ -2575,6 +2608,171 @@ async function sendTicketReply(id) {
     if (!text) return;
     await api('tickets/' + id + '/replies', { method: 'POST', body: { body: text, author: 'user' } });
     showTicketDetail(id);
+}
+
+// v11.0: Live Activity panel for ticket detail view
+var liveActivityTicketId = null;
+var liveActivityAutoScroll = true;
+var liveActivityEventTypes = [
+    'ticket:agent_step_started', 'ticket:agent_step_completed',
+    'ticket:tree_delegation', 'ticket:bubble_up',
+    'ticket:boss_validation', 'ticket:note_added',
+    'ticket:processing_started', 'ticket:processing_completed',
+    'ticket:verification_passed', 'ticket:verification_failed',
+    'boss:pre_dispatch_validation', 'agent:error',
+];
+
+function getActivityColor(eventType) {
+    if (eventType.includes('completed') || eventType.includes('passed') || eventType.includes('resolved')) return 'var(--green)';
+    if (eventType.includes('started') || eventType.includes('delegation')) return 'var(--blue)';
+    if (eventType.includes('error') || eventType.includes('failed')) return 'var(--red)';
+    if (eventType.includes('bubble') || eventType.includes('review')) return '#d97706';
+    if (eventType.includes('boss') || eventType.includes('validation')) return '#7c3aed';
+    if (eventType.includes('note')) return '#0891b2';
+    return 'var(--subtext)';
+}
+
+function getActivityIcon(eventType) {
+    if (eventType.includes('completed') || eventType.includes('passed') || eventType.includes('resolved')) return '\\u2705';
+    if (eventType.includes('started')) return '\\u25B6';
+    if (eventType.includes('delegation')) return '\\u2935';
+    if (eventType.includes('bubble')) return '\\u2934';
+    if (eventType.includes('error') || eventType.includes('failed')) return '\\u274C';
+    if (eventType.includes('boss') || eventType.includes('validation')) return '\\uD83D\\uDC51';
+    if (eventType.includes('note')) return '\\uD83D\\uDCDD';
+    return '\\u2022';
+}
+
+function formatActivityEntry(activity) {
+    var color = getActivityColor(activity.event_type || '');
+    var icon = getActivityIcon(activity.event_type || '');
+    var time = activity.created_at ? new Date(activity.created_at).toLocaleTimeString() : '';
+    var agent = activity.agent_name ? '<span style="color:var(--blue);font-weight:600">[' + esc(activity.agent_name) + ']</span> ' : '';
+    var details = '';
+    if (activity.details_json) {
+        try {
+            var d = typeof activity.details_json === 'string' ? JSON.parse(activity.details_json) : activity.details_json;
+            var parts = [];
+            if (d.durationMs) parts.push(Math.round(d.durationMs / 1000) + 's');
+            if (d.stepIndex) parts.push('step ' + d.stepIndex + '/' + (d.totalSteps || '?'));
+            if (d.verdict) parts.push('verdict: ' + d.verdict);
+            if (d.shouldProcess !== undefined) parts.push(d.shouldProcess ? 'approved' : 'redirected');
+            if (parts.length > 0) details = ' <span style="color:var(--overlay);font-size:0.85em">(' + parts.join(', ') + ')</span>';
+        } catch(e) { /* ignore */ }
+    }
+    return '<div style="padding:2px 0;border-bottom:1px solid var(--bg2)">' +
+        '<span style="color:var(--overlay);margin-right:6px">' + time + '</span>' +
+        '<span style="margin-right:4px">' + icon + '</span>' +
+        agent +
+        '<span style="color:' + color + '">' + esc(activity.summary || activity.event_type || '') + '</span>' +
+        details +
+        '</div>';
+}
+
+async function toggleLiveActivity(ticketId) {
+    var panel = document.getElementById('liveActivityPanel');
+    var arrow = document.getElementById('liveActivityArrow');
+    var toggle = document.getElementById('liveActivityToggle');
+    if (!panel) return;
+    if (panel.style.display !== 'none') {
+        panel.style.display = 'none';
+        liveActivityTicketId = null;
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        return;
+    }
+    panel.style.display = 'block';
+    if (arrow) arrow.style.transform = 'rotate(90deg)';
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    liveActivityTicketId = ticketId;
+
+    // Load historical activities
+    var log = document.getElementById('liveActivityLog');
+    var statusDot = document.getElementById('liveActivityStatus');
+    var statusText = document.getElementById('liveActivityStatusText');
+    if (log) log.innerHTML = '<div style="color:var(--subtext);font-style:italic">Loading activity history...</div>';
+
+    try {
+        var result = await api('tickets/' + ticketId + '/activity');
+        if (!result) throw new Error('No response');
+
+        var html = '';
+        // Show agent notes first (historical context)
+        if (result.agent_notes && result.agent_notes.length > 0) {
+            result.agent_notes.forEach(function(note) {
+                html += '<div style="padding:2px 0;border-bottom:1px solid var(--bg2)">' +
+                    '<span style="color:var(--overlay);margin-right:6px">' + (note.timestamp ? new Date(note.timestamp).toLocaleTimeString() : '') + '</span>' +
+                    '<span style="margin-right:4px">\\uD83D\\uDCDD</span>' +
+                    '<span style="color:var(--blue);font-weight:600">[' + esc(note.author || 'agent') + ']</span> ' +
+                    '<span style="color:#0891b2">' + esc((note.note || '').substring(0, 200)) + '</span>' +
+                    '</div>';
+            });
+        }
+
+        // Show activity log entries
+        if (result.activities && result.activities.length > 0) {
+            result.activities.forEach(function(a) {
+                html += formatActivityEntry(a);
+            });
+        }
+
+        if (!html) html = '<div style="color:var(--subtext);font-style:italic">No activity recorded yet</div>';
+
+        if (log) {
+            log.innerHTML = html;
+            if (liveActivityAutoScroll) log.scrollTop = log.scrollHeight;
+        }
+        var countEl = document.getElementById('liveActivityCount');
+        if (countEl) countEl.textContent = '(' + (result.total_activities || 0) + ' events, ' + (result.total_notes || 0) + ' notes)';
+
+        // Set live status indicator
+        if (statusDot) statusDot.style.background = 'var(--green)';
+        if (statusText) statusText.textContent = 'Listening for live events...';
+    } catch(err) {
+        if (log) log.innerHTML = '<div style="color:var(--red)">Failed to load activity: ' + esc(String(err)) + '</div>';
+        if (statusDot) statusDot.style.background = 'var(--red)';
+        if (statusText) statusText.textContent = 'Error loading activities';
+    }
+}
+
+function appendLiveActivityEntry(eventType, data) {
+    if (!liveActivityTicketId) return;
+    // Check if this event is for the currently viewed ticket
+    var eventTicketId = data.ticketId || data.ticket_id || '';
+    if (eventTicketId !== liveActivityTicketId) return;
+
+    var log = document.getElementById('liveActivityLog');
+    if (!log) return;
+
+    var entry = {
+        event_type: eventType,
+        summary: data.resultSummary || data.summary || data.reason || data.title || eventType,
+        agent_name: data.agentName || data.agent_name || '',
+        created_at: new Date().toISOString(),
+        details_json: data,
+    };
+
+    // Remove the "no activity" placeholder if present
+    var placeholder = log.querySelector('div[style*="font-style:italic"]');
+    if (placeholder && placeholder.textContent.includes('No activity')) placeholder.remove();
+
+    log.insertAdjacentHTML('beforeend', formatActivityEntry(entry));
+    if (liveActivityAutoScroll) log.scrollTop = log.scrollHeight;
+
+    // Update count
+    var countEl = document.getElementById('liveActivityCount');
+    if (countEl) {
+        var current = countEl.textContent || '(0 events)';
+        var match = current.match(/(\\d+) events/);
+        var count = match ? parseInt(match[1]) + 1 : 1;
+        countEl.textContent = current.replace(/\\d+ events/, count + ' events');
+    }
+}
+
+function toggleLiveAutoScroll(e) {
+    liveActivityAutoScroll = !liveActivityAutoScroll;
+    var btn = e ? e.target : null;
+    if (btn) btn.textContent = 'Auto-scroll: ' + (liveActivityAutoScroll ? 'ON' : 'OFF');
 }
 
 async function createTicket() {
@@ -9105,6 +9303,26 @@ function initSSE() {
 
     sseConnection.addEventListener('ticket:recovered', function(e) {
         pollProcessingStatus();
+    });
+
+    // v11.0: Live Activity panel — route SSE ticket events to the live output view
+    var liveActivitySSETypes = [
+        'ticket:agent_step_started', 'ticket:agent_step_completed',
+        'ticket:tree_delegation', 'ticket:bubble_up',
+        'ticket:boss_validation', 'ticket:note_added',
+        'ticket:processing_started', 'ticket:processing_completed',
+        'ticket:verification_passed', 'ticket:verification_failed',
+        'boss:pre_dispatch_validation', 'agent:error',
+    ];
+    liveActivitySSETypes.forEach(function(eventType) {
+        sseConnection.addEventListener(eventType, function(e) {
+            try {
+                var data = JSON.parse(e.data);
+                if (typeof appendLiveActivityEntry === 'function') {
+                    appendLiveActivityEntry(eventType, data);
+                }
+            } catch(err) { /* ignore parse errors */ }
+        });
     });
 
     // Plan generation state recovery

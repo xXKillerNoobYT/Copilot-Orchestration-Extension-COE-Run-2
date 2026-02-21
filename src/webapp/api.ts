@@ -5,6 +5,10 @@ import { ConfigManager } from '../core/config';
 import { CodingAgentService } from '../core/coding-agent';
 import { getEventBus } from '../core/event-bus';
 import { AgentContext, DesignComponent, LeadAgentQueue, ModelCapability, PlanStatus, TaskPriority, TicketPriority, TicketStatus, TreeNodeStatus, UserProgrammingLevel, WorkflowExecutionStatus, WorkflowStatus, WorkflowStepType } from '../types';
+import { TicketTagger } from '../core/ticket-tagger';
+
+/** Shared ticket tagger instance for enforcing tags at creation time */
+const ticketTagger = new TicketTagger();
 
 /** Shared no-op output channel for inline service construction */
 export const noopOutputChannel = { appendLine(_msg: string) {} } as any;
@@ -55,7 +59,9 @@ function createAutoTicket(
     priority: string,
     aiLevel: string,
     parentTicketId?: string | null,
-    context?: AutoTicketContext
+    context?: AutoTicketContext,
+    /** v10.1: Suppress ticket:created event — use when batching tickets (e.g. plan generation) */
+    suppressEvent?: boolean
 ): { id: string; ticket_number: number } | null {
     if (!shouldCreateTicket(operationType, aiLevel)) return null;
 
@@ -89,6 +95,15 @@ function createAutoTicket(
         || ACCEPTANCE_CRITERIA_TEMPLATES[deliverableType]
         || null;
 
+    // v11.0: Tag ticket at creation time — HARD RULE: every ticket MUST have proper tags
+    const tags = ticketTagger.tagTicket({
+        title,
+        body: enrichedBody,
+        operation_type: operationType,
+        phase_title: context?.planConfig?.focus ?? undefined,
+        parent_ticket_id: parentTicketId ?? null,
+    });
+
     const ticket = database.createTicket({
         title,
         body: enrichedBody,
@@ -102,7 +117,19 @@ function createAutoTicket(
         source_page_ids: context?.sourcePageIds ? JSON.stringify(context.sourcePageIds) : null,
         source_component_ids: context?.sourceComponentIds ? JSON.stringify(context.sourceComponentIds) : null,
         stage: context?.stage ?? undefined,
+        // v11.0: Apply tags at creation
+        ticket_category: tags.ticket_category,
+        ticket_stage: tags.ticket_stage,
+        related_ticket_ids: tags.related_ticket_ids.length > 0 ? JSON.stringify(tags.related_ticket_ids) : undefined,
     });
+
+    // v10.1: Emit ticket:created so Boss AI / TicketProcessor picks up new tickets immediately
+    // suppressEvent=true allows batching (e.g. plan generation creates all tickets, then kicks Boss once)
+    if (ticket && !suppressEvent) {
+        const eventBus = getEventBus();
+        eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
+    }
+
     return ticket;
 }
 
@@ -698,14 +725,29 @@ export async function handleApiRequest(
                     return true;
                 }
             }
+            const ticketTitle = body.title as string;
+            const ticketBody = (body.body as string) || '';
+            const opType = (body.operation_type as string) || 'user_created';
+
+            // v11.0: Tag ticket at creation — HARD RULE
+            const tags = ticketTagger.tagTicket({
+                title: ticketTitle,
+                body: ticketBody,
+                operation_type: opType,
+                parent_ticket_id: parentId,
+            });
+
             const ticket = database.createTicket({
-                title: body.title as string,
-                body: (body.body as string) || '',
+                title: ticketTitle,
+                body: ticketBody,
                 priority: (body.priority as TicketPriority) || TicketPriority.P2,
                 creator: (body.creator as string) || 'user',
                 parent_ticket_id: parentId,
-                operation_type: (body.operation_type as string) || 'user_created',
+                operation_type: opType,
                 acceptance_criteria: (body.acceptance_criteria as string) || null,
+                ticket_category: tags.ticket_category,
+                ticket_stage: tags.ticket_stage,
+                related_ticket_ids: tags.related_ticket_ids.length > 0 ? JSON.stringify(tags.related_ticket_ids) : undefined,
             });
             eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
             database.addAuditLog('webapp', 'ticket_created', `Ticket TK-${ticket.ticket_number} created via web app`);
@@ -779,6 +821,34 @@ export async function handleApiRequest(
             return true;
         }
 
+        // v11.0: Ticket activity log (historical events for live output view)
+        const activityTicketId = extractParam(route, 'tickets/:id/activity');
+        if (activityTicketId && method === 'GET') {
+            const ticket = database.getTicket(activityTicketId);
+            if (!ticket) { json(res, { error: 'Ticket not found' }, 404); return true; }
+            const url = new URL(req.url || '', 'http://localhost');
+            const limitParam = url.searchParams.get('limit');
+            const parsedLimit = limitParam ? parseInt(limitParam, 10) : undefined;
+            const limit = (parsedLimit !== undefined && !isNaN(parsedLimit) && parsedLimit > 0) ? Math.min(parsedLimit, 1000) : undefined;
+            const activities = database.getTicketActivities(activityTicketId, limit);
+
+            // Also include agent_notes from the ticket itself for a unified view
+            let agentNotes: Array<Record<string, unknown>> = [];
+            if (ticket.agent_notes) {
+                try { agentNotes = JSON.parse(ticket.agent_notes); } catch { /* */ }
+            }
+
+            json(res, {
+                ticket_id: activityTicketId,
+                ticket_number: ticket.ticket_number,
+                activities,
+                agent_notes: agentNotes,
+                total_activities: activities.length,
+                total_notes: agentNotes.length,
+            });
+            return true;
+        }
+
         // v4.1: AI Suggestion endpoints (WS2C)
         if (route === 'suggestions' && method === 'GET') {
             const url = new URL(req.url || '', 'http://localhost');
@@ -821,7 +891,7 @@ export async function handleApiRequest(
 
         // Single ticket operations
         const ticketId = extractParam(route, 'tickets/:id');
-        if (ticketId && !route.includes('/replies') && !route.includes('/children') && !route.includes('/runs') && method === 'GET') {
+        if (ticketId && !route.includes('/replies') && !route.includes('/children') && !route.includes('/runs') && !route.includes('/activity') && method === 'GET') {
             const ticket = database.getTicket(ticketId);
             if (!ticket) { json(res, { error: 'Ticket not found' }, 404); return true; }
             const replies = database.getTicketReplies(ticketId);
@@ -928,30 +998,8 @@ export async function handleApiRequest(
                 return true;
             }
 
-            // GET /api/plan-files/:id — get a specific plan file
-            const fileId = extractParam(route, 'plan-files/:id');
-            if (fileId && method === 'GET') {
-                const file = database.getPlanFile(fileId);
-                if (!file) { json(res, { error: 'Plan file not found' }, 404); return true; }
-                json(res, file);
-                return true;
-            }
-
-            // PUT /api/plan-files/:id — update a plan file
-            if (fileId && method === 'PUT') {
-                const body = await parseBody(req);
-                const updated = database.updatePlanFile(fileId, body as Record<string, unknown>);
-                if (!updated) { json(res, { error: 'Plan file not found' }, 404); return true; }
-                json(res, updated);
-                return true;
-            }
-
-            // DELETE /api/plan-files/:id — delete a plan file
-            if (fileId && method === 'DELETE') {
-                const deleted = database.deletePlanFile(fileId);
-                json(res, { success: deleted }, deleted ? 200 : 404);
-                return true;
-            }
+            // v10.1: Specific sub-routes MUST be checked BEFORE the generic plan-files/:id handler
+            // to prevent extractParam from matching "folders", "context", "changes", "sync" as an :id
 
             // GET /api/plan-files/context?plan_id=xxx — get combined plan file content for agents
             if (route === 'plan-files/context' && method === 'GET') {
@@ -1092,6 +1140,28 @@ export async function handleApiRequest(
                 json(res, { plan_id: planId, files_added: filesAdded, files_updated: filesUpdated, changed_file_ids: changedFileIds });
                 return true;
             }
+
+            // v10.1: Generic plan-files/:id handlers — MUST come AFTER all specific sub-routes
+            // (context, changes, folders, sync) to prevent route interception
+            const fileId = extractParam(route, 'plan-files/:id');
+            if (fileId && method === 'GET') {
+                const file = database.getPlanFile(fileId);
+                if (!file) { json(res, { error: 'Plan file not found' }, 404); return true; }
+                json(res, file);
+                return true;
+            }
+            if (fileId && method === 'PUT') {
+                const body = await parseBody(req);
+                const updated = database.updatePlanFile(fileId, body as Record<string, unknown>);
+                if (!updated) { json(res, { error: 'Plan file not found' }, 404); return true; }
+                json(res, updated);
+                return true;
+            }
+            if (fileId && method === 'DELETE') {
+                const deleted = database.deletePlanFile(fileId);
+                json(res, { success: deleted }, deleted ? 200 : 404);
+                return true;
+            }
         }
 
         if (route === 'plans/generate' && method === 'POST') {
@@ -1128,10 +1198,11 @@ export async function handleApiRequest(
             const wizTechStack = ((design as Record<string, unknown>).techStack as string) || 'React + Node';
 
             // TICKET-FIRST: Create tracking ticket BEFORE the LLM call
+            // v10.1: suppressEvent=true — Boss AI kicks AFTER all plan tickets are created, not before
             const earlyParentTicket = createAutoTicket(database, 'plan_generation',
                 'Plan: ' + name + ' \u2014 Generating...',
                 'AI plan generation started.\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel + '\n\nStatus: Waiting for LLM response...',
-                'P1', aiLevel);
+                'P1', aiLevel, null, undefined, true);
 
             // Get plan file context — either from request body (wizard) or existing files
             const planFileContext = (body.plan_file_context as string) || '';
@@ -1247,11 +1318,30 @@ export async function handleApiRequest(
                 parentBodyParts.push(`**Layout**: ${(design as Record<string, unknown>).layout || 'sidebar'}`);
                 parentBodyParts.push(`**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`);
                 if (priorities.length > 0) parentBodyParts.push(`**Priorities**: ${priorities.join(', ')}`);
-                // Reference documents summary
+                // v11.0: Reference documents — include actual file names and paths for maximum context
                 if (planFileContext) {
                     parentBodyParts.push('', '---', '', '**Reference Documents Attached**: Yes (included in LLM context)');
-                    const fileNames = planFileContext.split('---').filter(s => s.trim() && !s.includes('==='));
-                    if (fileNames.length > 0) parentBodyParts.push(`**Document Count**: ~${fileNames.length} file(s)`);
+                    const planFiles = database.getPlanFiles(plan.id);
+                    if (planFiles.length > 0) {
+                        parentBodyParts.push(`**Document Count**: ${planFiles.length} file(s)`);
+                        parentBodyParts.push('**Files**:');
+                        for (const pf of planFiles) {
+                            const fname = pf.filename as string || 'unnamed';
+                            const ftype = pf.file_type as string || '';
+                            const fcat = pf.category as string || '';
+                            const sourcePath = pf.source_path as string || '';
+                            const isLinked = pf.is_linked as number;
+                            let fileEntry = `- ${fname}`;
+                            if (ftype) fileEntry += ` (${ftype})`;
+                            if (fcat) fileEntry += ` [${fcat}]`;
+                            if (sourcePath) fileEntry += ` — Path: \`${sourcePath}\``;
+                            if (isLinked) fileEntry += ' (linked from disk)';
+                            parentBodyParts.push(fileEntry);
+                        }
+                    } else {
+                        const fileNames = planFileContext.split('---').filter(s => s.trim() && !s.includes('==='));
+                        if (fileNames.length > 0) parentBodyParts.push(`**Document Count**: ~${fileNames.length} file(s)`);
+                    }
                 }
                 // Task summary table
                 if (parsed.tasks.length > 0) {
@@ -1267,136 +1357,119 @@ export async function handleApiRequest(
                 }
                 const parentBody = parentBodyParts.join('\n');
 
-                // Update the early ticket with results (ticket-first pattern)
+                // v10.2: Boss-first plan generation — create ONE rich master ticket, NOT dozens of sub-tickets.
+                // The Boss AI receives this single ticket, reviews the plan, and creates sub-tickets as needed.
+                // This ensures the Boss Agent is ALWAYS the first thing that runs when "Generate Plan" is pressed.
+                // NO automatic sub-ticket creation — the Boss orchestrates all work decomposition.
                 if (earlyParentTicket) {
+                    // Build comprehensive master ticket body with ALL context the Boss needs
+                    const masterBodyParts: string[] = [
+                        '**PLAN MASTER TICKET \u2014 Boss AI: Review and orchestrate this plan.**',
+                        '',
+                        'This is the starting ticket for plan "' + name + '". The Boss AI should:',
+                        '1. Review the plan overview, tasks, and design requirements below',
+                        '2. Create sub-tickets for each phase (Design, Data Models, Tasks, Code Generation)',
+                        '3. Assign sub-tickets to the appropriate specialist agents/teams',
+                        '4. Ensure proper dependency ordering (design before code, models before implementation)',
+                        '5. Monitor progress and create additional tickets as needed',
+                        '',
+                        '---',
+                        '',
+                    ];
+
+                    // Append the full parent body context (plan details, wizard config, task summary)
+                    masterBodyParts.push(parentBody);
+
+                    // Add explicit phase guidance for the Boss
+                    masterBodyParts.push(
+                        '',
+                        '---',
+                        '',
+                        '**RECOMMENDED PHASES (Boss should create sub-tickets for these)**:',
+                        '',
+                        '**Phase 1: Configuration Review**',
+                        '- Verify wizard configuration: Scale=' + scale + ', Focus=' + focus,
+                        '- Layout: ' + ((design as Record<string, unknown>).layout || 'sidebar') + ', Theme: ' + ((design as Record<string, unknown>).theme || 'dark'),
+                        '- Tech Stack: ' + wizTechStack,
+                    );
+                    if (wizPages.length > 0) masterBodyParts.push('- Pages: ' + wizPages.join(', '));
+                    if (wizRoles.length > 0) masterBodyParts.push('- User Roles: ' + wizRoles.join(', '));
+                    if (wizFeatures.length > 0) masterBodyParts.push('- Features: ' + wizFeatures.join(', '));
+                    // v11.0: Include actual file details in master ticket for maximum context
+                    if (planFileContext) {
+                        const masterPlanFiles = database.getPlanFiles(plan.id);
+                        if (masterPlanFiles.length > 0) {
+                            masterBodyParts.push('- Reference documents (' + masterPlanFiles.length + ' files):');
+                            for (const mpf of masterPlanFiles) {
+                                const mpfName = mpf.filename as string || 'unnamed';
+                                const mpfPath = mpf.source_path as string || '';
+                                masterBodyParts.push('  - ' + mpfName + (mpfPath ? ' (`' + mpfPath + '`)' : ''));
+                            }
+                        } else {
+                            masterBodyParts.push('- Reference documents: Attached to plan (included in LLM context)');
+                        }
+                        masterBodyParts.push('- Plan files API: GET /api/plan-files?plan_id=' + plan.id);
+                        masterBodyParts.push('- Plan file context API: GET /api/plan-files/context?plan_id=' + plan.id);
+                    }
+
+                    // v11.0: Include linked folders info
+                    try {
+                        const linkedFolders = database.getPlanFileFolders(plan.id);
+                        if (linkedFolders && linkedFolders.length > 0) {
+                            masterBodyParts.push('', '**Linked Source Folders**:');
+                            for (const lf of linkedFolders) {
+                                masterBodyParts.push('- `' + (lf.folder_path as string || 'unknown') + '`');
+                            }
+                        }
+                    } catch { /* linked folders may not exist */ }
+
+                    masterBodyParts.push(
+                        '',
+                        '**Phase 2: Design Layout** (assign to design/planning team)',
+                        '- Generate visual layout with components for each page',
+                        '- Page layouts, component hierarchy, navigation structure, responsive breakpoints',
+                    );
+                    if (wizPages.length > 0) masterBodyParts.push('- Pages to design: ' + wizPages.join(', '));
+
+                    masterBodyParts.push(
+                        '',
+                        '**Phase 3: Data Models** (assign to architecture team)',
+                        '- Create entity schemas, relationships, API endpoints, validation rules',
+                    );
+                    if (wizFeatures.length > 0) masterBodyParts.push('- Features requiring models: ' + wizFeatures.join(', '));
+                    if (wizRoles.length > 0) masterBodyParts.push('- Access control models for roles: ' + wizRoles.join(', '));
+
+                    masterBodyParts.push(
+                        '',
+                        '**Phase 4: Implementation Tasks** (' + parsed.tasks.length + ' tasks generated by AI)',
+                        '- Each task is 15-45 minutes, with acceptance criteria',
+                        '- Prerequisites: Design Layout and Data Models must complete first',
+                        '',
+                        '**Phase 5: Code Generation** (assign to coding agents)',
+                        '- Implement the finalized design',
+                        '- Source code, unit tests, integration tests, build configuration',
+                    );
+
+                    const masterBody = masterBodyParts.filter(Boolean).join('\n');
+
+                    // v11.0: Tag the master ticket — always 'planning' category, 'analysis' stage
                     database.updateTicket(earlyParentTicket.id, {
-                        title: 'Plan: ' + name + ' \u2014 Design & Implementation',
-                        body: parentBody,
-                        status: TicketStatus.InReview,
+                        title: 'Plan: ' + name + ' \u2014 Boss AI: Review & Orchestrate',
+                        body: masterBody,
+                        status: TicketStatus.Open,
+                        processing_status: 'queued',
+                        ticket_category: 'planning',
+                        ticket_stage: 'analysis',
+                    });
+
+                    // v10.2: Emit SINGLE ticket:created event — Boss AI starts with ONE ticket containing
+                    // the full plan context. Boss reviews, then creates and assigns sub-tickets as needed.
+                    // No specialist agents start until Boss has reviewed and dispatched work.
+                    eventBus.emit('ticket:created', 'webapp', {
+                        ticketId: earlyParentTicket.id,
+                        ticketNumber: earlyParentTicket.ticket_number,
                     });
                 }
-
-                // v10.0: Helper to emit ticket:created so Boss Agent picks up sub-tickets
-                const emitSubTicket = (ticket: { id: string; ticket_number: number } | null) => {
-                    if (ticket) {
-                        eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
-                    }
-                };
-
-                const parentAutoTicket = earlyParentTicket;
-                if (parentAutoTicket) {
-                    // Phase sub-tickets — each with rich context and plan references
-                    const configBody = [
-                        'Wizard configuration completed.',
-                        '',
-                        `**Plan**: ${name} (${plan.id})`,
-                        `**Scale**: ${scale}`,
-                        `**Focus**: ${focus}`,
-                        `**Layout**: ${(design as Record<string, unknown>).layout || 'sidebar'}`,
-                        `**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`,
-                        `**Tech Stack**: ${wizTechStack}`,
-                        wizPages.length > 0 ? `**Pages**: ${wizPages.join(', ')}` : '',
-                        wizRoles.length > 0 ? `**User Roles**: ${wizRoles.join(', ')}` : '',
-                        wizFeatures.length > 0 ? `**Features**: ${wizFeatures.join(', ')}` : '',
-                        priorities.length > 0 ? `**Priorities**: ${priorities.join(', ')}` : '',
-                        planFileContext ? '\n**Reference documents**: Attached to plan' : '',
-                    ].filter(Boolean).join('\n');
-                    const configTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Configuration', configBody,
-                        'P2', aiLevel, parentAutoTicket.id);
-                    emitSubTicket(configTicket);
-
-                    // Task generation phase — summarize all tasks
-                    const taskSummaryLines = parsed.tasks.map((t, i) =>
-                        `${i + 1}. **${t.title}** [${t.priority || 'P2'}] (~${t.estimated_minutes || 30}min)` +
-                        (t.acceptance_criteria ? `\n   Acceptance: ${t.acceptance_criteria}` : '')
-                    );
-                    const taskGenBody = [
-                        `AI generated ${parsed.tasks.length} implementation tasks.`,
-                        '',
-                        `**Plan**: ${name} (${plan.id})`,
-                        '',
-                        '**Task Breakdown**:',
-                        ...taskSummaryLines,
-                    ].join('\n');
-                    const taskGenTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Task Generation', taskGenBody,
-                        'P2', aiLevel, parentAutoTicket.id);
-                    emitSubTicket(taskGenTicket);
-
-                    // Create a sub-ticket for each generated task with full context
-                    if (taskGenTicket) {
-                        for (const t of parsed.tasks) {
-                            const taskBody = [
-                                t.description || '',
-                                '',
-                                `**Plan**: ${name} (${plan.id})`,
-                                `**Priority**: ${t.priority || 'P2'}`,
-                                `**Estimate**: ${t.estimated_minutes || 30} min`,
-                                t.acceptance_criteria ? `**Acceptance Criteria**: ${t.acceptance_criteria}` : '',
-                                (t.depends_on_titles && t.depends_on_titles.length > 0) ? `**Dependencies**: ${t.depends_on_titles.join(', ')}` : '',
-                                `**Tech Stack**: ${wizTechStack}`,
-                            ].filter(Boolean).join('\n');
-                            const taskTicket = createAutoTicket(database, 'plan_generation',
-                                'Task: ' + t.title, taskBody,
-                                (t.priority || 'P2'), aiLevel, taskGenTicket.id);
-                            emitSubTicket(taskTicket);
-                        }
-                    }
-
-                    // Design layout phase — reference pages and features
-                    const designBody = [
-                        'Generate visual layout with components for each page.',
-                        '',
-                        `**Plan**: ${name} (${plan.id})`,
-                        `**Layout Style**: ${(design as Record<string, unknown>).layout || 'sidebar'}`,
-                        `**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`,
-                        wizPages.length > 0 ? `**Pages to Design**: ${wizPages.join(', ')}` : '**Pages**: Default (Dashboard)',
-                        wizRoles.length > 0 ? `**User Roles to Support**: ${wizRoles.join(', ')}` : '',
-                        wizFeatures.length > 0 ? `**Features to Include**: ${wizFeatures.join(', ')}` : '',
-                        `**Tech Stack**: ${wizTechStack}`,
-                        '',
-                        '**Deliverables**: Page layouts, component hierarchy, navigation structure, responsive breakpoints.',
-                    ].filter(Boolean).join('\n');
-                    const designTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Design Layout', designBody,
-                        'P2', aiLevel, parentAutoTicket.id);
-                    emitSubTicket(designTicket);
-
-                    // Data models phase
-                    const dataModelBody = [
-                        'Create data models and bind them to UI components.',
-                        '',
-                        `**Plan**: ${name} (${plan.id})`,
-                        `**Tech Stack**: ${wizTechStack}`,
-                        wizFeatures.length > 0 ? `**Features Requiring Data Models**: ${wizFeatures.join(', ')}` : '',
-                        wizRoles.length > 0 ? `**User Roles (for access control models)**: ${wizRoles.join(', ')}` : '',
-                        '',
-                        '**Deliverables**: Entity schemas, relationships, API endpoints, validation rules.',
-                    ].filter(Boolean).join('\n');
-                    const dataModelTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Data Models', dataModelBody,
-                        'P3', aiLevel, parentAutoTicket.id);
-                    emitSubTicket(dataModelTicket);
-
-                    // Code generation phase
-                    const codeGenBody = [
-                        'Send finalized design to coding agent for implementation.',
-                        '',
-                        `**Plan**: ${name} (${plan.id})`,
-                        `**Tech Stack**: ${wizTechStack}`,
-                        `**Total Tasks**: ${parsed.tasks.length}`,
-                        `**Focus**: ${focus}`,
-                        '',
-                        '**Prerequisites**: Design Layout and Data Models phases must complete first.',
-                        '**Deliverables**: Source code files, unit tests, integration tests, build configuration.',
-                    ].join('\n');
-                    const codeGenTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Code Generation', codeGenBody,
-                        'P2', aiLevel, parentAutoTicket.id);
-                    emitSubTicket(codeGenTicket);
-                }
-
                 json(res, { plan: database.getPlan(plan.id), taskCount: parsed.tasks.length, tasks: database.getTasksByPlan(plan.id) }, 201);
                 return true;
             }
@@ -3471,11 +3544,16 @@ Only return the JSON object, nothing else.`;
             if (!message) { json(res, { error: 'message required' }, 400); return true; }
 
             // Create or find a ticket for this element
+            const chatTicketTitle = `Chat: ${elementType} ${elementChatId}`;
+            const chatTicketBody = `element:${elementChatId} type:${elementType}`;
+            const chatTags = ticketTagger.tagTicket({ title: chatTicketTitle, body: chatTicketBody });
             const ticket = database.createTicket({
-                title: `Chat: ${elementType} ${elementChatId}`,
-                body: `element:${elementChatId} type:${elementType}`,
+                title: chatTicketTitle,
+                body: chatTicketBody,
                 priority: TicketPriority.P3,
                 creator: 'user',
+                ticket_category: chatTags.ticket_category,
+                ticket_stage: chatTags.ticket_stage,
             });
             const reply = database.addTicketReply(ticket.id, 'user', message);
             eventBus.emit('element:chat_message', 'webapp', {
@@ -3990,11 +4068,16 @@ Only return the JSON object, nothing else.`;
                 reported_by: 'user',
             } as any);
             // Create a ticket for tracking
+            const fixTitle = `Micro-fix: ${issueDescription.substring(0, 50)}`;
+            const fixBody = `Element: ${elementId}\nDescription: ${issueDescription}`;
+            const fixTags = ticketTagger.tagTicket({ title: fixTitle, body: fixBody, operation_type: 'bug_fix' });
             const ticket = database.createTicket({
-                title: `Micro-fix: ${issueDescription.substring(0, 50)}`,
-                body: `Element: ${elementId}\nDescription: ${issueDescription}`,
+                title: fixTitle,
+                body: fixBody,
                 priority: TicketPriority.P2,
                 creator: 'user',
+                ticket_category: fixTags.ticket_category,
+                ticket_stage: fixTags.ticket_stage,
             });
             eventBus.emit('status:issue_created', 'webapp', { issueId: issue.id, planId, ticketId: ticket.id });
             json(res, { issue, ticket }, 201);
@@ -4138,11 +4221,16 @@ Only return the JSON array.`;
             const sessionName = (body.session_name as string) || 'Chat Session';
 
             // Create parent ticket for this chat session
+            const chatSessionTitle = 'AI Chat: ' + sessionName;
+            const chatSessionBody = 'Ticket-backed AI chat session' + (planId ? ' for plan ' + planId : '');
+            const chatSessionTags = ticketTagger.tagTicket({ title: chatSessionTitle, body: chatSessionBody });
             const ticket = database.createTicket({
-                title: 'AI Chat: ' + sessionName,
-                body: 'Ticket-backed AI chat session' + (planId ? ' for plan ' + planId : ''),
+                title: chatSessionTitle,
+                body: chatSessionBody,
                 priority: TicketPriority.P3,
                 creator: 'system',
+                ticket_category: chatSessionTags.ticket_category,
+                ticket_stage: chatSessionTags.ticket_stage,
             });
 
             const session = database.createAiChatSession({
