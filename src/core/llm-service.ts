@@ -238,7 +238,7 @@ export class LLMService {
         const controller = new AbortController();
         const url = `${this.config.endpoint}/chat/completions`;
 
-        // Startup timeout: waiting for the first token
+        // v10.0: Startup timeout — covers model loading (up to 10 min for cold start)
         const startupTimer = setTimeout(() => {
             controller.abort();
         }, this.config.startupTimeoutSeconds * 1000);
@@ -251,24 +251,35 @@ export class LLMService {
         let firstTokenReceived = false;
         let fullContent = '';
         let tokensUsed = 0;
+        let thinkingTokens = 0;  // v10.0: Track reasoning/thinking tokens separately
         let finishReason = 'stop';
 
-        // Liveness check: every 60s, check if new tokens arrived since last check.
-        // Only abort if ZERO tokens were generated in the check interval.
-        // This tolerates slow generation (e.g. 1 token/10s) but catches true stalls.
+        // v10.0: Liveness check uses configurable streamStallTimeoutSeconds (default 180s)
+        // Tolerates slow generation AND long thinking pauses between reasoning tokens.
+        // Only aborts if ZERO tokens (content OR thinking) were generated in the interval.
+        const stallCheckMs = (this.config.streamStallTimeoutSeconds ?? 180) * 1000;
         let lastCheckTokenCount = 0;
+        let lastCheckThinkingCount = 0;
         let abortReason = '';
         const livenessInterval = setInterval(() => {
             if (!firstTokenReceived) return; // startup timer handles pre-first-token
-            if (tokensUsed === lastCheckTokenCount) {
-                // No new tokens in the last 60 seconds — stream is truly stalled
+            const totalActivity = tokensUsed + thinkingTokens;
+            const lastActivity = lastCheckTokenCount + lastCheckThinkingCount;
+            if (totalActivity === lastActivity) {
+                // No new tokens (content or thinking) in the stall interval — truly stalled
                 abortReason = 'stall';
                 controller.abort();
             } else {
-                this.outputChannel.appendLine(`LLM liveness: ${tokensUsed - lastCheckTokenCount} new tokens (${tokensUsed} total)`);
+                const newContent = tokensUsed - lastCheckTokenCount;
+                const newThinking = thinkingTokens - lastCheckThinkingCount;
+                this.outputChannel.appendLine(
+                    `LLM liveness: ${newContent} content + ${newThinking} thinking tokens ` +
+                    `(${tokensUsed} content, ${thinkingTokens} thinking total)`
+                );
                 lastCheckTokenCount = tokensUsed;
+                lastCheckThinkingCount = thinkingTokens;
             }
-        }, 60_000);
+        }, stallCheckMs);
 
         try {
             const body = JSON.stringify({
@@ -279,7 +290,10 @@ export class LLMService {
                 stream: true,
             });
 
-            this.outputChannel.appendLine(`LLM request: ${request.messages.length} messages, stream=true`);
+            this.outputChannel.appendLine(
+                `LLM request: ${request.messages.length} messages, stream=true ` +
+                `(startup=${this.config.startupTimeoutSeconds}s, stall=${this.config.streamStallTimeoutSeconds}s, total=${this.config.timeoutSeconds}s)`
+            );
 
             const response = await fetch(url, {
                 method: 'POST',
@@ -299,16 +313,19 @@ export class LLMService {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let inThinkingPhase = false;   // v10.0: Track reasoning/thinking mode
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                // First token received — clear startup timer
+                // v10.0: First byte received — clear startup timer.
+                // This fires on ANY stream data, including thinking/reasoning tokens
+                // that arrive before actual content output.
                 if (!firstTokenReceived) {
                     firstTokenReceived = true;
                     clearTimeout(startupTimer);
-                    this.outputChannel.appendLine('LLM: first token received');
+                    this.outputChannel.appendLine('LLM: first stream data received — model loaded');
                 }
 
                 buffer += decoder.decode(value, { stream: true });
@@ -325,13 +342,41 @@ export class LLMService {
                     }
                     try {
                         const parsed = JSON.parse(data);
-                        const delta = parsed.choices?.[0]?.delta?.content;
-                        if (delta) {
-                            fullContent += delta;
+                        const choice = parsed.choices?.[0];
+                        const delta = choice?.delta;
+
+                        // v10.0: Detect thinking/reasoning tokens
+                        // LM Studio reasoning models may send chunks with:
+                        //   - delta.reasoning_content (thinking phase content)
+                        //   - delta.role only (role announcement before thinking)
+                        //   - empty delta {} (keepalive during model computation)
+                        const reasoningContent = delta?.reasoning_content;
+                        const contentDelta = delta?.content;
+
+                        if (reasoningContent) {
+                            // Reasoning/thinking token — counts as activity but not content
+                            thinkingTokens++;
+                            if (!inThinkingPhase) {
+                                inThinkingPhase = true;
+                                this.outputChannel.appendLine('LLM: entered thinking/reasoning phase');
+                            }
+                        } else if (contentDelta) {
+                            // Actual content token
+                            fullContent += contentDelta;
                             tokensUsed++;
+                            if (inThinkingPhase) {
+                                inThinkingPhase = false;
+                                this.outputChannel.appendLine(
+                                    `LLM: exited thinking phase (${thinkingTokens} thinking tokens) — content streaming`
+                                );
+                            }
+                        } else if (delta && Object.keys(delta).length > 0) {
+                            // Non-empty delta without content (e.g. role announcement) — still alive
+                            thinkingTokens++;
                         }
-                        if (parsed.choices?.[0]?.finish_reason) {
-                            finishReason = parsed.choices[0].finish_reason;
+
+                        if (choice?.finish_reason) {
+                            finishReason = choice.finish_reason;
                         }
                     } catch {
                         // Skip malformed chunks
@@ -339,7 +384,9 @@ export class LLMService {
                 }
             }
 
-            this.outputChannel.appendLine(`LLM response: ${tokensUsed} tokens, finish=${finishReason}`);
+            this.outputChannel.appendLine(
+                `LLM response: ${tokensUsed} content + ${thinkingTokens} thinking tokens, finish=${finishReason}`
+            );
 
             // Output overflow warning (not error) for streaming responses
             if (finishReason === 'length') {
@@ -364,14 +411,23 @@ export class LLMService {
                 errMsg.includes('aborted') || errMsg.includes('abort') ||
                 errStr.includes('AbortError') || errStr.includes('aborted');
             if (isAbort) {
+                const stallSec = this.config.streamStallTimeoutSeconds ?? 180;
                 if (!firstTokenReceived) {
-                    throw new Error(`LLM startup timeout: No response within ${this.config.startupTimeoutSeconds}s`);
+                    throw new Error(
+                        `LLM startup timeout: No response within ${this.config.startupTimeoutSeconds}s. ` +
+                        `Model may still be loading — consider increasing startupTimeoutSeconds.`
+                    );
                 } else if (abortReason === 'stall') {
-                    throw new Error(`LLM stream stalled: No new tokens for 60s. Got ${tokensUsed} tokens before stall.`);
+                    throw new Error(
+                        `LLM stream stalled: No new tokens (content or thinking) for ${stallSec}s. ` +
+                        `Got ${tokensUsed} content + ${thinkingTokens} thinking tokens before stall.`
+                    );
                 } else {
                     // If we got content, return it as a partial response instead of throwing
                     if (fullContent.length > 0) {
-                        this.outputChannel.appendLine(`LLM total timeout reached with ${tokensUsed} tokens — returning partial response`);
+                        this.outputChannel.appendLine(
+                            `LLM total timeout reached with ${tokensUsed} content + ${thinkingTokens} thinking tokens — returning partial response`
+                        );
                         return {
                             content: fullContent,
                             tokens_used: tokensUsed,
@@ -379,7 +435,10 @@ export class LLMService {
                             finish_reason: 'timeout',
                         };
                     }
-                    throw new Error(`LLM total timeout exceeded (${this.config.timeoutSeconds}s). Got ${tokensUsed} tokens.`);
+                    throw new Error(
+                        `LLM total timeout exceeded (${this.config.timeoutSeconds}s). ` +
+                        `Got ${tokensUsed} content + ${thinkingTokens} thinking tokens.`
+                    );
                 }
             }
             throw error;

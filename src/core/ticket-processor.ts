@@ -2405,7 +2405,28 @@ export class TicketProcessorService {
                             reason: reviewResponse.content,
                         });
 
-                        // v4.1 / v5.0: Create AI feedback question with DETAILED info so user sees it in the queue
+                        // v10.0: Route through User Communication Agent (#18) for user-facing messages
+                        // The User Communication Agent tailors the review feedback based on user profile,
+                        // programming level, and communication preferences before presenting to the user.
+                        try {
+                            const userCommResponse = await this.orchestrator.callAgent(
+                                'user_communication',
+                                `Route review feedback to user for TK-${ticket.ticket_number}: "${ticket.title}"\n\nReview verdict: ${reviewResponse.content.substring(0, 500)}`,
+                                { conversationHistory: [] }
+                            );
+                            // Add the user comm agent's tailored reply to the ticket
+                            if (userCommResponse.content) {
+                                this.database.addTicketReply(ticketId, 'user_communication',
+                                    userCommResponse.content);
+                            }
+                        } catch (ucErr) {
+                            /* istanbul ignore next */
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] UserCommunicationAgent non-fatal error: ${ucErr}`
+                            );
+                        }
+
+                        // v4.1 / v5.0 / v10.0: Create AI feedback question with DETAILED info
                         try {
                             const planId = this.findPlanIdForTicket(ticket);
                             if (planId) {
@@ -2465,7 +2486,7 @@ export class TicketProcessorService {
                                     is_ghost: false,
                                     queue_priority: 1,
                                 });
-                                // v4.3: Async-rewrite into friendly language
+                                // v4.3 / v10.0: Async-rewrite into friendly language via Clarity + User Comm
                                 this.rewriteQuestionForUser(createdQ.id, rawQuestion, 'Review Agent');
                                 this.eventBus.emit('question:created', 'ticket-processor', {
                                     ticketId, reason: 'review_flagged',
@@ -2478,7 +2499,7 @@ export class TicketProcessorService {
                         }
 
                         this.outputChannel.appendLine(
-                            `[TicketProcessor] TK-${ticket.ticket_number} flagged for user review`
+                            `[TicketProcessor] TK-${ticket.ticket_number} flagged for user review (routed via Review + UserComm agents)`
                         );
                         return true; // Successfully processed (held for user)
                     }

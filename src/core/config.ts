@@ -9,8 +9,8 @@ const DEFAULT_CONFIG: COEConfig = {
         endpoint: 'http://192.168.1.205:1234/v1',
         model: 'mistralai/ministral-3-14b-reasoning',
         timeoutSeconds: 1800,
-        startupTimeoutSeconds: 300,
-        streamStallTimeoutSeconds: 60,
+        startupTimeoutSeconds: 600,      // v10.0: 10 min — LM Studio model loading can take this long
+        streamStallTimeoutSeconds: 180,   // v10.0: 3 min — reasoning/thinking tokens can have long gaps
         maxTokens: 25000,
         maxInputTokens: 4000,
         maxConcurrentRequests: 4,   // v6.0: LM Studio can handle 4 simultaneous threads

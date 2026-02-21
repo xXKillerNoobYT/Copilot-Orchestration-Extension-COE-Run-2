@@ -43,7 +43,7 @@ The developer is the **designer** — they provide the vision, the architecture,
 
 - **Endpoint**: `http://192.168.1.205:1234/v1` (LM Studio on local network)
 - **Model**: `mistralai/ministral-3-14b-reasoning`
-- **Timeouts**: startup 300s, stall 120s, total 900s
+- **Timeouts**: startup 600s (10 min model load), stall 180s (thinking tokens), total 1800s
 - **Database**: `.coe/tickets.db` (SQLite, WAL mode)
 - **MCP Port**: 3030 (auto-increments if busy)
 

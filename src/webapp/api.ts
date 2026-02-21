@@ -1224,47 +1224,177 @@ export async function handleApiRequest(
                 eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
                 database.addAuditLog('planning', 'plan_created', `Plan "${name}": ${parsed.tasks.length} tasks`);
 
+                // v10.0: Build rich parent ticket body with ALL wizard context
+                const parentBodyParts: string[] = [
+                    `**Master ticket for plan "${name}"**`,
+                    '',
+                    `**Plan ID**: ${plan.id}`,
+                    `**Scale**: ${scale}`,
+                    `**Focus**: ${focus}`,
+                    `**AI Level**: ${aiLevel}`,
+                    `**Tasks Generated**: ${parsed.tasks.length}`,
+                    '',
+                    '---',
+                    '',
+                    '**Project Description**:',
+                    description,
+                ];
+                // Wizard design details
+                if (wizPages.length > 0) parentBodyParts.push('', `**Pages/Screens**: ${wizPages.join(', ')}`);
+                if (wizRoles.length > 0) parentBodyParts.push(`**User Roles**: ${wizRoles.join(', ')}`);
+                if (wizFeatures.length > 0) parentBodyParts.push(`**Core Features**: ${wizFeatures.join(', ')}`);
+                parentBodyParts.push(`**Tech Stack**: ${wizTechStack}`);
+                parentBodyParts.push(`**Layout**: ${(design as Record<string, unknown>).layout || 'sidebar'}`);
+                parentBodyParts.push(`**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`);
+                if (priorities.length > 0) parentBodyParts.push(`**Priorities**: ${priorities.join(', ')}`);
+                // Reference documents summary
+                if (planFileContext) {
+                    parentBodyParts.push('', '---', '', '**Reference Documents Attached**: Yes (included in LLM context)');
+                    const fileNames = planFileContext.split('---').filter(s => s.trim() && !s.includes('==='));
+                    if (fileNames.length > 0) parentBodyParts.push(`**Document Count**: ~${fileNames.length} file(s)`);
+                }
+                // Task summary table
+                if (parsed.tasks.length > 0) {
+                    parentBodyParts.push('', '---', '', '**Generated Tasks**:');
+                    const p1Tasks = parsed.tasks.filter(t => t.priority === 'P1');
+                    const p2Tasks = parsed.tasks.filter(t => t.priority === 'P2');
+                    const p3Tasks = parsed.tasks.filter(t => t.priority === 'P3');
+                    if (p1Tasks.length > 0) parentBodyParts.push(`- P1 (Critical): ${p1Tasks.length} tasks`);
+                    if (p2Tasks.length > 0) parentBodyParts.push(`- P2 (Important): ${p2Tasks.length} tasks`);
+                    if (p3Tasks.length > 0) parentBodyParts.push(`- P3 (Nice-to-have): ${p3Tasks.length} tasks`);
+                    const totalMinutes = parsed.tasks.reduce((sum, t) => sum + (t.estimated_minutes || 30), 0);
+                    parentBodyParts.push(`- **Total Estimated Time**: ${Math.round(totalMinutes / 60 * 10) / 10} hours (${totalMinutes} min)`);
+                }
+                const parentBody = parentBodyParts.join('\n');
+
                 // Update the early ticket with results (ticket-first pattern)
                 if (earlyParentTicket) {
                     database.updateTicket(earlyParentTicket.id, {
                         title: 'Plan: ' + name + ' \u2014 Design & Implementation',
-                        body: 'Master ticket for plan "' + name + '". Scale: ' + scale + ', Focus: ' + focus + '. ' + parsed.tasks.length + ' tasks generated.\n\nAI Assistance Level: ' + aiLevel,
+                        body: parentBody,
                         status: TicketStatus.InReview,
                     });
                 }
+
+                // v10.0: Helper to emit ticket:created so Boss Agent picks up sub-tickets
+                const emitSubTicket = (ticket: { id: string; ticket_number: number } | null) => {
+                    if (ticket) {
+                        eventBus.emit('ticket:created', 'webapp', { ticketId: ticket.id, ticketNumber: ticket.ticket_number });
+                    }
+                };
+
                 const parentAutoTicket = earlyParentTicket;
                 if (parentAutoTicket) {
-                    // Phase sub-tickets
+                    // Phase sub-tickets — each with rich context and plan references
+                    const configBody = [
+                        'Wizard configuration completed.',
+                        '',
+                        `**Plan**: ${name} (${plan.id})`,
+                        `**Scale**: ${scale}`,
+                        `**Focus**: ${focus}`,
+                        `**Layout**: ${(design as Record<string, unknown>).layout || 'sidebar'}`,
+                        `**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`,
+                        `**Tech Stack**: ${wizTechStack}`,
+                        wizPages.length > 0 ? `**Pages**: ${wizPages.join(', ')}` : '',
+                        wizRoles.length > 0 ? `**User Roles**: ${wizRoles.join(', ')}` : '',
+                        wizFeatures.length > 0 ? `**Features**: ${wizFeatures.join(', ')}` : '',
+                        priorities.length > 0 ? `**Priorities**: ${priorities.join(', ')}` : '',
+                        planFileContext ? '\n**Reference documents**: Attached to plan' : '',
+                    ].filter(Boolean).join('\n');
                     const configTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Configuration', 'Wizard completed. Scale: ' + scale + ', Focus: ' + focus + ', Layout: ' + (design.layout || 'sidebar') + ', Theme: ' + (design.theme || 'dark'),
+                        'Phase: Configuration', configBody,
                         'P2', aiLevel, parentAutoTicket.id);
+                    emitSubTicket(configTicket);
 
+                    // Task generation phase — summarize all tasks
+                    const taskSummaryLines = parsed.tasks.map((t, i) =>
+                        `${i + 1}. **${t.title}** [${t.priority || 'P2'}] (~${t.estimated_minutes || 30}min)` +
+                        (t.acceptance_criteria ? `\n   Acceptance: ${t.acceptance_criteria}` : '')
+                    );
+                    const taskGenBody = [
+                        `AI generated ${parsed.tasks.length} implementation tasks.`,
+                        '',
+                        `**Plan**: ${name} (${plan.id})`,
+                        '',
+                        '**Task Breakdown**:',
+                        ...taskSummaryLines,
+                    ].join('\n');
                     const taskGenTicket = createAutoTicket(database, 'plan_generation',
-                        'Phase: Task Generation', 'AI generated ' + parsed.tasks.length + ' implementation tasks from project description.',
+                        'Phase: Task Generation', taskGenBody,
                         'P2', aiLevel, parentAutoTicket.id);
+                    emitSubTicket(taskGenTicket);
 
-                    // Create a sub-ticket for each generated task
+                    // Create a sub-ticket for each generated task with full context
                     if (taskGenTicket) {
                         for (const t of parsed.tasks) {
-                            createAutoTicket(database, 'plan_generation',
-                                'Task: ' + t.title,
-                                (t.description || '') + '\n\nPriority: ' + (t.priority || 'P2') + '\nEstimate: ' + (t.estimated_minutes || 30) + ' min' +
-                                (t.acceptance_criteria ? '\nAcceptance: ' + t.acceptance_criteria : ''),
+                            const taskBody = [
+                                t.description || '',
+                                '',
+                                `**Plan**: ${name} (${plan.id})`,
+                                `**Priority**: ${t.priority || 'P2'}`,
+                                `**Estimate**: ${t.estimated_minutes || 30} min`,
+                                t.acceptance_criteria ? `**Acceptance Criteria**: ${t.acceptance_criteria}` : '',
+                                (t.depends_on_titles && t.depends_on_titles.length > 0) ? `**Dependencies**: ${t.depends_on_titles.join(', ')}` : '',
+                                `**Tech Stack**: ${wizTechStack}`,
+                            ].filter(Boolean).join('\n');
+                            const taskTicket = createAutoTicket(database, 'plan_generation',
+                                'Task: ' + t.title, taskBody,
                                 (t.priority || 'P2'), aiLevel, taskGenTicket.id);
+                            emitSubTicket(taskTicket);
                         }
                     }
 
-                    createAutoTicket(database, 'plan_generation',
-                        'Phase: Design Layout', 'AI will generate visual layout with components for each page.',
+                    // Design layout phase — reference pages and features
+                    const designBody = [
+                        'Generate visual layout with components for each page.',
+                        '',
+                        `**Plan**: ${name} (${plan.id})`,
+                        `**Layout Style**: ${(design as Record<string, unknown>).layout || 'sidebar'}`,
+                        `**Theme**: ${(design as Record<string, unknown>).theme || 'dark'}`,
+                        wizPages.length > 0 ? `**Pages to Design**: ${wizPages.join(', ')}` : '**Pages**: Default (Dashboard)',
+                        wizRoles.length > 0 ? `**User Roles to Support**: ${wizRoles.join(', ')}` : '',
+                        wizFeatures.length > 0 ? `**Features to Include**: ${wizFeatures.join(', ')}` : '',
+                        `**Tech Stack**: ${wizTechStack}`,
+                        '',
+                        '**Deliverables**: Page layouts, component hierarchy, navigation structure, responsive breakpoints.',
+                    ].filter(Boolean).join('\n');
+                    const designTicket = createAutoTicket(database, 'plan_generation',
+                        'Phase: Design Layout', designBody,
                         'P2', aiLevel, parentAutoTicket.id);
+                    emitSubTicket(designTicket);
 
-                    createAutoTicket(database, 'plan_generation',
-                        'Phase: Data Models', 'Data models need to be created and bound to components.',
+                    // Data models phase
+                    const dataModelBody = [
+                        'Create data models and bind them to UI components.',
+                        '',
+                        `**Plan**: ${name} (${plan.id})`,
+                        `**Tech Stack**: ${wizTechStack}`,
+                        wizFeatures.length > 0 ? `**Features Requiring Data Models**: ${wizFeatures.join(', ')}` : '',
+                        wizRoles.length > 0 ? `**User Roles (for access control models)**: ${wizRoles.join(', ')}` : '',
+                        '',
+                        '**Deliverables**: Entity schemas, relationships, API endpoints, validation rules.',
+                    ].filter(Boolean).join('\n');
+                    const dataModelTicket = createAutoTicket(database, 'plan_generation',
+                        'Phase: Data Models', dataModelBody,
                         'P3', aiLevel, parentAutoTicket.id);
+                    emitSubTicket(dataModelTicket);
 
-                    createAutoTicket(database, 'plan_generation',
-                        'Phase: Code Generation', 'Send finalized design to coding agent for implementation.',
+                    // Code generation phase
+                    const codeGenBody = [
+                        'Send finalized design to coding agent for implementation.',
+                        '',
+                        `**Plan**: ${name} (${plan.id})`,
+                        `**Tech Stack**: ${wizTechStack}`,
+                        `**Total Tasks**: ${parsed.tasks.length}`,
+                        `**Focus**: ${focus}`,
+                        '',
+                        '**Prerequisites**: Design Layout and Data Models phases must complete first.',
+                        '**Deliverables**: Source code files, unit tests, integration tests, build configuration.',
+                    ].join('\n');
+                    const codeGenTicket = createAutoTicket(database, 'plan_generation',
+                        'Phase: Code Generation', codeGenBody,
                         'P2', aiLevel, parentAutoTicket.id);
+                    emitSubTicket(codeGenTicket);
                 }
 
                 json(res, { plan: database.getPlan(plan.id), taskCount: parsed.tasks.length, tasks: database.getTasksByPlan(plan.id) }, 201);
@@ -1283,19 +1413,41 @@ export async function handleApiRequest(
             eventBus.emit('plan:created', 'webapp', { planId: plan.id, name: plan.name });
             database.addAuditLog('planning', 'plan_created', `Plan "${name}": created without AI tasks (${genError})`);
 
+            // v10.0: Enrich error-path ticket with full wizard context too
+            const errorBodyParts: string[] = [
+                `Plan "${name}" was created successfully but AI could not auto-generate structured tasks.`,
+                '',
+                `**Reason**: ${genError}`,
+                detail,
+                '',
+                'You can retry AI generation or add tasks manually.',
+                '',
+                '---',
+                '',
+                `**Plan ID**: ${plan.id}`,
+                `**Scale**: ${scale}`,
+                `**Focus**: ${focus}`,
+                `**AI Level**: ${aiLevel}`,
+                `**Tech Stack**: ${wizTechStack}`,
+            ];
+            if (wizPages.length > 0) errorBodyParts.push(`**Pages**: ${wizPages.join(', ')}`);
+            if (wizRoles.length > 0) errorBodyParts.push(`**User Roles**: ${wizRoles.join(', ')}`);
+            if (wizFeatures.length > 0) errorBodyParts.push(`**Features**: ${wizFeatures.join(', ')}`);
+            if (priorities.length > 0) errorBodyParts.push(`**Priorities**: ${priorities.join(', ')}`);
+            errorBodyParts.push(`**Description**: ${description}`);
+            const errorBody = errorBodyParts.join('\n');
+
             // Update early ticket to reflect partial success (plan created, tasks need manual addition or retry)
             if (earlyParentTicket) {
                 database.updateTicket(earlyParentTicket.id, {
                     title: 'Plan: ' + name + ' \u2014 Needs Task Generation',
-                    body: 'Plan "' + name + '" was created successfully but AI could not auto-generate structured tasks.\nReason: ' + genError + '\n' + detail +
-                        '\n\nYou can retry AI generation or add tasks manually.' +
-                        '\n\nScale: ' + scale + ', Focus: ' + focus + '\nAI Level: ' + aiLevel,
+                    body: errorBody,
                     status: TicketStatus.InReview,
                 });
             } else {
                 createAutoTicket(database, 'plan_generation',
                     'Plan: ' + name + ' \u2014 Needs Task Generation',
-                    'Plan created but AI task generation needs retry.\nReason: ' + genError + '\n' + detail,
+                    errorBody,
                     'P2', aiLevel);
             }
 
@@ -2720,17 +2872,69 @@ Only return the JSON array, nothing else.`;
             if (!updated) { json(res, { error: 'Question not found' }, 404); return true; }
             eventBus.emit('ai:question_answered', 'webapp', { questionId: answerQuestionId });
 
-            // v4.1: If this question is linked to a ticket, unblock it
+            // v10.0: Smart handling of review feedback answers — differentiate approve/reprocess/skip
             const question = database.getAIQuestion(answerQuestionId);
             if (question && (question as any).source_ticket_id) {
                 const linkedTicket = database.getTicket((question as any).source_ticket_id);
                 if (linkedTicket && linkedTicket.processing_status === 'holding') {
-                    database.updateTicket(linkedTicket.id, {
-                        processing_status: 'queued',
-                    });
-                    database.addTicketReply(linkedTicket.id, 'system',
-                        `User answered AI feedback question — ticket unblocked. Answer: ${answerValue.substring(0, 200)}`);
-                    eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
+                    const answerLower = answerValue.toLowerCase();
+                    const isApprove = answerLower.includes('approve') || answerLower.includes('looks good');
+                    const isReprocess = answerLower.includes('reprocess') || answerLower.includes('needs changes') || answerLower.includes('redo');
+                    const isSkip = answerLower.includes('skip') || answerLower.includes('cancel') || answerLower.includes('dismiss');
+
+                    if (isApprove) {
+                        // User approved — resolve the ticket with a detailed reply
+                        database.updateTicket(linkedTicket.id, {
+                            status: TicketStatus.Resolved,
+                            processing_status: null as any,
+                        });
+                        database.addTicketReply(linkedTicket.id, 'user',
+                            `User approved review feedback: "${answerValue.substring(0, 300)}"`);
+                        database.addTicketReply(linkedTicket.id, 'system',
+                            `Ticket approved by user via AI Feedback queue. Marking as resolved.`);
+                        eventBus.emit('ticket:resolved', 'webapp', {
+                            ticketId: linkedTicket.id,
+                            ticketNumber: linkedTicket.ticket_number,
+                            reason: 'user_approved_review',
+                        });
+                    } else if (isReprocess) {
+                        // User wants changes — re-queue the ticket for reprocessing
+                        database.updateTicket(linkedTicket.id, {
+                            status: TicketStatus.Open,
+                            processing_status: 'queued',
+                        });
+                        database.addTicketReply(linkedTicket.id, 'user',
+                            `User requested reprocessing: "${answerValue.substring(0, 300)}"`);
+                        database.addTicketReply(linkedTicket.id, 'system',
+                            `Ticket re-queued for reprocessing per user feedback. Changes requested will be addressed in the next processing cycle.`);
+                        eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
+                    } else if (isSkip) {
+                        // User wants to skip — cancel the ticket with a reply
+                        database.updateTicket(linkedTicket.id, {
+                            status: TicketStatus.Cancelled,
+                            processing_status: null as any,
+                            cancellation_reason: `Skipped by user: ${answerValue.substring(0, 200)}`,
+                        });
+                        database.addTicketReply(linkedTicket.id, 'user',
+                            `User chose to skip this ticket: "${answerValue.substring(0, 300)}"`);
+                        database.addTicketReply(linkedTicket.id, 'system',
+                            `Ticket cancelled per user request via AI Feedback. Can be re-engaged later by Boss AI.`);
+                        eventBus.emit('ticket:cancelled', 'webapp', {
+                            ticketId: linkedTicket.id,
+                            ticketNumber: linkedTicket.ticket_number,
+                            reason: 'user_skipped_review',
+                        });
+                    } else {
+                        // Generic answer — unblock and let Boss AI decide (backward compatible)
+                        database.updateTicket(linkedTicket.id, {
+                            processing_status: 'queued',
+                        });
+                        database.addTicketReply(linkedTicket.id, 'user',
+                            `User feedback: "${answerValue.substring(0, 300)}"`);
+                        database.addTicketReply(linkedTicket.id, 'system',
+                            `User provided feedback — ticket unblocked for Boss AI to evaluate and route.`);
+                        eventBus.emit('ticket:unblocked', 'webapp', { ticketId: linkedTicket.id });
+                    }
                 }
             }
 

@@ -308,8 +308,8 @@
         },
         "coe.llm.startupTimeoutSeconds": {
           "type": "number",
-          "default": 300,
-          "description": "Timeout waiting for first token from LLM"
+          "default": 600,
+          "description": "Timeout waiting for first token from LLM (600s = 10 min for cold model loading)"
         },
         "coe.llm.maxTokens": {
           "type": "number",
@@ -318,8 +318,8 @@
         },
         "coe.llm.streamStallTimeoutSeconds": {
           "type": "number",
-          "default": 60,
-          "description": "Liveness check interval in seconds — aborts only if zero new tokens in this period"
+          "default": 180,
+          "description": "Liveness check interval — aborts if zero new tokens (content or thinking) in this period"
         },
         "coe.taskQueue.maxPending": {
           "type": "number",

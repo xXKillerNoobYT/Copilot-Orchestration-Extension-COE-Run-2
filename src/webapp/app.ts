@@ -4201,21 +4201,199 @@ async function activatePlan(id) {
 }
 
 // ==================== AGENTS ====================
+var agentDescriptions = {
+    planning: { desc: 'Creates structured plans, breaks requirements into 15-45 min atomic tasks', icon: '\uD83D\uDCCB', caps: ['plan_creation', 'task_decomposition', 'roadmap'] },
+    verification: { desc: 'Validates completed work against acceptance criteria using real test results', icon: '\u2705', caps: ['test_validation', 'acceptance_checking', 'quality_verification'] },
+    answer: { desc: 'Evidence-based answers to coding/design questions with source citations', icon: '\uD83D\uDCA1', caps: ['question_answering', 'code_explanation', 'documentation_lookup'] },
+    research: { desc: 'Deep investigation, comparison, benchmarking, trade-off evaluation', icon: '\uD83D\uDD0D', caps: ['investigation', 'comparison', 'benchmarking'] },
+    clarity: { desc: 'Reviews messages for clarity, scores 0-100, requests clarifications', icon: '\uD83D\uDD0E', caps: ['clarity_scoring', 'message_review', 'requirement_clarification'] },
+    boss: { desc: 'Top-level manager. Monitors health, manages queues, allocates resources', icon: '\uD83D\uDC51', caps: ['system_health', 'queue_management', 'priority_setting'] },
+    review: { desc: 'Auto-reviews deliverables. Simple >=70%, moderate >=85%, complex -> user', icon: '\uD83D\uDCDD', caps: ['deliverable_review', 'quality_scoring', 'auto_approval'] },
+    design_architect: { desc: 'Frontend design review. 6-category scoring (0-100)', icon: '\uD83C\uDFA8', caps: ['design_review', 'page_hierarchy', 'design_scoring'] },
+    frontend_architect: { desc: 'Frontend design review. 6-category scoring (0-100)', icon: '\uD83C\uDFA8', caps: ['design_review', 'page_hierarchy', 'design_scoring'] },
+    backend_architect: { desc: 'Backend architecture review. 8-category scoring, 3 modes', icon: '\u2699\uFE0F', caps: ['backend_review', 'api_design', 'schema_review'] },
+    gap_hunter: { desc: 'Finds missing components and coverage gaps. 15 FE + 5 BE checks', icon: '\uD83E\uDD43', caps: ['gap_analysis', 'completeness_check', 'coverage_analysis'] },
+    design_hardener: { desc: 'Creates draft proposals for missing elements', icon: '\uD83D\uDEE1\uFE0F', caps: ['draft_creation', 'gap_filling', 'component_proposals'] },
+    decision_memory: { desc: 'Tracks decisions in 13 categories. Deduplicates, auto-answers', icon: '\uD83E\uDDE0', caps: ['decision_tracking', 'conflict_detection', 'auto_answer'] },
+    coding_director: { desc: 'Interfaces with external coding agents. Manages task handoff', icon: '\uD83D\uDCBB', caps: ['code_generation', 'task_handoff', 'coding_queue'] },
+    ui_testing: { desc: 'Visual/layout/component/e2e tests', icon: '\uD83E\uDDEA', caps: ['ui_testing', 'visual_testing', 'e2e_testing'] },
+    observation: { desc: 'System health, improvement detection, tech debt patterns', icon: '\uD83D\uDC41\uFE0F', caps: ['system_review', 'improvement_detection', 'pattern_detection'] },
+    custom: { desc: 'User-created specialized agents', icon: '\uD83D\uDD27', caps: ['custom_processing'] },
+    user_communication: { desc: 'Mediates ALL system-to-user messages. Profile-based routing', icon: '\uD83D\uDCE8', caps: ['message_routing', 'question_rewriting', 'profile_filtering'] },
+    orchestrator: { desc: 'Central router. Classifies intents, delegates to specialist agents', icon: '\uD83C\uDFAF', caps: ['intent_classification', 'agent_routing', 'error_boundaries'] }
+};
+
+function formatTimeAgo(dateStr) {
+    if (!dateStr) return '';
+    var d = new Date(dateStr);
+    var now = new Date();
+    var diff = Math.floor((now.getTime() - d.getTime()) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+}
+
 async function loadAgents() {
+    var container = document.getElementById('agentCards');
+    if (!container) return;
     try {
-        const result = await api('agents');
-        const agents = Array.isArray(result) ? result : [];
-        document.getElementById('agentCards').innerHTML = agents.map(a =>
-            '<div class="card">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center">' +
-            '<strong>' + esc(a.name) + '</strong>' + statusBadge(a.status) + '</div>' +
-            '<div class="lbl" style="margin-top:8px">Type: ' + esc(a.type) + '</div>' +
-            (a.current_task ? '<div class="lbl">Task: ' + esc(a.current_task) + '</div>' : '') +
-            (a.last_activity ? '<div class="lbl">Last: ' + esc(a.last_activity) + '</div>' : '') +
-            '</div>'
-        ).join('') || '<div class="empty">No agents registered</div>';
+        var result = await api('agents');
+        var agents = Array.isArray(result) ? result : (result && result.data ? result.data : []);
+        if (agents.length === 0) {
+            // Note: textContent can't render styled empty states, using innerHTML with static content only
+            container.textContent = '';
+            var emptyDiv = document.createElement('div');
+            emptyDiv.className = 'empty';
+            emptyDiv.textContent = 'No agents registered';
+            container.appendChild(emptyDiv);
+            return;
+        }
+
+        // Sort: working/active first, then idle
+        var statusOrder = { working: 0, active: 1, error: 2, idle: 3, disabled: 4 };
+        agents.sort(function(a, b) {
+            var oa = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 3;
+            var ob = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 3;
+            if (oa !== ob) return oa - ob;
+            return (a.name || '').localeCompare(b.name || '');
+        });
+
+        container.textContent = '';
+        agents.forEach(function(a) {
+            var info = agentDescriptions[a.type] || agentDescriptions[a.name] || { desc: 'Specialized agent', icon: '\uD83E\uDD16', caps: [] };
+            var isActive = a.status === 'working' || a.status === 'active';
+            var isError = a.status === 'error' || a.status === 'failed';
+            var statusColors = { idle: '#6c7086', working: '#f9e2af', active: '#89b4fa', error: '#f38ba8', disabled: '#585b70' };
+            var dotColor = statusColors[a.status] || '#6c7086';
+            var borderColor = isActive ? (a.status === 'working' ? '#f9e2af' : '#89b4fa') : (isError ? '#f38ba8' : 'var(--border)');
+            var bgColor = isActive ? (a.status === 'working' ? 'rgba(249,226,175,0.04)' : 'rgba(137,180,250,0.04)') : 'var(--surface)';
+            var timeAgo = formatTimeAgo(a.last_activity);
+
+            // Build card via DOM
+            var card = document.createElement('div');
+            card.style.cssText = 'background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:10px;padding:16px;' +
+                'cursor:pointer;transition:all 0.15s;position:relative;display:flex;flex-direction:column;gap:10px;' +
+                (isActive ? 'box-shadow:0 0 12px ' + borderColor + '33,0 2px 8px rgba(0,0,0,0.15)' : 'box-shadow:0 1px 4px rgba(0,0,0,0.1)');
+            var defaultShadow = card.style.boxShadow;
+            card.onmouseover = function() { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 4px 16px rgba(0,0,0,0.2)'; };
+            card.onmouseout = function() { card.style.transform = ''; card.style.boxShadow = defaultShadow; };
+
+            // Header row: icon + name/type + status dot
+            var header = document.createElement('div');
+            header.style.cssText = 'display:flex;align-items:center;gap:8px';
+
+            var iconSpan = document.createElement('span');
+            iconSpan.style.cssText = 'font-size:1.4em;line-height:1';
+            iconSpan.textContent = info.icon;
+            header.appendChild(iconSpan);
+
+            var nameBlock = document.createElement('div');
+            nameBlock.style.cssText = 'flex:1;min-width:0';
+            var nameEl = document.createElement('strong');
+            nameEl.style.cssText = 'font-size:0.95em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block' + (isActive ? ';color:' + borderColor : '');
+            nameEl.textContent = a.name;
+            nameBlock.appendChild(nameEl);
+            var typeEl = document.createElement('div');
+            typeEl.style.cssText = 'font-size:0.72em;color:var(--subtext);margin-top:1px';
+            typeEl.textContent = a.type;
+            nameBlock.appendChild(typeEl);
+            header.appendChild(nameBlock);
+
+            var statusWrap = document.createElement('div');
+            statusWrap.style.cssText = 'display:flex;align-items:center;gap:5px;flex-shrink:0';
+            var dot = document.createElement('span');
+            dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;background:' + dotColor + (isActive ? ';animation:treePulse 1.5s infinite;box-shadow:0 0 6px ' + dotColor : '');
+            statusWrap.appendChild(dot);
+            var statusLbl = document.createElement('span');
+            statusLbl.style.cssText = 'font-size:0.72em;font-weight:600;color:' + dotColor;
+            statusLbl.textContent = a.status;
+            statusWrap.appendChild(statusLbl);
+            header.appendChild(statusWrap);
+            card.appendChild(header);
+
+            // Description
+            var descEl = document.createElement('div');
+            descEl.style.cssText = 'font-size:0.8em;color:var(--subtext);line-height:1.4';
+            descEl.textContent = info.desc;
+            card.appendChild(descEl);
+
+            // Capabilities tags
+            if (info.caps && info.caps.length > 0) {
+                var capsWrap = document.createElement('div');
+                capsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px';
+                info.caps.forEach(function(cap) {
+                    var tag = document.createElement('span');
+                    tag.style.cssText = 'font-size:0.65em;padding:2px 6px;border-radius:4px;background:var(--surface0);color:var(--subtext);white-space:nowrap';
+                    tag.textContent = cap.replace(/_/g, ' ');
+                    capsWrap.appendChild(tag);
+                });
+                card.appendChild(capsWrap);
+            }
+
+            // Current task + last activity
+            if (a.current_task || timeAgo) {
+                var metaWrap = document.createElement('div');
+                metaWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--border);padding-top:8px;margin-top:2px';
+                if (a.current_task) {
+                    var taskRow = document.createElement('div');
+                    taskRow.style.cssText = 'font-size:0.78em;display:flex;align-items:flex-start;gap:4px';
+                    var arrow = document.createElement('span');
+                    arrow.style.cssText = 'color:var(--blue);flex-shrink:0;font-weight:600';
+                    arrow.textContent = '\u25B6';
+                    taskRow.appendChild(arrow);
+                    var taskText = document.createElement('span');
+                    taskText.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+                    taskText.title = a.current_task;
+                    taskText.textContent = a.current_task;
+                    taskRow.appendChild(taskText);
+                    metaWrap.appendChild(taskRow);
+                }
+                if (timeAgo) {
+                    var timeEl = document.createElement('div');
+                    timeEl.style.cssText = 'font-size:0.72em;color:var(--overlay)';
+                    timeEl.textContent = 'Last active: ' + timeAgo;
+                    metaWrap.appendChild(timeEl);
+                }
+                card.appendChild(metaWrap);
+            }
+
+            // Action buttons
+            var btnWrap = document.createElement('div');
+            btnWrap.style.cssText = 'display:flex;gap:6px;margin-top:auto';
+            var treeBtn = document.createElement('button');
+            treeBtn.className = 'btn btn-sm btn-secondary';
+            treeBtn.style.cssText = 'font-size:0.7em;padding:3px 8px';
+            treeBtn.textContent = '\uD83C\uDF33 Tree';
+            treeBtn.title = 'View in agent tree';
+            treeBtn.onclick = function(e) { e.stopPropagation(); switchAgentSubTab('tree'); };
+            btnWrap.appendChild(treeBtn);
+            var auditBtn = document.createElement('button');
+            auditBtn.className = 'btn btn-sm btn-secondary';
+            auditBtn.style.cssText = 'font-size:0.7em;padding:3px 8px';
+            auditBtn.textContent = '\uD83D\uDCDC Audit';
+            auditBtn.title = 'View audit log';
+            var agentAuditName = a.name.toLowerCase().replace(/ /g, '-');
+            auditBtn.onclick = (function(aName) { return function(e) { e.stopPropagation(); switchTab('system'); setTimeout(function() { loadAudit(1, aName); }, 200); }; })(agentAuditName);
+            btnWrap.appendChild(auditBtn);
+            card.appendChild(btnWrap);
+
+            container.appendChild(card);
+        });
     } catch (err) {
-        document.getElementById('agentCards').innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+        container.textContent = '';
+        var errDiv = document.createElement('div');
+        errDiv.className = 'empty';
+        errDiv.style.color = 'var(--red)';
+        errDiv.textContent = 'Error loading agents: ' + String(err);
+        container.appendChild(errDiv);
+    }
+}
+
+function filterAgentTreeByType(agentType) {
+    var container = document.getElementById('agentTreeView');
+    if (container) {
+        loadAgentTree();
     }
 }
 
@@ -5774,8 +5952,8 @@ function showSettingsSection(section) {
             settingRow('Max Output Tokens', 'Maximum output response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 30000) + '" min="100" max="100000" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
             settingRow('Max Input Tokens', 'Maximum prompt input length (LM Studio limit)', '<input id="setting-llm-maxInputTokens" type="number" value="' + (settingsConfig.llm?.maxInputTokens || 4000) + '" min="500" max="32000" onchange="updateSetting(\\'llm.maxInputTokens\\', +this.value)">', 'setting-llm-maxInputTokens') +
             settingRow('Timeout (seconds)', 'Max total request time', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
-            settingRow('Startup Timeout', 'Wait for model load', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 300) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
-            settingRow('Stream Stall Timeout', 'Max gap between stream chunks', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 120) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
+            settingRow('Startup Timeout', 'Wait for model load (up to 10 min)', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 600) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
+            settingRow('Stream Stall Timeout', 'Max gap between tokens (incl. thinking)', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 180) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
             '</div>',
 
         agents: () => {
@@ -8064,13 +8242,13 @@ async function loadAgentTree() {
         }
         allTreeNodes = nodes;
 
-        // v10.0: Auto-collapse large trees to L3 (Area level) on first load for performance
-        // This prevents rendering 230+ nodes expanded simultaneously
-        if (nodes.length > 50 && Object.keys(treeCollapsedNodes).length === 0) {
+        // v10.0: On first load, collapse ALL parent nodes — the hot path detection
+        // in renderAgentTree() will auto-expand only the active branch chain.
+        // This gives users an "active path only" view by default.
+        if (Object.keys(treeCollapsedNodes).length === 0) {
             nodes.forEach(function(n) {
-                var lvl = typeof n.level === 'number' ? n.level : parseInt(String(n.level).replace('L', '').replace(/_.*/, ''), 10) || 0;
                 var hasKids = nodes.some(function(c) { return c.parent_id === n.id; });
-                if (hasKids && lvl >= 3) {
+                if (hasKids) {
                     treeCollapsedNodes[n.id] = true;
                 }
             });
@@ -8130,8 +8308,8 @@ function renderAgentTree(nodes) {
     });
 
     // ===== ACTIVE BRANCH DETECTION =====
-    // Nodes that are actively working or waiting for children (part of the active branch)
-    var activeStatuses = { active: true, working: true, waiting_child: true };
+    // Nodes that are actively working, waiting, or escalated (part of the active branch)
+    var activeStatuses = { active: true, working: true, waiting_child: true, escalated: true };
     // Build set of all active nodes + their ancestors (the "hot path")
     var hotPathNodes = {};
     function markAncestorsHot(nodeId) {
@@ -8148,8 +8326,15 @@ function renderAgentTree(nodes) {
         }
     });
 
-    // Auto-expand active branches: ensure hot path nodes are NOT collapsed
+    // Auto-expand: always show L0+L1 (Boss + Global), plus entire active branch chain
     var hasActiveNodes = Object.keys(hotPathNodes).length > 0;
+    // Always expand L0 and L1 so the tree isn't just a single collapsed root
+    filtered.forEach(function(n) {
+        if (n._levelNum <= 1 && treeCollapsedNodes[n.id]) {
+            delete treeCollapsedNodes[n.id];
+        }
+    });
+    // Force-expand every node on the hot path (active nodes + all ancestors)
     if (hasActiveNodes) {
         Object.keys(hotPathNodes).forEach(function(id) {
             if (treeCollapsedNodes[id]) {
