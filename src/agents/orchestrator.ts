@@ -373,6 +373,40 @@ If you cannot proceed or information is missing:
     }
 
     /**
+     * v11.2: Direct LLM call with a custom system prompt — bypasses agent system prompts.
+     *
+     * Use this for API-level operations where the prompt is self-contained and should
+     * NOT be mixed with any agent's default system instructions (e.g., design generation,
+     * AI suggestions, question autofill). Still records audit logs and tracks token usage.
+     */
+    async callLLMDirect(systemPrompt: string, userMessage: string, label?: string): Promise<AgentResponse> {
+        const tag = label || 'direct_llm';
+        this.database.addAuditLog('orchestrator', 'direct_llm_call', `Direct LLM call: ${tag}`);
+
+        const messages: LLMMessage[] = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+        ];
+
+        try {
+            const response = await this.llm.chat(messages, {
+                maxTokens: this.config.getModelMaxOutputTokens(),
+            });
+            this.evolutionService?.incrementCallCounter();
+            return {
+                content: response.content,
+                tokensUsed: response.tokens_used,
+                agentName: tag,
+            };
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            this.outputChannel.appendLine(`[Orchestrator] Direct LLM call "${tag}" failed: ${msg}`);
+            this.database.addAuditLog('orchestrator', 'direct_llm_error', `${tag}: ${msg}`);
+            return { content: `Error: ${msg}` };
+        }
+    }
+
+    /**
      * v10.0: Resolve an unregistered agent name to a tree node and call it.
      *
      * When callAgent() receives a name like "CodeExampleWorker" that's not in the

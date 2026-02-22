@@ -42,7 +42,7 @@ export class TicketsViewProvider implements vscode.TreeDataProvider<TicketTreeIt
         if (element.statusGroup) {
             const tickets = this.database.getTicketsByStatus(element.statusGroup);
             return tickets.map(ticket => new TicketTreeItem(
-                `TK-${String(ticket.ticket_number).padStart(3, '0')} [${ticket.priority}] ${ticket.title}`,
+                `TK-${String(ticket.ticket_number).padStart(4, '0')} [${ticket.priority}] ${ticket.title}`,
                 vscode.TreeItemCollapsibleState.None,
                 ticket,
                 this.getPriorityIcon(ticket.priority),

@@ -29,7 +29,9 @@
       "Bash(echo:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(node esbuild.config.js:*)",
+      "Bash(npm run build:server:*)"
     ]
   }
 }

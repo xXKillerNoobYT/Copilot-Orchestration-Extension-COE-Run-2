@@ -15,6 +15,7 @@ import { ComponentSchemaService } from './core/component-schema';
 import { CodingAgentService } from './core/coding-agent';
 import { ConflictResolver } from './core/conflict-resolver';
 import { SyncService } from './core/sync-service';
+import { TicketProcessorService } from './core/ticket-processor';
 
 export interface CommandDeps {
     database: Database;
@@ -32,6 +33,8 @@ export interface CommandDeps {
     codingAgentService?: CodingAgentService;
     conflictResolver?: ConflictResolver;
     syncService?: SyncService;
+    // v11.0: ticket processor for pause/resume/reset
+    ticketProcessor?: TicketProcessorService;
 }
 
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
@@ -955,6 +958,79 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
             const port = mcpServer.getPort();
             const url = vscode.Uri.parse(`http://localhost:${port}/app#coding`);
             vscode.env.openExternal(url);
+        }),
+    );
+
+    // --- v11.0: Processing Control & Reset Commands ---
+    // Set initial context key for the sidebar stop/start toggle button
+    vscode.commands.executeCommand('setContext', 'coe.isProcessing', true);
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('coe.stopProcessing', () => {
+            if (deps.ticketProcessor) {
+                deps.ticketProcessor.pause();
+                vscode.commands.executeCommand('setContext', 'coe.isProcessing', false);
+                statusView.refresh();
+                vscode.window.showInformationMessage('COE: Processing stopped. Tickets will not be processed until you resume.');
+            }
+        }),
+
+        vscode.commands.registerCommand('coe.startProcessing', () => {
+            if (deps.ticketProcessor) {
+                deps.ticketProcessor.resume();
+                vscode.commands.executeCommand('setContext', 'coe.isProcessing', true);
+                statusView.refresh();
+                vscode.window.showInformationMessage('COE: Processing resumed.');
+            }
+        }),
+
+        vscode.commands.registerCommand('coe.resetDatabase', async () => {
+            const confirm = await vscode.window.showWarningMessage(
+                '⚠️ This will DELETE ALL data (tickets, tasks, plans, agents) and start completely fresh. This cannot be undone.',
+                { modal: true },
+                'Delete Everything & Restart'
+            );
+            if (confirm !== 'Delete Everything & Restart') return;
+
+            try {
+                // 1. Pause processing
+                if (deps.ticketProcessor) {
+                    deps.ticketProcessor.pause();
+                    vscode.commands.executeCommand('setContext', 'coe.isProcessing', false);
+                }
+
+                // 2. Close database connection
+                database.close();
+
+                // 3. Delete the .coe directory
+                const coeDir = configManager.getCOEDir();
+                const fs = require('fs');
+                if (fs.existsSync(coeDir)) {
+                    fs.rmSync(coeDir, { recursive: true, force: true });
+                    outputChannel.appendLine(`[Reset] Deleted ${coeDir}`);
+                }
+
+                // 4. Reinitialize config (recreates .coe directory and config.json)
+                await configManager.initialize();
+
+                // 5. Reinitialize database (creates fresh tables)
+                await database.reinitialize();
+
+                outputChannel.appendLine('[Reset] Database reinitialized from scratch.');
+                vscode.window.showInformationMessage(
+                    'COE: Database reset complete. Reload the window to fully reinitialize all services.',
+                    'Reload Window'
+                ).then(choice => {
+                    if (choice === 'Reload Window') {
+                        vscode.commands.executeCommand('workbench.action.reloadWindow');
+                    }
+                });
+
+                refreshAll();
+            } catch (err) {
+                outputChannel.appendLine(`[Reset] Error: ${err}`);
+                vscode.window.showErrorMessage(`Reset failed: ${err}. Try reloading the window.`);
+            }
         }),
     );
 }

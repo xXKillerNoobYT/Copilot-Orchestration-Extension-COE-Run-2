@@ -267,6 +267,21 @@
       {
         "command": "coe.generateCode",
         "title": "COE: Generate Code from Design"
+      },
+      {
+        "command": "coe.stopProcessing",
+        "title": "COE: Stop Processing",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "coe.startProcessing",
+        "title": "COE: Start Processing",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "coe.resetDatabase",
+        "title": "COE: Reset Database (Full Wipe)",
+        "icon": "$(trash)"
       }
     ],
     "viewsWelcome": [
@@ -278,6 +293,16 @@
     "menus": {
       "view/title": [
         {
+          "command": "coe.stopProcessing",
+          "when": "view == coe-status && coe.isProcessing",
+          "group": "navigation"
+        },
+        {
+          "command": "coe.startProcessing",
+          "when": "view == coe-status && !coe.isProcessing",
+          "group": "navigation"
+        },
+        {
           "command": "coe.openApp",
           "when": "view == coe-status",
           "group": "navigation"
@@ -286,6 +311,11 @@
           "command": "coe.refreshStatus",
           "when": "view == coe-status",
           "group": "navigation"
+        },
+        {
+          "command": "coe.resetDatabase",
+          "when": "view == coe-status",
+          "group": "2_manage"
         }
       ]
     },

@@ -133,6 +133,11 @@ export interface AgentTreeManagerLike {
     getNode?(id: string): import('../types').AgentTreeNode | null;
 }
 
+/** v11.0: Minimal interface for BootstrapExecutor — executes bootstrap tickets deterministically */
+export interface BootstrapExecutorLike {
+    execute(ticket: Ticket): Promise<{ success: boolean; message: string; details?: Record<string, unknown> } | null>;
+}
+
 interface QueuedTicket {
     ticketId: string;
     priority: string;
@@ -268,6 +273,17 @@ function routeTicketToPipeline(ticket: Ticket): AgentPipeline | null {
         };
     }
 
+    // v11.0: System bootstrap tickets — internal system operations (build tree, seed agents, etc.)
+    // These go directly to the orchestrator which handles them via its internal logic.
+    if (op === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap') {
+        return {
+            steps: [
+                { agentName: 'orchestrator', deliverableType: 'system_operation', stage: 0 },
+            ],
+            deliverableType: 'system_operation',
+        };
+    }
+
     // --- All other tickets get orchestrator as first and last agent ---
     const orchFirst: AgentRoute = { agentName: 'orchestrator', deliverableType: 'assessment', stage: 0 };
     const orchLast: AgentRoute = { agentName: 'orchestrator', deliverableType: 'completion_review', stage: 99 };
@@ -400,6 +416,15 @@ function routeTicketViaTree(
     // Phase: Configuration — always skipped
     if (title.startsWith('phase: configuration')) return null;
 
+    // v11.0: System bootstrap tickets are internal operations (build tree, seed agents, etc.)
+    // They must bypass the niche agent tree and use the deterministic orchestrator pipeline.
+    if (op === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap') {
+        outputChannel.appendLine(
+            `[TicketProcessor] Bootstrap ticket TK-${ticket.ticket_number} bypasses tree routing → deterministic pipeline`
+        );
+        return null;
+    }
+
     // No tree manager available — fallback
     if (!treeMgr || !treeMgr.findBestLeaf) {
         return null;
@@ -491,6 +516,8 @@ export class TicketProcessorService {
     private disposed = false;
     // v5.0: Guard against kickBossCycle() during startup assessment LLM call
     private startupAssessmentRunning = false;
+    // v10.0: Single-instance guard — only one bossCycle() can run at a time
+    private bossCycleRunning = false;
     private kickRequestedDuringStartup = false;
     // v10.0: Circuit breaker — pauses queue processing after consecutive failures
     private consecutiveProcessingFailures = 0;
@@ -513,8 +540,16 @@ export class TicketProcessorService {
     private documentManager: DocumentManagerLike | null = null;
     /** v9.0: Agent tree manager for live status tracking during ticket processing */
     private agentTreeMgr: AgentTreeManagerLike | null = null;
+    /** v11.0: Bootstrap executor for deterministic system_operation execution */
+    private bootstrapExecutor: BootstrapExecutorLike | null = null;
     /** v11.0: Ticket tagger for deterministic category/stage enforcement */
     private ticketTagger = new TicketTagger();
+    /** v11.0: Bootstrap-first guard — cached result, cleared when bootstrap completes */
+    private bootstrapComplete = false;
+    /** v11.0: Whether bootstrap tickets exist at all (no bootstrap = no guard needed) */
+    private bootstrapExists: boolean | null = null;
+    /** v11.0: User-initiated pause — stops boss cycle and slot filling, keeps event listeners */
+    private paused = false;
 
     constructor(
         private database: Database,
@@ -544,6 +579,142 @@ export class TicketProcessorService {
     setAgentTreeManager(atm: AgentTreeManagerLike): void {
         this.agentTreeMgr = atm;
         this.outputChannel.appendLine('[TicketProcessor] AgentTreeManager injected for live status.');
+    }
+
+    /**
+     * v11.0: Inject BootstrapExecutor for deterministic system_operation execution.
+     * Called during extension/server startup after all services are initialized.
+     */
+    setBootstrapExecutor(executor: BootstrapExecutorLike): void {
+        this.bootstrapExecutor = executor;
+        this.outputChannel.appendLine('[TicketProcessor] BootstrapExecutor injected for deterministic bootstrap.');
+    }
+
+    // ==================== v11.0: PAUSE / RESUME ====================
+
+    /**
+     * v11.0: Pause ticket processing — stops boss cycle and slot filling.
+     * Event listeners remain active so unblocked/created tickets are still enqueued.
+     * Call resume() to restart processing.
+     */
+    pause(): void {
+        if (this.paused) return;
+        this.paused = true;
+
+        // Stop the boss countdown timer so no new cycles start
+        if (this.bossCycleTimer) {
+            clearTimeout(this.bossCycleTimer);
+            this.bossCycleTimer = null;
+        }
+        this.bossCycleRunning = false;
+
+        this.outputChannel.appendLine('[TicketProcessor] ⏸ Processing PAUSED by user.');
+        this.eventBus.emit('system:processing_paused' as any, 'ticket-processor', {});
+    }
+
+    /**
+     * v11.0: Resume ticket processing — restarts boss cycle.
+     * Any tickets enqueued while paused will be picked up immediately.
+     */
+    resume(): void {
+        if (!this.paused) return;
+        this.paused = false;
+
+        this.outputChannel.appendLine('[TicketProcessor] ▶ Processing RESUMED by user.');
+        this.eventBus.emit('system:processing_resumed' as any, 'ticket-processor', {});
+
+        // Kick the boss cycle to pick up any queued work
+        this.kickBossCycle();
+    }
+
+    /**
+     * v11.0: Check if processing is currently paused.
+     */
+    isPaused(): boolean {
+        return this.paused;
+    }
+
+    // ==================== v11.0: BOOTSTRAP-FIRST GUARD ====================
+
+    /**
+     * v11.0: Check if bootstrap is complete (all system_bootstrap tickets resolved).
+     *
+     * Uses cached result — once bootstrap is complete, it stays complete.
+     * When bootstrap tickets don't exist at all, the guard is not needed.
+     *
+     * Returns true if:
+     * - No bootstrap tickets exist (nothing to wait for), OR
+     * - All bootstrap tickets have reached a terminal state (completed/cancelled/failed)
+     */
+    private checkBootstrapComplete(): boolean {
+        // Fast path: already confirmed complete
+        if (this.bootstrapComplete) return true;
+
+        // Check if bootstrap tickets even exist (cache this check too)
+        if (this.bootstrapExists === null) {
+            try {
+                const allTickets = this.database.getAllTickets();
+                this.bootstrapExists = allTickets.some(
+                    t => t.ticket_category === 'system_bootstrap'
+                );
+            } catch {
+                // DB error — assume no bootstrap to avoid blocking everything
+                this.bootstrapExists = false;
+            }
+        }
+
+        // No bootstrap tickets = no guard needed
+        if (!this.bootstrapExists) {
+            this.bootstrapComplete = true;
+            return true;
+        }
+
+        // Check if any bootstrap tickets are still pending
+        try {
+            const allTickets = this.database.getAllTickets();
+            const pendingBootstrap = allTickets.filter(
+                t => t.ticket_category === 'system_bootstrap' && !this.isTerminalStatus(t.status)
+            );
+
+            if (pendingBootstrap.length === 0) {
+                this.bootstrapComplete = true;
+                this.outputChannel.appendLine(
+                    '[TicketProcessor] v11.0: All bootstrap tickets complete — plan tickets unlocked.'
+                );
+                this.eventBus.emit(
+                    'boss:bootstrap_complete' as COEEventType,
+                    'ticket-processor',
+                    { message: 'All bootstrap tickets resolved, plan processing unlocked' }
+                );
+                return true;
+            }
+
+            return false;
+        } catch {
+            // DB error — don't block on error, allow processing
+            return true;
+        }
+    }
+
+    /**
+     * v11.0: Reset bootstrap cache. Called when a bootstrap ticket changes state.
+     */
+    resetBootstrapCache(): void {
+        this.bootstrapComplete = false;
+        this.bootstrapExists = null;
+    }
+
+    /**
+     * v11.0: Check if a ticket status is a terminal/done state.
+     * Terminal states: Resolved, Completed, Cancelled, Failed.
+     */
+    private isTerminalStatus(status: string): boolean {
+        return (
+            status === TicketStatus.Resolved ||
+            status === TicketStatus.Completed ||
+            status === TicketStatus.Cancelled ||
+            status === TicketStatus.Failed
+        );
     }
 
     // ==================== v10.0: TICKET STATE MACHINE ====================
@@ -617,8 +788,8 @@ export class TicketProcessorService {
             transitioned_by: meta?.agent_name ?? 'system',
         });
 
-        // v10.0: When a ticket reaches a terminal resolved state, auto-unblock dependents
-        if (newStatus === TicketStatus.Completed || newStatus === TicketStatus.Cancelled) {
+        // v11.0: When a ticket reaches ANY terminal state, auto-unblock dependents
+        if (this.isTerminalStatus(newStatus)) {
             this.unblockDependentTickets(ticketId, ticket.ticket_number);
             this.enqueueChildTickets(ticketId, ticket.ticket_number);
         }
@@ -1111,10 +1282,10 @@ export class TicketProcessorService {
         const reengaged: string[] = [];
 
         for (const ticket of cancelled) {
-            // Check if blocking ticket has been resolved
+            // Check if blocking ticket has reached a terminal state
             if (ticket.blocking_ticket_id) {
                 const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                if (blocker && blocker.status === TicketStatus.Resolved) {
+                if (blocker && this.isTerminalStatus(blocker.status)) {
                     if (this.reengageTicket(ticket.id)) {
                         reengaged.push(ticket.id);
                     }
@@ -1291,8 +1462,12 @@ export class TicketProcessorService {
             // Skip resolved/closed tickets
             if (ticket.status === TicketStatus.Resolved) return;
 
-            const aiLevel = this.getAILevel(ticket);
-            if (aiLevel === 'manual') return;
+            // v11.0: Bootstrap tickets always enqueue regardless of AI mode
+            const isBootstrap = ticket.operation_type === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap';
+            if (!isBootstrap) {
+                const aiLevel = this.getAILevel(ticket);
+                if (aiLevel === 'manual') return;
+            }
 
             this.enqueueTicket(ticket);
         });
@@ -1304,8 +1479,12 @@ export class TicketProcessorService {
             if (!ticketId) return;
             const ticket = this.database.getTicket(ticketId);
             if (!ticket) return;
-            const aiLevel = this.getAILevel(ticket);
-            if (aiLevel === 'manual') return; // Manual mode: don't auto-enqueue
+            // v11.0: Bootstrap tickets always enqueue regardless of AI mode
+            const isBootstrap = ticket.operation_type === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap';
+            if (!isBootstrap) {
+                const aiLevel = this.getAILevel(ticket);
+                if (aiLevel === 'manual') return; // Manual mode: don't auto-enqueue
+            }
             this.enqueueTicket(ticket);
         });
 
@@ -1328,6 +1507,25 @@ export class TicketProcessorService {
         });
         this.listen('ai:question_answered', () => {
             setTimeout(() => { if (!this.disposed) this.kickBossCycle(); }, 300);
+        });
+
+        // v11.0: When bootstrap tickets are created (on first activation), enqueue
+        // the initial non-blocked ones. createBootstrapTickets() doesn't emit
+        // ticket:created events, and recoverOrphanedTickets() has already run
+        // (before tickets were created), so without this handler bootstrap
+        // tickets would never enter the in-memory queue on a fresh DB.
+        this.listen('system:bootstrap_started', () => {
+            const openBootstrap = this.database.getTicketsByStatus('open')
+                .filter(t => t.ticket_category === 'system_bootstrap' || t.operation_type === 'system_bootstrap')
+                .filter(t => !this.isInAnyQueue(t.id));
+            if (openBootstrap.length > 0) {
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Bootstrap started — enqueuing ${openBootstrap.length} initial ticket(s)`
+                );
+                for (const ticket of openBootstrap) {
+                    this.enqueueTicket(ticket);
+                }
+            }
         });
 
         // Track activity timestamps
@@ -1404,6 +1602,18 @@ export class TicketProcessorService {
             }
         }
 
+        // 2b. v11.0: Recover v10.0 lifecycle tickets (validated, ready_for_work, decomposing)
+        // These states were introduced in v10.0 but the original recovery only knew about open/in_review.
+        const v10States = [TicketStatus.Validated, TicketStatus.ReadyForWork, TicketStatus.Decomposing];
+        for (const state of v10States) {
+            const stateTickets = this.database.getTicketsByStatus(state);
+            for (const ticket of stateTickets) {
+                if (!recovered.some(r => r.id === ticket.id) && !this.isInAnyQueue(ticket.id)) {
+                    recovered.push(ticket);
+                }
+            }
+        }
+
         // 3. Stale 'processing' tickets (older than 10 min updated_at)
         const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
         const staleProcessing = this.database.getTicketsByStatus('in_review')
@@ -1448,7 +1658,7 @@ export class TicketProcessorService {
             let isBlocked = false;
             if (ticket.blocking_ticket_id) {
                 const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                if (blocker && blocker.status !== TicketStatus.Resolved) {
+                if (blocker && !this.isTerminalStatus(blocker.status)) {
                     isBlocked = true;
                     this.outputChannel.appendLine(
                         `[TicketProcessor] Recovering TK-${ticket.ticket_number} (blocked by TK-${blocker.ticket_number}) — will defer until blocker resolves`
@@ -1456,15 +1666,30 @@ export class TicketProcessorService {
                 }
             }
 
-            // Reset status and re-enqueue
+            // v11.0: Preserve v10.0 lifecycle states instead of blindly resetting to Open
+            // - Validated: already boss-approved, keep it
+            // - ReadyForWork: ready for worker, keep it
+            // - Decomposing: transient mid-process state, reset to Validated to restart cleanly
+            const v10PreserveStates = new Set([TicketStatus.Validated, TicketStatus.ReadyForWork]);
+            let recoveryStatus: TicketStatus;
+            if (v10PreserveStates.has(ticket.status as TicketStatus)) {
+                recoveryStatus = ticket.status as TicketStatus;
+            } else if (ticket.status === TicketStatus.Decomposing) {
+                recoveryStatus = TicketStatus.Validated;
+            } else {
+                recoveryStatus = TicketStatus.Open;
+            }
             this.database.updateTicket(ticket.id, {
-                status: TicketStatus.Open,
+                status: recoveryStatus,
                 processing_status: 'queued',
             });
+            const stateNote = recoveryStatus !== TicketStatus.Open
+                ? ` Preserved lifecycle state: ${recoveryStatus}.`
+                : '';
             this.database.addTicketReply(ticket.id, 'system',
                 isBlocked
-                    ? 'Ticket recovered after system restart. Currently blocked by a dependency — will process when unblocked.'
-                    : 'Ticket recovered from stuck state after system restart.'
+                    ? `Ticket recovered after system restart.${stateNote} Currently blocked by a dependency — will process when unblocked.`
+                    : `Ticket recovered from stuck state after system restart.${stateNote}`
             );
 
             const entry: QueuedTicket = {
@@ -1556,19 +1781,25 @@ export class TicketProcessorService {
         const cfg = this.config.getConfig();
         const maxActive = cfg.maxActiveTickets ?? 10;
 
-        // Ticket limits enforcement (B10)
-        const activeCount = this.database.getActiveTicketCount();
-        if (activeCount >= maxActive) {
-            // P1 tickets can bump P3 tickets
-            if (ticket.priority === TicketPriority.P1) {
-                const bumped = this.bumpLowestPriority();
-                if (!bumped) {
-                    this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), P1 ticket waiting for slot`);
+        // v11.0: Bootstrap tickets bypass active ticket limits — they are system operations
+        // that must always be enqueued to keep the cascade chain moving.
+        const isBootstrapTicket = ticket.operation_type === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap';
+
+        // Ticket limits enforcement (B10) — skip for bootstrap tickets
+        if (!isBootstrapTicket) {
+            const activeCount = this.database.getActiveTicketCount();
+            if (activeCount >= maxActive) {
+                // P1 tickets can bump P3 tickets
+                if (ticket.priority === TicketPriority.P1) {
+                    const bumped = this.bumpLowestPriority();
+                    if (!bumped) {
+                        this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), P1 ticket waiting for slot`);
+                        return;
+                    }
+                } else {
+                    this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), ticket waiting for slot`);
                     return;
                 }
-            } else {
-                this.outputChannel.appendLine(`[TicketProcessor] Ticket limit reached (${maxActive}), ticket waiting for slot`);
-                return;
             }
         }
 
@@ -1618,9 +1849,17 @@ export class TicketProcessorService {
     private async bossCycle(): Promise<void> {
         // v6.0: Allow bossCycle if we have free slots (not just when idle)
         if (this.disposed) return;
+        // v11.0: Pause guard — don't start new cycles while paused
+        if (this.paused) return;
+        // v10.0: Single-instance guard — only one bossCycle() can run at a time
+        if (this.bossCycleRunning) {
+            this.outputChannel.appendLine('[TicketProcessor] Boss cycle already running — skipping duplicate invocation');
+            return;
+        }
         // If all slots are full, don't start another cycle
         if (this.activeSlots.size >= this.maxParallelTickets) return;
 
+        this.bossCycleRunning = true;
         this.bossState = 'active';
 
         // Cancel any pending countdown
@@ -1641,8 +1880,17 @@ export class TicketProcessorService {
         );
 
         // v6.0: Run Boss inter-ticket orchestration ONCE per cycle (not per ticket)
+        // v11.0: Skip inter-ticket LLM assessment during bootstrap — bootstrap tickets
+        // are deterministic system operations that don't benefit from Boss AI review.
+        // This saves LLM capacity for actual plan work after bootstrap completes.
         if (this.activeSlots.size === 0 && totalQueued > 0) {
-            await this.runBossInterTicket();
+            if (!this.checkBootstrapComplete()) {
+                this.outputChannel.appendLine(
+                    '[TicketProcessor] Boss inter-ticket skipped — bootstrap in progress (deterministic processing)'
+                );
+            } else {
+                await this.runBossInterTicket();
+            }
         }
 
         // Re-sort all team queues (Boss actions may have added/changed tickets)
@@ -1664,6 +1912,8 @@ export class TicketProcessorService {
      */
     private fillSlots(): void {
         if (this.disposed || this.fillingSlots) return;
+        // v11.0: Pause guard — don't fill slots while paused
+        if (this.paused) return;
         // v10.0: Circuit breaker — skip filling if breaker is tripped
         if (this.circuitBreakerActive) {
             this.outputChannel.appendLine('[TicketProcessor] fillSlots() skipped — circuit breaker active');
@@ -1774,6 +2024,12 @@ export class TicketProcessorService {
                 }
 
                 if (!slotFilled) {
+                    // v11.0: Log bootstrap-blocking when queues have items but nothing processable
+                    if (!this.bootstrapComplete && this.getTotalQueueSize() > 0) {
+                        this.outputChannel.appendLine(
+                            '[TicketProcessor] v11.0: Bootstrap in progress — non-bootstrap tickets waiting.'
+                        );
+                    }
                     noProgressCount++;
                     break; // No team had eligible tickets — stop filling
                 } else {
@@ -1819,12 +2075,15 @@ export class TicketProcessorService {
      * Skips:
      * - Tickets already in an active slot
      * - Tickets blocked by an unresolved ticket
+     * - v11.0: Non-bootstrap tickets when bootstrap is incomplete
      *
      * Returns the queue entry and its index within the team queue, or null.
      */
     private peekNextProcessableFromTeam(team: LeadAgentQueue): { entry: QueuedTicket; index: number } | null {
         const teamQueue = this.getTeamQueue(team);
         const activeTicketIds = new Set([...this.activeSlots.values()].map(s => s.ticketId));
+        // v11.0: Cache bootstrap status for this peek pass
+        const bootstrapDone = this.checkBootstrapComplete();
 
         for (let i = 0; i < teamQueue.length; i++) {
             const entry = teamQueue[i];
@@ -1840,10 +2099,15 @@ export class TicketProcessorService {
                 continue;
             }
 
-            // Check blocking
+            // v11.0: Bootstrap-first guard — block non-bootstrap tickets until all bootstrap complete
+            if (!bootstrapDone && ticket.ticket_category !== 'system_bootstrap') {
+                continue; // Not a bootstrap ticket and bootstrap is incomplete — skip
+            }
+
+            // Check blocking — v11.0: check all terminal states, not just Resolved
             if (ticket.blocking_ticket_id) {
                 const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                if (blocker && blocker.status !== TicketStatus.Resolved) {
+                if (blocker && !this.isTerminalStatus(blocker.status)) {
                     continue; // Blocked — skip
                 }
             }
@@ -1873,6 +2137,15 @@ export class TicketProcessorService {
      * Returns false if the ticket was handled (skipped/deferred) — caller should try next.
      */
     private checkAIModeForSlot(ticket: Ticket, entry: QueuedTicket, queueIndex: number, team?: LeadAgentQueue): boolean {
+        // v11.0: Bootstrap tickets always auto-process regardless of AI mode.
+        // They are system operations, not user tasks — Hybrid/Suggest/Manual should never block them.
+        // Without this bypass, 'isDesignOrFrontendTicket' false-positives on words like
+        // "Review" (contains "view") and "performance" (contains "form") in bootstrap bodies.
+        const isBootstrapTicket = ticket.operation_type === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap';
+        if (isBootstrapTicket) {
+            return true; // Always proceed — no AI mode gate for system bootstrap
+        }
+
         const globalAIMode = this.config.getConfig().aiMode ?? 'smart';
         const ticketAILevel = this.getAILevel(ticket);
         const effectiveMode = this.resolveEffectiveAIMode(globalAIMode, ticketAILevel);
@@ -1894,26 +2167,33 @@ export class TicketProcessorService {
             this.outputChannel.appendLine(
                 `[TicketProcessor] AI mode is "suggest" — requesting user approval for TK-${ticket.ticket_number}`
             );
-            this.database.createAIQuestion({
-                plan_id: ticket.task_id ?? 'boss-ai',
-                component_id: null,
-                page_id: null,
-                category: 'general',
-                question: `Boss AI wants to process ticket TK-${ticket.ticket_number}: "${ticket.title}" (${ticket.operation_type}, ${ticket.priority}). Approve?`,
-                question_type: 'confirm',
-                options: ['Yes, process it', 'No, skip it', 'Defer for later'],
-                ai_reasoning: `This ticket is next in the queue. Operation: ${ticket.operation_type}. Priority: ${ticket.priority}.`,
-                ai_suggested_answer: 'Yes, process it',
-                user_answer: null,
-                status: 'pending',
-                ticket_id: ticket.id,
-                source_agent: 'Boss AI',
-                source_ticket_id: ticket.id,
-                queue_priority: 1,
-                is_ghost: false,
-                ai_continued: false,
-                dismiss_count: 0,
-            });
+            // v11.2: Resolve a valid plan_id (Boss AI questions may not have one)
+            const suggestPlanId = this.resolvePlanIdForTicket(ticket);
+            try {
+                this.database.createAIQuestion({
+                    plan_id: suggestPlanId,
+                    component_id: null,
+                    page_id: null,
+                    category: 'general',
+                    question: `Boss AI wants to process ticket TK-${ticket.ticket_number}: "${ticket.title}" (${ticket.operation_type}, ${ticket.priority}). Approve?`,
+                    question_type: 'confirm',
+                    options: ['Yes, process it', 'No, skip it', 'Defer for later'],
+                    ai_reasoning: `This ticket is next in the queue. Operation: ${ticket.operation_type}. Priority: ${ticket.priority}.`,
+                    ai_suggested_answer: 'Yes, process it',
+                    user_answer: null,
+                    status: 'pending',
+                    ticket_id: ticket.id,
+                    source_agent: 'Boss AI',
+                    source_ticket_id: ticket.id,
+                    queue_priority: 1,
+                    is_ghost: false,
+                    ai_continued: false,
+                    dismiss_count: 0,
+                });
+            } catch (err) {
+                /* istanbul ignore next */
+                this.outputChannel.appendLine(`[TicketProcessor] Failed to create AI question for suggest mode: ${err instanceof Error ? err.message : String(err)}`);
+            }
             // v7.0: Remove from specific team queue
             if (team) {
                 this.getTeamQueue(team).splice(queueIndex, 1);
@@ -1929,26 +2209,33 @@ export class TicketProcessorService {
                 this.outputChannel.appendLine(
                     `[TicketProcessor] AI mode is "hybrid" — TK-${ticket.ticket_number} is frontend/design, requesting approval`
                 );
-                this.database.createAIQuestion({
-                    plan_id: ticket.task_id ?? 'boss-ai',
-                    component_id: null,
-                    page_id: null,
-                    category: 'general',
-                    question: `Boss AI wants to process frontend/design ticket TK-${ticket.ticket_number}: "${ticket.title}". In hybrid mode, frontend tickets need your approval. Proceed?`,
-                    question_type: 'confirm',
-                    options: ['Yes, process it', 'No, skip it'],
-                    ai_reasoning: `Hybrid mode: this ticket appears to be frontend/design work. Auto-approval is for backend/infrastructure only.`,
-                    ai_suggested_answer: 'Yes, process it',
-                    user_answer: null,
-                    status: 'pending',
-                    ticket_id: ticket.id,
-                    source_agent: 'Boss AI',
-                    source_ticket_id: ticket.id,
-                    queue_priority: 1,
-                    is_ghost: false,
-                    ai_continued: false,
-                    dismiss_count: 0,
-                });
+                // v11.2: Resolve a valid plan_id (Boss AI questions may not have one)
+                const hybridPlanId = this.resolvePlanIdForTicket(ticket);
+                try {
+                    this.database.createAIQuestion({
+                        plan_id: hybridPlanId,
+                        component_id: null,
+                        page_id: null,
+                        category: 'general',
+                        question: `Boss AI wants to process frontend/design ticket TK-${ticket.ticket_number}: "${ticket.title}". In hybrid mode, frontend tickets need your approval. Proceed?`,
+                        question_type: 'confirm',
+                        options: ['Yes, process it', 'No, skip it'],
+                        ai_reasoning: `Hybrid mode: this ticket appears to be frontend/design work. Auto-approval is for backend/infrastructure only.`,
+                        ai_suggested_answer: 'Yes, process it',
+                        user_answer: null,
+                        status: 'pending',
+                        ticket_id: ticket.id,
+                        source_agent: 'Boss AI',
+                        source_ticket_id: ticket.id,
+                        queue_priority: 1,
+                        is_ghost: false,
+                        ai_continued: false,
+                        dismiss_count: 0,
+                    });
+                } catch (err) {
+                    /* istanbul ignore next */
+                    this.outputChannel.appendLine(`[TicketProcessor] Failed to create AI question for hybrid mode: ${err instanceof Error ? err.message : String(err)}`);
+                }
                 // v7.0: Remove from specific team queue
                 if (team) {
                     this.getTeamQueue(team).splice(queueIndex, 1);
@@ -2251,6 +2538,9 @@ export class TicketProcessorService {
      * Emits boss:countdown_tick for UI sync.
      */
     private startBossCountdown(): void {
+        // v10.0: Release single-instance lock — boss cycle is done
+        this.bossCycleRunning = false;
+
         if (this.bossCycleTimer) {
             clearTimeout(this.bossCycleTimer);
             this.bossCycleTimer = null;
@@ -2489,10 +2779,10 @@ export class TicketProcessorService {
 
                 // v10.1: Boss AI ticket review — check on_hold tickets that might need reactivation
                 for (const ticket of onHoldTickets) {
-                    // Check if blocker is now resolved
+                    // Check if blocker has reached a terminal state
                     if (ticket.blocking_ticket_id) {
                         const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                        if (blocker && blocker.status === TicketStatus.Resolved) {
+                        if (blocker && this.isTerminalStatus(blocker.status)) {
                             // Blocker resolved — reactivate this ticket
                             this.database.updateTicket(ticket.id, {
                                 status: TicketStatus.Open,
@@ -2566,7 +2856,7 @@ export class TicketProcessorService {
         // move it to the back of the queue and process the next one
         if (ticket.blocking_ticket_id) {
             const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-            if (blocker && blocker.status !== TicketStatus.Resolved) {
+            if (blocker && !this.isTerminalStatus(blocker.status)) {
                 this.outputChannel.appendLine(
                     `[TicketProcessor] TK-${ticket.ticket_number} blocked by TK-${blocker.ticket_number} — deferring`
                 );
@@ -2581,8 +2871,8 @@ export class TicketProcessorService {
                     }
                 }
                 return false; // Signal caller to break and retry later
-            } else if (blocker && blocker.status === TicketStatus.Resolved) {
-                // Blocker is resolved — clear the blocking reference
+            } else if (blocker && this.isTerminalStatus(blocker.status)) {
+                // Blocker is done — clear the blocking reference
                 this.database.updateTicket(ticketId, { blocking_ticket_id: null as any });
             }
         }
@@ -2591,9 +2881,11 @@ export class TicketProcessorService {
         // v11.0: Boss Pre-Dispatch Validation
         // Boss reviews whether THIS ticket should be next.
         // If Boss says "process a different ticket", we swap.
+        // v11.0: Skip LLM-based validation for bootstrap tickets — they execute deterministically
         // =====================================================
+        const isBootstrapTicket = ticket.operation_type === 'system_bootstrap' || ticket.ticket_category === 'system_bootstrap';
         const bossAgent = this.orchestrator.getBossAgent();
-        if (bossAgent?.validateNextTicket) {
+        if (bossAgent?.validateNextTicket && !isBootstrapTicket) {
             try {
                 // Build a queue snapshot for Boss context (top 8 tickets from all teams)
                 const queueSnapshot: Array<{
@@ -2714,6 +3006,11 @@ export class TicketProcessorService {
                     `[TicketProcessor] Boss pre-dispatch validation failed (non-fatal, proceeding): ${bossErr}`
                 );
             }
+        }
+        if (isBootstrapTicket) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Bootstrap TK-${ticket.ticket_number}: skipping Boss pre-dispatch (deterministic execution)`
+            );
         }
 
         // =====================================================
@@ -3249,6 +3546,51 @@ export class TicketProcessorService {
                         deliverable_type: step.deliverableType,
                     });
 
+                    // v11.0: Deterministic bootstrap execution — bypass LLM for system_operation steps
+                    if (step.deliverableType === 'system_operation' && this.bootstrapExecutor) {
+                        const bootstrapResult = await this.bootstrapExecutor.execute(ticket);
+                        if (bootstrapResult) {
+                            response = {
+                                content: bootstrapResult.message,
+                                agentName: 'bootstrap-executor',
+                                tokensUsed: 0,
+                            };
+                            this.outputChannel.appendLine(
+                                `[TicketProcessor] TK-${ticket.ticket_number} bootstrap executed deterministically: ${bootstrapResult.success ? 'SUCCESS' : 'FAILED'}`
+                            );
+
+                            this.database.completeRunStep(runStep.id, {
+                                status: bootstrapResult.success ? 'completed' : 'failed',
+                                response: bootstrapResult.message.substring(0, 2000),
+                                tokens_used: 0,
+                                duration_ms: Date.now() - stepStart,
+                            });
+
+                            // If bootstrap operation failed, mark ticket as failed and bail
+                            if (!bootstrapResult.success) {
+                                this.database.updateTicket(ticketId, {
+                                    status: TicketStatus.Failed,
+                                    processing_status: null,
+                                });
+                                this.database.addTicketReply(ticketId, 'bootstrap-executor', `FAILED: ${bootstrapResult.message}`);
+                                this.database.completeTicketRun(run.id, {
+                                    status: 'failed',
+                                    error_message: bootstrapResult.message,
+                                    duration_ms: Date.now() - startTime,
+                                });
+                                return true;
+                            }
+
+                            // Add reply and skip to completion flow
+                            this.database.addTicketReply(ticketId, 'bootstrap-executor', bootstrapResult.message);
+                            this.eventBus.emit('ticket:replied', 'ticket-processor', { ticketId, author: 'bootstrap-executor' });
+
+                            // Skip the rest of the pipeline — bootstrap ops are single-step
+                            break;
+                        }
+                        // bootstrapResult === null means unknown bootstrap ticket — fall through to LLM
+                    }
+
                     // Call the agent with pipeline context
                     response = await this.orchestrator.callAgent(step.agentName, stepMessage, context);
 
@@ -3476,6 +3818,25 @@ export class TicketProcessorService {
                         `[TicketProcessor] Boss completion assessment failed (falling back to ReviewAgent): ${bossErr}`
                     );
                 }
+            }
+
+            // ─── v11.0: Bootstrap tickets skip review — deterministic operations need no LLM review ───
+            if (isBootstrapTicket) {
+                this.database.updateTicket(ticketId, {
+                    status: TicketStatus.Resolved,
+                    processing_status: null as any,
+                    last_error: null,
+                    last_error_at: null,
+                });
+                this.eventBus.emit('ticket:processing_completed', 'ticket-processor', {
+                    ticketId, ticketNumber: ticket.ticket_number, title: ticket.title,
+                });
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] TK-${ticket.ticket_number} RESOLVED (bootstrap — no review needed)`
+                );
+                this.unblockDependentTickets(ticketId, ticket.ticket_number);
+                this.enqueueChildTickets(ticketId, ticket.ticket_number);
+                return true;
             }
 
             // ─── PIPELINE-ROUTED: ReviewAgent + Verification (existing logic) ───
@@ -4247,7 +4608,7 @@ export class TicketProcessorService {
             const ticket = this.database.getTicket(entry.ticketId);
             if (ticket?.blocking_ticket_id) {
                 const blocker = this.database.getTicket(ticket.blocking_ticket_id);
-                if (blocker && blocker.status !== TicketStatus.Resolved) {
+                if (blocker && !this.isTerminalStatus(blocker.status)) {
                     blockedIds.add(entry.ticketId);
                 }
             }
@@ -4281,6 +4642,25 @@ export class TicketProcessorService {
     private async runBossStartupAssessment(): Promise<void> {
         try {
             this.eventBus.emit('boss:startup_assessment_started', 'ticket-processor', {});
+
+            // v11.0: During bootstrap, skip the expensive LLM health check.
+            // Bootstrap tickets are deterministic system operations — the Boss AI
+            // assessment would waste LLM capacity on tickets it can't reprioritize.
+            if (!this.checkBootstrapComplete()) {
+                const totalQueued = this.getTotalQueueSize();
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] Bootstrap startup: skipping LLM assessment (${totalQueued} tickets queued, bootstrap in progress)`
+                );
+                this.database.addAuditLog('boss-ai', 'startup_assessment',
+                    `Bootstrap mode — LLM assessment skipped. ${totalQueued} tickets in queue, bootstrap in progress.`
+                );
+                this.eventBus.emit('boss:startup_assessment_completed', 'ticket-processor', {
+                    summary: 'Bootstrap mode — deterministic processing, LLM assessment skipped',
+                    actionsExecuted: 0,
+                });
+                return;
+            }
+
             this.outputChannel.appendLine('[TicketProcessor] Running Boss AI startup assessment...');
 
             const boss = this.orchestrator.getBossAgent();
@@ -4565,33 +4945,39 @@ export class TicketProcessorService {
                         this.outputChannel.appendLine(`[TicketProcessor] Boss escalation: ${reason}`);
                         this.database.addAuditLog('boss-ai', 'escalation', reason);
 
-                        // Create a user-facing AI question so the user sees the escalation
+                        // v11.2: Create a user-facing AI question (with FK-safe plan_id)
                         const activePlan = this.database.getActivePlan();
-                        this.database.createAIQuestion({
-                            plan_id: activePlan?.id || '',
-                            component_id: null,
-                            page_id: null,
-                            category: 'general' as any,
-                            question: `Boss AI Escalation: ${reason}`,
-                            question_type: 'text',
-                            options: [],
-                            ai_reasoning: `The Boss AI detected an issue requiring your attention during ${trigger}.`,
-                            ai_suggested_answer: null,
-                            user_answer: null,
-                            status: 'pending',
-                            ticket_id: null,
-                            source_agent: 'boss-ai',
-                            source_ticket_id: (action.payload.ticketId as string) || null,
-                            navigate_to: null,
-                            is_ghost: false,
-                            queue_priority: 1,
-                            answered_at: null,
-                            ai_continued: false,
-                            dismiss_count: 0,
-                            previous_decision_id: null,
-                            conflict_decision_id: null,
-                            technical_context: null,
-                        });
+                        const escalatePlanId = activePlan?.id || this.resolvePlanIdForTicket({ task_id: null } as Ticket);
+                        try {
+                            this.database.createAIQuestion({
+                                plan_id: escalatePlanId,
+                                component_id: null,
+                                page_id: null,
+                                category: 'general' as any,
+                                question: `Boss AI Escalation: ${reason}`,
+                                question_type: 'text',
+                                options: [],
+                                ai_reasoning: `The Boss AI detected an issue requiring your attention during ${trigger}.`,
+                                ai_suggested_answer: null,
+                                user_answer: null,
+                                status: 'pending',
+                                ticket_id: null,
+                                source_agent: 'boss-ai',
+                                source_ticket_id: (action.payload.ticketId as string) || null,
+                                navigate_to: null,
+                                is_ghost: false,
+                                queue_priority: 1,
+                                answered_at: null,
+                                ai_continued: false,
+                                dismiss_count: 0,
+                                previous_decision_id: null,
+                                conflict_decision_id: null,
+                                technical_context: null,
+                            });
+                        } catch (err) {
+                            /* istanbul ignore next */
+                            this.outputChannel.appendLine(`[TicketProcessor] Failed to create escalation AI question: ${err instanceof Error ? err.message : String(err)}`);
+                        }
                         this.eventBus.emit('question:created', 'boss-ai', { reason, trigger });
                         executed++;
                         break;
@@ -5292,6 +5678,41 @@ export class TicketProcessorService {
     }
 
     /**
+     * v11.2: Resolve a valid plan_id for AI questions created by the Boss AI.
+     *
+     * Tickets may not belong to any plan (e.g., bootstrap tickets, manual tickets).
+     * The ai_questions table requires plan_id with FOREIGN KEY to plans(id).
+     * Falls back to the first active plan, or creates a sentinel plan.
+     */
+    private resolvePlanIdForTicket(ticket: Ticket): string {
+        // 1. If ticket has a task_id, look up the task's plan
+        if (ticket.task_id) {
+            try {
+                const task = this.database.getTask(ticket.task_id);
+                if (task?.plan_id) return task.plan_id;
+            } catch { /* task lookup failed */ }
+        }
+
+        // 2. Try to find any active plan
+        try {
+            const plans = this.database.getAllPlans();
+            const active = plans.find(p => p.status === 'active');
+            if (active) return active.id;
+            // Any plan at all
+            if (plans.length > 0) return plans[0].id;
+        } catch { /* plan lookup failed */ }
+
+        // 3. Last resort — create a sentinel plan for Boss AI questions
+        try {
+            const sentinel = this.database.createPlan('_boss_ai_queue', '{"internal":true}');
+            return sentinel.id;
+        } catch { /* sentinel creation failed */ }
+
+        // 4. Absolute fallback — return a non-FK-safe value (will be caught by try/catch in caller)
+        return 'boss-ai-orphan';
+    }
+
+    /**
      * v5.0: Detect if a ticket is frontend/design work (for hybrid mode).
      *
      * Checks operation_type, title, and body for frontend-related keywords.
@@ -5795,6 +6216,7 @@ export class TicketProcessorService {
         this.activeSlots.clear();
         this.holdQueue = [];
         this.bossState = 'idle';
+        this.bossCycleRunning = false;
 
         this.outputChannel.appendLine('[TicketProcessor] Disposed');
     }

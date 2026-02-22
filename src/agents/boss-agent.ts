@@ -517,7 +517,12 @@ ESCALATE: [true or false]
         const reengageable = cancelledTickets.filter((t: any) => {
             if (!t.blocking_ticket_id) return false;
             const blocker = this.database.getTicket(t.blocking_ticket_id);
-            return blocker && blocker.status === TicketStatus.Resolved;
+            if (!blocker) return false;
+            // v11.0: Check all terminal states, not just Resolved
+            return blocker.status === TicketStatus.Resolved ||
+                   blocker.status === TicketStatus.Completed ||
+                   blocker.status === TicketStatus.Cancelled ||
+                   blocker.status === TicketStatus.Failed;
         });
         if (reengageable.length > 0) {
             issues.push(`INFO: ${reengageable.length} cancelled ticket(s) have resolved blockers — consider re-engaging`);

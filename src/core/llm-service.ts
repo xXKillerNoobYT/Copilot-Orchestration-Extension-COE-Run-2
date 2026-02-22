@@ -569,6 +569,19 @@ export class LLMService {
                 };
             }
 
+            // Handle completely empty responses (0 content + 0 thinking tokens).
+            // This happens when the LLM returns an empty stream (e.g., model overloaded,
+            // bad prompt, or LM Studio hiccup). Throw so the caller can retry.
+            if (fullContent.trim() === '' && tokensUsed === 0 && thinkingTokens === 0) {
+                this.outputChannel.appendLine(
+                    `[LLMService] WARNING: LLM returned completely empty response (0 content, 0 thinking tokens, finish=${finishReason}). ` +
+                    `This typically indicates the model is overloaded or returned an empty completion.`
+                );
+                throw new Error(
+                    'LLM returned empty response (0 tokens). Model may be overloaded — request will be retried.'
+                );
+            }
+
             return {
                 content: fullContent,
                 tokens_used: tokensUsed,

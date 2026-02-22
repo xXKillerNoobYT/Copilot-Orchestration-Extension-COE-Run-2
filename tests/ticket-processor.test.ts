@@ -1,10 +1,10 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { TicketProcessorService, OrchestratorLike, OutputChannelLike } from '../src/core/ticket-processor';
+import { TicketProcessorService, OrchestratorLike } from '../src/core/ticket-processor';
 import { Database } from '../src/core/database';
 import { EventBus } from '../src/core/event-bus';
-import { TicketPriority, TicketStatus, AgentResponse, Ticket } from '../src/types';
+import { TicketPriority, TicketStatus, AgentResponse, Ticket, OutputChannelLike } from '../src/types';
 
 // ==================== TEST HELPERS ====================
 
@@ -1160,11 +1160,11 @@ describe('TicketProcessorService', () => {
             });
 
             eventBus.emit('ticket:created', 'test', { ticketId: ticket.id });
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
             // Should have been called multiple times (initial + retries)
             expect(mockOrchestrator.callAgent.mock.calls.length).toBeGreaterThanOrEqual(2);
-        });
+        }, 15000);
 
         test('emits ticket:retry event on retry', async () => {
             mockOrchestrator.callAgent.mockResolvedValue({

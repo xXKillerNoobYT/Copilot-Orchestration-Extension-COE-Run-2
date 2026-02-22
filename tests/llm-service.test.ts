@@ -240,12 +240,12 @@ describe('LLMService', () => {
             }
         });
 
-        llmService = new LLMService(createConfig(), outputChannel);
+        llmService = new LLMService(createConfig({ timeoutSeconds: 3, startupTimeoutSeconds: 2, streamStallTimeoutSeconds: 1, thinkingTimeoutSeconds: 2 }), outputChannel);
         await expect(llmService.chat(
             [{ role: 'user', content: 'test' }],
             { stream: true }
         )).rejects.toThrow(/LLM API error: 500/);
-    });
+    }, 15000);
 
     test('non-streaming abort timeout (lines 276, 320)', async () => {
         await startMockLLM((req, res) => {

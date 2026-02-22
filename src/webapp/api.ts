@@ -255,11 +255,19 @@ function repairJson(raw: string): { parsed: any; repaired: boolean; error: strin
             else if (ch === '[') openBraces.push(']');
             else if (ch === '}' || ch === ']') openBraces.pop();
         }
-        if (openBraces.length > 0) {
+        if (openBraces.length > 0 || inString) {
+            // v11.0: Handle unterminated strings — close the open quote first
+            if (inString) {
+                // Find the last unmatched quote and close it
+                fromStart += '"';
+                repairs.push('closed_unterminated_string');
+            }
             // Remove any trailing partial value (incomplete string or number)
-            fromStart = fromStart.replace(/,\s*"[^"]*$/, '');      // trailing incomplete string value
+            fromStart = fromStart.replace(/,\s*"[^"]*"?\s*$/, '');    // trailing incomplete string value
             fromStart = fromStart.replace(/,\s*[a-zA-Z0-9]*$/, ''); // trailing incomplete value
             fromStart = fromStart.replace(/,\s*$/, '');              // trailing comma
+            // Also handle trailing key without value: "key": followed by truncation
+            fromStart = fromStart.replace(/,\s*"[^"]*"\s*:\s*$/, '');
             fromStart += openBraces.reverse().join('');
             repairs.push('closed_truncated_json');
 
@@ -625,7 +633,21 @@ export async function handleApiRequest(
                     pending_verification: tasks.filter(t => t.status === 'pending_verification').length,
                 };
             }
-            json(res, { stats, plan, planProgress, agents, recentAudit });
+            // Niche agent stats for dashboard
+            const allTreeNodes = database.getAllTreeNodes();
+            const nicheNodes = allTreeNodes.filter((n: any) => n.niche_definition_id);
+            const activeNicheAgents = nicheNodes.filter((n: any) => n.status === 'active' || n.status === 'working').map((n: any) => ({
+                id: n.id,
+                name: n.name,
+                level: n.level,
+                status: n.status,
+                scope: n.scope,
+                task_id: n.task_id,
+                niche_definition_id: n.niche_definition_id,
+                tokens_consumed: n.tokens_consumed,
+            }));
+            const nicheCount = database.getNicheAgentCount();
+            json(res, { stats, plan, planProgress, agents, recentAudit, activeNicheAgents, nicheCount });
             return true;
         }
 
@@ -1769,6 +1791,27 @@ export async function handleApiRequest(
             return true;
         }
 
+        // ==================== SYSTEM INFO ====================
+        if (route === 'system/info' && method === 'GET') {
+            const workspaceRoot = config.getWorkspaceRoot() || process.cwd();
+            const absoluteDbPath = config.getAbsoluteDbPath();
+            const coeDir = config.getCOEDir();
+            const coeDirExists = require('fs').existsSync(coeDir);
+            const dbFileExists = database.isDatabaseFilePresent();
+            json(res, {
+                workspaceRoot,
+                coeDir,
+                absoluteDbPath,
+                coeDirExists,
+                dbFileExists,
+                platform: process.platform,
+                nodeVersion: process.version,
+                pid: process.pid,
+                uptime: Math.floor(process.uptime()),
+            });
+            return true;
+        }
+
         // ==================== CONFIG ====================
         if (route === 'config' && method === 'GET') {
             json(res, config.getConfig());
@@ -1857,8 +1900,15 @@ export async function handleApiRequest(
                 ? `\n\n=== REFERENCE DOCUMENTS ===\nThe user has provided these reference documents. The design MUST align with them:\n${designPlanFileCtx}\n=== END REFERENCE DOCUMENTS ===\n`
                 : '';
 
-            const prompt = [
-                `You are an expert UI layout designer. Generate a detailed visual page layout for a project called "${planName}".`,
+            // v11.2: Split into system prompt (role identity) and user message (specific request)
+            // to avoid conflicting with the PlanningAgent's task-focused system prompt
+            const designSystemPrompt = `You are an expert UI layout designer. You generate visual page layouts as structured JSON.
+You ALWAYS respond with ONLY valid JSON — no explanation, no markdown fences, no text before or after.
+Available component types: header (1440x80), nav (1440x60), sidebar (240x600), container (300x200), card (280x180), text (200x30), button (120x40), input (240x36), form (300x250), table (400x200), list (240x200), image (200x150), footer (1440x60), divider (400x2), icon (32x32).
+Canvas: 1440x900 pixels.`;
+
+            const designUserMessage = [
+                `Generate a detailed visual page layout for a project called "${planName}".`,
                 '',
                 `Project: Scale=${scale}, Focus=${focus}, Tech Stack=${wizTechStack}`,
                 planDesc ? `Description: ${planDesc}` : '',
@@ -1883,32 +1933,13 @@ export async function handleApiRequest(
                 wizFeatures.includes('Chat / Messaging') ? 'Include a chat container component on relevant pages.' : '',
                 wizFeatures.includes('Payment Integration') ? 'Include payment form components on checkout pages.' : '',
                 '',
-                'Available component types (type: defaultSize):',
-                '- header: 1440x80 (page header bar)',
-                '- nav: 1440x60 (navigation bar)',
-                '- sidebar: 240x600 (side navigation panel)',
-                '- container: 300x200 (grouping container)',
-                '- card: 280x180 (content card)',
-                '- text: 200x30 (text label/paragraph)',
-                '- button: 120x40 (clickable button)',
-                '- input: 240x36 (text input field)',
-                '- form: 300x250 (form container)',
-                '- table: 400x200 (data table)',
-                '- list: 240x200 (item list)',
-                '- image: 200x150 (image placeholder)',
-                '- footer: 1440x60 (page footer)',
-                '- divider: 400x2 (horizontal divider)',
-                '- icon: 32x32 (icon element)',
-                '',
-                'Canvas: 1440x900 pixels.',
-                '',
                 'Layout rules:',
                 layout === 'sidebar' ? '- Place a sidebar (240px wide) on the left edge, main content to the right' : '',
                 layout === 'tabs' ? '- Place a nav bar at top, content area below with tab-like cards' : '',
                 layout === 'wizard' ? '- Place a header with step indicators at top, single content area, nav buttons at bottom' : '',
                 wizPages.length > 1 ? `Create ${wizPages.length} pages as specified. Each page should have 4-10 components appropriate for its purpose.` : 'Scale rules: MVP=1 page with 5-8 components, Small=1-2 pages 8-15 components, Medium=2-3 pages, Large=3-5 pages, Enterprise=5+ pages.',
                 '',
-                'IMPORTANT: Respond with ONLY valid JSON. No explanation, no markdown fences.',
+                'Respond with ONLY valid JSON in this exact format:',
                 '{"pages":[{"name":"Home","route":"/","background":"' + colors.bg + '","components":[{"type":"header","name":"App Header","x":0,"y":0,"width":1440,"height":80,"content":"' + planName + '","styles":{"backgroundColor":"' + colors.surface + '","color":"' + colors.text + '"}}]}]}',
             ].filter(Boolean).join('\n');
 
@@ -1922,8 +1953,8 @@ export async function handleApiRequest(
                 'P2', designAiLevel);
 
             try {
-                const ctx: AgentContext = { conversationHistory: [] };
-                const response = await orchestrator.callAgent('planning', prompt, ctx);
+                // v11.2: Use callLLMDirect to avoid PlanningAgent's task-focused system prompt
+                const response = await orchestrator.callLLMDirect(designSystemPrompt, designUserMessage, 'design_generation');
 
                 type DesignGenResult = { pages?: Array<{ name?: string; route?: string; background?: string; components?: Array<{ type?: string; name?: string; x?: number; y?: number; width?: number; height?: number; content?: string; styles?: Record<string, unknown> }> }> };
                 const designParseResult = parseAIJson<DesignGenResult>(response.content, 'design_generation');
@@ -2563,14 +2594,14 @@ export async function handleApiRequest(
             let session;
             const existingSessions = database.getAllCodingSessions() as unknown as Record<string, unknown>[];
             const existingSession = existingSessions.find((s: any) =>
-                s.status === 'active' && s.name && s.name.includes(`TK-${String(codingTicket!.ticket_number).padStart(3, '0')}`)
+                s.status === 'active' && s.name && s.name.includes(`TK-${String(codingTicket!.ticket_number).padStart(4, '0')}`)
             );
 
             if (existingSession) {
                 session = existingSession;
             } else {
                 session = database.createCodingSession({
-                    name: `TK-${String(codingTicket.ticket_number).padStart(3, '0')}: ${codingTicket.title.substring(0, 50)}`,
+                    name: `TK-${String(codingTicket.ticket_number).padStart(4, '0')}: ${codingTicket.title.substring(0, 50)}`,
                 });
             }
 
@@ -2578,7 +2609,7 @@ export async function handleApiRequest(
             const ticketReplies = database.getTicketReplies(codingTicket.id);
             const recentReplies = ticketReplies.slice(-3);
 
-            let autoPrompt = `## Coding Task: TK-${String(codingTicket.ticket_number).padStart(3, '0')}\n\n`;
+            let autoPrompt = `## Coding Task: TK-${String(codingTicket.ticket_number).padStart(4, '0')}\n\n`;
             autoPrompt += `**Title:** ${codingTicket.title}\n`;
             autoPrompt += `**Priority:** ${codingTicket.priority}\n`;
             autoPrompt += `**Operation:** ${(codingTicket.operation_type || 'general').replace(/_/g, ' ')}\n`;
@@ -2840,7 +2871,8 @@ export async function handleApiRequest(
             }
             const tasks = database.getTasksByPlan(planId);
             const existingSuggestions = database.getAISuggestionsByPlan(planId);
-            const prompt = `You are an AI design advisor. Analyze this project plan and provide actionable suggestions.
+            const suggestionsSystemPrompt = 'You are an AI design advisor. Analyze project plans and provide actionable suggestions as a JSON array. Only return valid JSON, nothing else.';
+            const suggestionsUserMessage = `Analyze this project plan and provide actionable suggestions.
 
 Plan: ${plan.name} (${JSON.parse(plan.config_json || '{}').scale || 'MVP'})
 Pages: ${pages.map(p => p.name).join(', ') || 'None'}
@@ -2852,8 +2884,8 @@ Provide 2-5 suggestions as JSON array: [{"type":"layout|missing_component|ux_iss
 Only return the JSON array, nothing else.`;
 
             try {
-                const ctx: AgentContext = { conversationHistory: [] };
-                const response = await orchestrator.callAgent('planning', prompt, ctx);
+                // v11.2: Use callLLMDirect to avoid PlanningAgent's task-focused system prompt
+                const response = await orchestrator.callLLMDirect(suggestionsSystemPrompt, suggestionsUserMessage, 'ai_suggestions');
                 let suggestions: any[] = [];
                 try {
                     const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
@@ -3039,8 +3071,8 @@ Only return the JSON array, nothing else.`;
 
             const plan = database.getPlan(planId);
             const questionsText = pending.map((q, i) => `${i + 1}. [${q.category}] ${q.question} (type: ${q.question_type}${q.options.length ? ', options: ' + q.options.join('/') : ''})`).join('\n');
-            const prompt = `You are an AI assistant helping design an application.
-Plan: ${plan?.name || 'Unknown'}
+            const autofillSystemPrompt = 'You are an AI assistant helping design an application. Answer design questions based on best practices. Reply ONLY with a JSON array — no other text.';
+            const autofillUserMessage = `Plan: ${plan?.name || 'Unknown'}
 Config: ${plan?.config_json || '{}'}
 
 Answer these design questions based on best practices and the plan context.
@@ -3050,8 +3082,8 @@ Reply as JSON array of answers in order: ["answer1", "answer2", ...]
 Only return the JSON array, nothing else.`;
 
             try {
-                const ctx: AgentContext = { conversationHistory: [] };
-                const response = await orchestrator.callAgent('planning', prompt, ctx);
+                // v11.2: Use callLLMDirect to avoid PlanningAgent's task-focused system prompt
+                const response = await orchestrator.callLLMDirect(autofillSystemPrompt, autofillUserMessage, 'ai_questions_autofill');
                 const autofillParseResult = parseAIJson<string[]>(response.content, 'ai_questions_autofill');
                 const answers: string[] = Array.isArray(autofillParseResult.data) ? autofillParseResult.data : [];
                 if (autofillParseResult.repaired) {
@@ -3095,7 +3127,13 @@ Only return the JSON array, nothing else.`;
                 'AI reviewing plan readiness.',
                 'P3', reviewAiLevel);
 
-            const prompt = `You are a code readiness reviewer. Evaluate this project plan for implementation readiness.
+            // v11.2: Use callLLMDirect — plan review needs a reviewer persona, not PlanningAgent's task system prompt
+            const reviewSystemPrompt = `You are a code readiness reviewer. Evaluate project plans for implementation readiness.
+Score the readiness 0-100 and identify missing details.
+Reply as JSON: {"readiness_score":N,"readiness_level":"not_ready|needs_work|almost_ready|ready","summary":"...","missing_details":[{"area":"...","description":"...","priority":"P1|P2|P3"}]}
+Only return the JSON object, nothing else.`;
+
+            const reviewUserMessage = `Evaluate this project plan:
 
 Plan: ${plan.name}
 Scale: ${config.scale || 'MVP'}, Focus: ${config.focus || 'Full Stack'}
@@ -3105,15 +3143,10 @@ Components: ${allComponents.length} total
 Tasks: ${tasks.length} total
 Data Models: ${dataModels.length} (${dataModels.map(m => m.name).join(', ')})
 Unanswered Questions: ${questions.filter(q => q.status === 'pending').length}
-Features: ${config.features?.join(', ') || 'None specified'}
-
-Score the readiness 0-100 and identify missing details.
-Reply as JSON: {"readiness_score":N,"readiness_level":"not_ready|needs_work|almost_ready|ready","summary":"...","missing_details":[{"area":"...","description":"...","priority":"P1|P2|P3"}]}
-Only return the JSON object, nothing else.`;
+Features: ${config.features?.join(', ') || 'None specified'}`;
 
             try {
-                const ctx: AgentContext = { conversationHistory: [] };
-                const response = await orchestrator.callAgent('planning', prompt, ctx);
+                const response = await orchestrator.callLLMDirect(reviewSystemPrompt, reviewUserMessage, 'plan_review');
                 let review: any = { readiness_score: 0, readiness_level: 'not_ready', summary: 'Review failed', missing_details: [] };
                 try {
                     const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
@@ -4162,7 +4195,8 @@ Only return the JSON object, nothing else.`;
 
             // LLM-based checks
             try {
-                const prompt = `You are a design QA bot. Check this project for issues.
+                const qaSystemPrompt = 'You are a design QA bot. Find issues in project designs and return them as a JSON array. Only return valid JSON, nothing else.';
+                const qaUserMessage = `Check this project for issues.
 Plan: ${plan.name}
 Pages: ${pages.map(p => p.name).join(', ')}
 Components: ${allComponents.length}
@@ -4170,8 +4204,8 @@ Data Models: ${dataModels.map(m => m.name + '(' + m.fields.length + ' fields)').
 
 Find 0-5 issues as JSON array: [{"severity":"error|warning|info","location":"...","description":"...","suggested_fix":"..."}]
 Only return the JSON array.`;
-                const ctx: AgentContext = { conversationHistory: [] };
-                const response = await orchestrator.callAgent('planning', prompt, ctx);
+                // v11.2: Use callLLMDirect to avoid PlanningAgent's task-focused system prompt
+                const response = await orchestrator.callLLMDirect(qaSystemPrompt, qaUserMessage, 'design_qa');
                 try {
                     const cleaned = response.content.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
                     const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
@@ -5869,13 +5903,46 @@ Only return the JSON array.`;
 
         // GET /api/v9/niche-agents — list niche agents
         if (route === 'v9/niche-agents' && method === 'GET') {
-            const allNiche = database.getAllNicheAgentDefinitions();
+            const nicheUrl = new URL(req.url || '', 'http://localhost');
+            const levelParam = nicheUrl.searchParams.get('level');
+            const domainParam = nicheUrl.searchParams.get('domain');
+            let allNiche;
+            if (levelParam) {
+                allNiche = database.getNicheAgentsByLevel(parseInt(levelParam));
+            } else if (domainParam) {
+                allNiche = database.getNicheAgentsByDomain(domainParam);
+            } else {
+                allNiche = database.getAllNicheAgentDefinitions();
+            }
             json(res, { success: true, data: allNiche, count: allNiche.length });
             return true;
         }
 
+        // POST /api/v9/niche-agents — create a new niche agent
+        if (route === 'v9/niche-agents' && method === 'POST') {
+            const body = await parseBody(req) as any;
+            if (!body.name || body.level == null) {
+                json(res, { error: 'name and level are required' }, 400);
+                return true;
+            }
+            const def = database.createNicheAgentDefinition({
+                name: body.name,
+                level: body.level,
+                specialty: body.specialty || '',
+                domain: body.domain || 'custom',
+                area: body.area || '',
+                system_prompt_template: body.system_prompt_template || '',
+                required_capability: body.required_capability || 'general',
+                input_contract: body.input_contract || null,
+                output_contract: body.output_contract || null,
+            });
+            eventBus.emit('niche:agent_spawned', 'api', { id: def.id, name: body.name });
+            json(res, { success: true, data: def });
+            return true;
+        }
+
         {
-            // GET/PUT /api/v9/niche-agents/:id
+            // GET/PUT/DELETE /api/v9/niche-agents/:id
             const nicheId = extractParam(route, 'v9/niche-agents/:id');
             if (nicheId) {
                 if (method === 'GET') {
@@ -5888,6 +5955,17 @@ Only return the JSON array.`;
                     const body = await parseBody(req);
                     database.updateNicheAgentDefinition(nicheId, body as any);
                     json(res, { success: true });
+                    return true;
+                }
+                if (method === 'DELETE') {
+                    try {
+                        const deleted = database.deleteNicheAgentDefinition(nicheId);
+                        if (!deleted) { json(res, { error: 'Niche agent not found' }, 404); return true; }
+                        eventBus.emit('niche:agent_spawned', 'api', { id: nicheId, action: 'deleted' });
+                        json(res, { success: true });
+                    } catch (err) {
+                        json(res, { error: 'Failed to delete: ' + String(err) }, 500);
+                    }
                     return true;
                 }
             }

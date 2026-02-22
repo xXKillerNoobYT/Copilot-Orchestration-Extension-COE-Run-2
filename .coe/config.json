@@ -1,0 +1,107 @@
+{
+  "version": "1.0.0",
+  "llm": {
+    "endpoint": "http://192.168.1.205:1234/v1",
+    "model": "mistralai/ministral-3-14b-reasoning",
+    "timeoutSeconds": 7200,
+    "startupTimeoutSeconds": 900,
+    "streamStallTimeoutSeconds": 180,
+    "thinkingTimeoutSeconds": 5400,
+    "maxTokens": 4096,
+    "maxInputTokens": 24000,
+    "maxConcurrentRequests": 4,
+    "bossReservedSlots": 1,
+    "maxRequestRetries": 5
+  },
+  "taskQueue": {
+    "maxPending": 20
+  },
+  "verification": {
+    "delaySeconds": 60,
+    "coverageThreshold": 85
+  },
+  "watcher": {
+    "debounceMs": 500
+  },
+  "agents": {
+    "orchestrator": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "planning": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "answer": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "verification": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "research": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "clarity": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "boss": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "custom": {
+      "contextLimit": 25000,
+      "enabled": true
+    },
+    "review": {
+      "contextLimit": 25000,
+      "enabled": true
+    }
+  },
+  "models": {
+    "mistralai/ministral-3-14b-reasoning": {
+      "contextWindowTokens": 32768,
+      "maxOutputTokens": 4096
+    }
+  },
+  "tokenBudget": {
+    "warningThresholdPercent": 70,
+    "criticalThresholdPercent": 90,
+    "inputBufferPercent": 5
+  },
+  "designQaScoreThreshold": 80,
+  "maxActiveTickets": 10,
+  "maxTicketRetries": 3,
+  "maxClarificationRounds": 5,
+  "bossIdleTimeoutMinutes": 5,
+  "bossStuckPhaseMinutes": 30,
+  "bossTaskOverloadThreshold": 20,
+  "bossEscalationThreshold": 5,
+  "clarityAutoResolveScore": 85,
+  "clarityClarificationScore": 70,
+  "aiMode": "smart",
+  "bossAutoRunEnabled": true,
+  "bossParallelBatchSize": 3,
+  "modelHoldTimeoutMs": 3600000,
+  "maxModelsPerCycle": 2,
+  "multiModelEnabled": false,
+  "teamSlotAllocation": {
+    "orchestrator": 1,
+    "planning": 1,
+    "verification": 1,
+    "coding_director": 0
+  },
+  "cancelledTicketReviewIntervalMs": 1800000,
+  "maxSupportAgentSyncTimeoutMs": 60000,
+  "maxAgentTreeDepth": 10,
+  "defaultMaxFanout": 5,
+  "mcpConfirmationRequired": true,
+  "mcpConfirmationTimeoutMs": 60000,
+  "userProgrammingLevel": "good",
+  "workflowDesignerEnabled": true,
+  "userCommInterceptAll": true,
+  "defaultTreeTemplate": "standard"
+}

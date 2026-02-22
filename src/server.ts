@@ -62,6 +62,12 @@ import { LLMProfileManager } from './core/llm-profile-manager';
 import { ToolAssignmentManager } from './core/tool-assignment-manager';
 import { StartupTicketManager } from './core/startup-tickets';
 
+// --- v11.0 services ---
+import { BootstrapExecutor } from './core/bootstrap-executor';
+
+// --- v11.2: System tray ---
+import { SystemTray } from './core/system-tray';
+
 // ============================================================
 // Console-based OutputChannel (timestamps + console.log)
 // ============================================================
@@ -113,6 +119,7 @@ let mcpServer: MCPServer;
 let ticketProcessor: TicketProcessorService;
 let syncService: SyncService;
 let configManager: ConfigManager;
+let systemTray: SystemTray;
 
 // ============================================================
 // Main Boot Sequence
@@ -352,6 +359,14 @@ async function main() {
         outputChannel.appendLine(`[Config] LLM config updated: model=${newConfig.llm.model}`);
     });
 
+    // v11.0: Bootstrap executor for deterministic system_operation execution
+    const bootstrapExecutor = new BootstrapExecutor(
+        database, eventBus, outputChannel,
+        llmService, agentTreeManager, nicheAgentFactory,
+        _toolAssignmentManager, llmProfileManager,
+    );
+    ticketProcessor.setBootstrapExecutor(bootstrapExecutor);
+
     // MCP confirmation
     const mcpConfirmEnabled = configManager.getConfig().mcpConfirmationRequired !== false;
     mcpServer.setConfirmationEnabled(mcpConfirmEnabled);
@@ -372,6 +387,25 @@ async function main() {
 
     database.addAuditLog('system', 'server_started', 'COE standalone server started successfully');
 
+    // v11.2: System tray icon (Windows only)
+    systemTray = new SystemTray(port, {
+        onOpenWebApp: () => {
+            const { execFile } = require('child_process');
+            const url = `http://localhost:${port}/app`;
+            if (process.platform === 'win32') {
+                execFile('cmd.exe', ['/c', 'start', '', url]);
+            } else if (process.platform === 'darwin') {
+                execFile('open', [url]);
+            } else {
+                execFile('xdg-open', [url]);
+            }
+        },
+        onStopServer: () => {
+            shutdown('TRAY_STOP');
+        },
+    }, outputChannel);
+    systemTray.start();
+
     // Print summary
     outputChannel.appendLine('');
     outputChannel.appendLine('========================================');
@@ -383,6 +417,9 @@ async function main() {
     outputChannel.appendLine(`  SSE:        http://localhost:${port}/events`);
     outputChannel.appendLine(`  Health:     http://localhost:${port}/health`);
     outputChannel.appendLine('========================================');
+    if (process.platform === 'win32') {
+        outputChannel.appendLine('  System tray icon active (right-click for menu)');
+    }
     outputChannel.appendLine('Press Ctrl+C to stop.');
 }
 
@@ -392,6 +429,7 @@ async function main() {
 async function shutdown(signal: string) {
     console.log(`\n[COE] Received ${signal} — shutting down...`);
     try {
+        if (systemTray) systemTray.dispose();
         if (ticketProcessor) ticketProcessor.dispose();
         if (syncService) await syncService.dispose();
         if (mcpServer) mcpServer.dispose();

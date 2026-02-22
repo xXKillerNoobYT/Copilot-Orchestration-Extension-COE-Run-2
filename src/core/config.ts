@@ -317,6 +317,21 @@ export class ConfigManager {
         return this.coeDir;
     }
 
+    /**
+     * v11.0: Get the resolved workspace root directory.
+     * Returns the absolute path to the project workspace, or undefined if none was provided.
+     */
+    getWorkspaceRoot(): string | undefined {
+        return this.workspaceRoot;
+    }
+
+    /**
+     * v11.0: Get the absolute path to the database file.
+     */
+    getAbsoluteDbPath(): string {
+        return path.join(this.coeDir, 'tickets.db');
+    }
+
     getAgentContextLimit(agentType: string): number {
         return this.config.agents[agentType]?.contextLimit ?? 4000;
     }

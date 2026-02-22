@@ -17,13 +17,13 @@ export function getAppHtml(port: number): string {
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
 /* NAV */
-.topnav { display: flex; align-items: center; background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 20px; height: 52px; position: sticky; top: 0; z-index: 100; }
+.topnav { display: flex; align-items: center; flex-wrap: wrap; background: var(--bg2); border-bottom: 1px solid var(--border); padding: 4px 20px; min-height: 52px; position: sticky; top: 0; z-index: 100; gap: 8px; }
 .topnav .logo { font-weight: 700; font-size: 1.1em; color: var(--blue); margin-right: 32px; letter-spacing: -0.5px; }
-.topnav .tabs { display: flex; gap: 4px; }
+.topnav .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .topnav .tab { padding: 8px 16px; border-radius: 6px; cursor: pointer; color: var(--subtext); font-size: 0.9em; font-weight: 500; transition: all 0.15s; border: none; background: none; }
 .topnav .tab:hover { background: var(--bg3); color: var(--text); }
 .topnav .tab.active { background: var(--bg3); color: var(--blue); }
-.topnav .status { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 0.85em; }
+.topnav .status { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 0.85em; flex-wrap: wrap; }
 .topnav .status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .topnav .status .dot.online { background: var(--green); }
 .topnav .status .dot.offline { background: var(--red); }
@@ -127,7 +127,7 @@ button, .btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: poin
 .btn-secondary { background: var(--bg3); color: var(--text); }
 .btn-secondary:hover { background: var(--surface); }
 .btn-sm { padding: 4px 10px; font-size: 0.8em; }
-.btn-row { display: flex; gap: 8px; margin-top: 16px; }
+.btn-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
 /* FORMS */
 input, textarea, select { width: 100%; padding: 10px 12px; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 0.95em; margin-top: 4px; }
@@ -174,7 +174,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .thread-reply .meta { color: var(--overlay); font-size: 0.8em; margin-top: 4px; }
 
 /* WIZARD */
-.wizard-steps { display: flex; gap: 8px; margin-bottom: 20px; }
+.wizard-steps { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 .wizard-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bg3); transition: all 0.2s; }
 .wizard-dot.active { background: var(--blue); }
 .wizard-dot.done { background: var(--green); }
@@ -190,14 +190,19 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-overlay { text-align: center; padding: 40px; }
 
-/* RESPONSIVE */
-@media (max-width: 768px) {
-    .topnav { padding: 0 10px; overflow-x: auto; }
-    .topnav .tab { padding: 6px 10px; font-size: 0.8em; white-space: nowrap; }
+/* RESPONSIVE — global overflow prevention */
+.main [style*="display:flex"] { flex-wrap: wrap; }
+@media (max-width: 900px) {
+    .topnav { padding: 4px 10px; }
+    .topnav .tab { padding: 6px 10px; font-size: 0.8em; }
+    .topnav .logo { margin-right: 12px; font-size: 1em; }
     .main { padding: 16px 10px; }
     .card-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
     .wizard-layout { flex-direction: column; }
     .wizard-right { width: 100%; position: static; }
+    .detail-row { flex-wrap: wrap; gap: 4px; }
+    table { display: block; overflow-x: auto; }
+    .modal-content { max-width: 95vw; margin: 10px; }
 }
 
 /* WIZARD LAYOUT */
@@ -280,7 +285,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .settings-panel { padding: 24px; overflow-y: auto; max-height: 700px; }
 .settings-section { margin-bottom: 24px; }
 .settings-section h3 { font-size: 1em; color: var(--blue); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.setting-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(69,71,90,0.3); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(69,71,90,0.3); flex-wrap: wrap; gap: 8px; }
 .setting-row:last-child { border-bottom: none; }
 .setting-label { flex: 1; display: block; }
 .setting-label strong { display: block; font-size: 0.9em; }
@@ -324,14 +329,14 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .prop-row input, .prop-row select { flex: 1; padding: 4px 8px; font-size: 0.85em; margin-top: 0; }
 .prop-row input[type="color"] { width: 32px; height: 24px; padding: 0; cursor: pointer; }
 .prop-row input[type="number"] { width: 60px; }
-.page-tabs { display: flex; gap: 2px; padding: 8px; border-bottom: 1px solid var(--border); overflow-x: auto; background: var(--bg3); }
+.page-tabs { display: flex; gap: 2px; padding: 8px; border-bottom: 1px solid var(--border); overflow-x: auto; background: var(--bg3); flex-wrap: wrap; }
 .page-tab { padding: 6px 14px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.8em; background: var(--bg); color: var(--subtext); border: 1px solid var(--border); border-bottom: none; }
 .page-tab.active { background: var(--bg2); color: var(--blue); font-weight: 600; }
 .page-tab-add { padding: 6px 10px; cursor: pointer; color: var(--overlay); font-size: 0.8em; }
 .page-tab-add:hover { color: var(--blue); }
 
 /* ===== RESPONSIVE PREVIEW ===== */
-.responsive-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.responsive-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .responsive-btn { padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--subtext); cursor: pointer; font-size: 0.8em; }
 .responsive-btn.active { border-color: var(--blue); color: var(--blue); background: rgba(137,180,250,0.08); }
 .zoom-control { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 0.8em; color: var(--subtext); }
@@ -348,7 +353,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
 .session-item .session-name { font-weight: 500; }
 .session-item .session-meta { font-size: 0.75em; color: var(--overlay); margin-top: 2px; }
 .coding-main { display: flex; flex-direction: column; min-height: 0; }
-.coding-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.coding-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .coding-messages { flex: 1; overflow-y: auto; padding: 16px; }
 .coding-msg { margin-bottom: 12px; max-width: 85%; }
 .coding-msg.user { margin-left: auto; }
@@ -802,6 +807,14 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <h2>Agents</h2>
         <table><thead><tr><th>Agent</th><th>Type</th><th>Status</th><th>Current Task</th></tr></thead>
         <tbody id="dashAgents"></tbody></table>
+    </div>
+    <div class="section">
+        <h2 style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">
+            <span>Niche Agents <span id="dashNicheCount" style="font-size:0.7em;color:var(--subtext);font-weight:400"></span></span>
+            <button class="btn btn-sm btn-secondary" onclick="switchToTab('agents');document.querySelector('[data-sub=\\'niche\\']').click()">Browse All</button>
+        </h2>
+        <div id="dashNicheActive" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <div id="dashNicheIdle" style="font-size:0.85em;color:var(--subtext)"></div>
     </div>
     <div class="section">
         <h2>Recent Activity</h2>
@@ -1608,8 +1621,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         <div id="agentTreeDetail" style="margin-top:12px;display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px"></div>
     </div>
     <div id="agentSubNiche" class="agent-sub-panel" style="display:none">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-            <input id="nicheSearch" placeholder="Search niche agents..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)" oninput="filterNicheAgents()">
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <input id="nicheSearch" placeholder="Search niche agents..." style="flex:1;min-width:180px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)" oninput="filterNicheAgents()">
             <select id="nicheFilterLevel" onchange="loadNicheAgents()" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
                 <option value="">All Levels</option>
                 <option value="4">L4 Manager</option>
@@ -1619,7 +1632,19 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <option value="8">L8 Worker</option>
                 <option value="9">L9 Checker</option>
             </select>
+            <select id="nicheFilterDomain" onchange="loadNicheAgents()" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                <option value="">All Domains</option>
+                <option value="code">Code</option>
+                <option value="design_ui">Design/UI</option>
+                <option value="planning">Planning</option>
+                <option value="verification">Verification</option>
+                <option value="data">Data</option>
+                <option value="docs">Documentation</option>
+                <option value="custom">Custom</option>
+            </select>
+            <button class="btn btn-sm btn-primary" onclick="openCreateNicheModal()">+ Create Agent</button>
         </div>
+        <div id="nicheAgentsSummary" style="font-size:0.85em;color:var(--subtext);margin-bottom:8px"></div>
         <div id="nicheAgentsList" class="card-grid"></div>
     </div>
 </div>
@@ -1868,17 +1893,42 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     </div>
 </div>
 
-<!-- v10.0: Niche Agent Editor Modal -->
+<!-- v10.0: Niche Agent Editor/Creator Modal -->
 <div class="modal-overlay" id="nicheAgentModal">
     <div class="modal" style="max-width:700px">
         <button class="modal-close" onclick="closeModal('nicheAgentModal')">&times;</button>
         <h2 id="nicheModalTitle">Edit Agent</h2>
         <input type="hidden" id="nicheEditId">
-        <div class="form-group"><label>Name</label><div id="nicheEditName" style="font-weight:600;font-size:1.05em;padding:4px 0"></div></div>
-        <div style="display:flex;gap:12px">
-            <div class="form-group" style="flex:1"><label>Level</label><div id="nicheEditLevel" style="padding:4px 0;color:var(--subtext)"></div></div>
-            <div class="form-group" style="flex:1"><label>Category</label><div id="nicheEditCategory" style="padding:4px 0;color:var(--subtext)"></div></div>
-            <div class="form-group" style="flex:1"><label>Capability</label>
+        <input type="hidden" id="nicheEditMode" value="edit">
+        <!-- Name: editable for create, read-only for edit -->
+        <div class="form-group" id="nicheNameDisplay"><label>Name</label><div id="nicheEditName" style="font-weight:600;font-size:1.05em;padding:4px 0"></div></div>
+        <div class="form-group" id="nicheNameInput" style="display:none"><label>Name</label><input type="text" id="nicheEditNameInput" placeholder="Agent name (e.g. ReactHooksExpert)" style="width:100%"></div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <!-- Level: editable for create, read-only for edit -->
+            <div class="form-group" style="flex:1;min-width:120px" id="nicheLevelDisplay"><label>Level</label><div id="nicheEditLevel" style="padding:4px 0;color:var(--subtext)"></div></div>
+            <div class="form-group" style="flex:1;min-width:120px" id="nicheLevelInput" style="display:none"><label>Level</label>
+                <select id="nicheEditLevelInput" style="width:100%;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <option value="4">L4 Manager</option>
+                    <option value="5">L5 SubManager</option>
+                    <option value="6">L6 TeamLead</option>
+                    <option value="7">L7 WorkerGroup</option>
+                    <option value="8">L8 Worker</option>
+                    <option value="9">L9 Checker</option>
+                </select>
+            </div>
+            <div class="form-group" style="flex:1;min-width:120px"><label>Domain</label>
+                <select id="nicheEditDomain" style="width:100%;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+                    <option value="code">Code</option>
+                    <option value="design_ui">Design/UI</option>
+                    <option value="planning">Planning</option>
+                    <option value="verification">Verification</option>
+                    <option value="data">Data</option>
+                    <option value="docs">Documentation</option>
+                    <option value="custom">Custom</option>
+                </select>
+            </div>
+            <div class="form-group" style="flex:1;min-width:120px"><label>Category</label><div id="nicheEditCategory" style="padding:4px 0;color:var(--subtext)"></div></div>
+            <div class="form-group" style="flex:1;min-width:120px"><label>Capability</label>
                 <select id="nicheEditCapability" style="width:100%;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
                     <option value="general">general</option>
                     <option value="reasoning">reasoning</option>
@@ -1889,11 +1939,12 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
             </div>
         </div>
         <div class="form-group"><label>Specialty</label><input type="text" id="nicheEditSpecialty" placeholder="What this agent specializes in" style="width:100%"></div>
-        <div class="form-group"><label>System Prompt Template</label><textarea id="nicheEditPrompt" rows="10" style="width:100%;font-family:monospace;font-size:0.85em" placeholder="System prompt template..."></textarea></div>
-        <div class="form-group"><label>Tools (comma-separated)</label><input type="text" id="nicheEditTools" placeholder="e.g. lint, test, review" style="width:100%"></div>
+        <div class="form-group"><label>System Prompt Template</label><textarea id="nicheEditPrompt" rows="8" style="width:100%;font-family:monospace;font-size:0.85em" placeholder="System prompt template for this agent..."></textarea></div>
+        <div class="form-group"><label>Tools (comma-separated)</label><input type="text" id="nicheEditTools" placeholder="e.g. lint, test, review, file_read" style="width:100%"></div>
         <div class="btn-row">
             <button class="btn btn-secondary" onclick="closeModal('nicheAgentModal')">Cancel</button>
-            <button class="btn btn-primary" onclick="saveNicheAgent()">Save Changes</button>
+            <button class="btn btn-danger" id="nicheDeleteBtn" onclick="deleteNicheAgent()" style="display:none">Delete</button>
+            <button class="btn btn-primary" id="nicheSaveBtn" onclick="saveNicheAgent()">Save Changes</button>
         </div>
     </div>
 </div>
@@ -2222,6 +2273,28 @@ async function loadDashboard() {
         document.getElementById('dashAudit').innerHTML = (data.recentAudit || []).map(e =>
             '<div class="audit-entry"><span class="audit-agent">' + esc(e.agent) + '</span>: ' + esc(e.action) + ' — ' + esc(e.detail) + '<div class="audit-time">' + esc(e.created_at) + '</div></div>'
         ).join('') || '<div class="empty">No activity yet</div>';
+
+        // Niche agents running status (all values are escaped via esc() helper)
+        var activeNiche = data.activeNicheAgents || [];
+        var nicheTotal = data.nicheCount || 0;
+        document.getElementById('dashNicheCount').textContent = '(' + activeNiche.length + ' active / ' + nicheTotal + ' total)';
+        if (activeNiche.length > 0) {
+            document.getElementById('dashNicheActive').innerHTML = activeNiche.map(function(n) {
+                var statusColor = n.status === 'working' ? 'var(--green)' : 'var(--blue)';
+                return '<div class="card" style="min-width:200px;flex:0 0 auto;border-left:3px solid ' + statusColor + '">' +
+                    '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                    '<strong style="font-size:0.85em">' + esc(n.name) + '</strong>' +
+                    '<span class="badge" style="background:' + statusColor + ';font-size:0.7em">' + esc(n.status) + '</span>' +
+                    '</div>' +
+                    '<div style="font-size:0.75em;color:var(--subtext);margin-top:4px">L' + parseInt(n.level) + ' • ' + esc(n.scope || '') + '</div>' +
+                    (n.tokens_consumed ? '<div style="font-size:0.7em;color:var(--overlay);margin-top:2px">' + parseInt(n.tokens_consumed) + ' tokens</div>' : '') +
+                    '</div>';
+            }).join('');
+            document.getElementById('dashNicheIdle').textContent = '';
+        } else {
+            document.getElementById('dashNicheActive').innerHTML = '';
+            document.getElementById('dashNicheIdle').textContent = 'No niche agents currently active. Agents spawn when tickets are routed through the agent tree.';
+        }
     } catch (err) {
         document.getElementById('dashCards').innerHTML = '<div class="empty">Failed to load dashboard: ' + esc(String(err)) + '</div>';
     }
@@ -2346,7 +2419,7 @@ function ticketRow(t, depth, hasChildren, isExpanded, childCount) {
     var childBadge = hasChildren ? '<span class="ticket-child-badge" title="' + (childCount || 0) + ' sub-tickets">' + (childCount || 0) + '</span>' : '';
     var depthClass = depth > 0 ? ' style="opacity:0.85"' : '';
     return '<tr data-ticket-id="' + t.id + '" data-depth="' + depth + '"' + depthClass + '>' +
-        '<td style="' + indent + '">' + expandBtn + 'TK-' + String(t.ticket_number).padStart(3, '0') + childBadge + '</td>' +
+        '<td style="' + indent + '">' + expandBtn + 'TK-' + String(t.ticket_number).padStart(4, '0') + childBadge + '</td>' +
         '<td class="clickable" onclick="showTicketDetail(\\'' + t.id + '\\')">' + esc(t.title) + (depth > 0 ? ' <span style="color:var(--overlay);font-size:0.8em">(sub)</span>' : '') + '</td>' +
         '<td>' + statusBadge(t.status) + '</td>' +
         '<td>' + processingBadge(t) + '</td>' +
@@ -2516,7 +2589,7 @@ async function showTicketDetail(id) {
     } catch(e) { /* run history endpoint may not exist yet */ }
 
     document.getElementById('ticketDetail').innerHTML = '<div class="detail-panel">' +
-        '<h3>TK-' + String(data.ticket_number).padStart(3, '0') + ': ' + esc(data.title) + '</h3>' +
+        '<h3>TK-' + String(data.ticket_number).padStart(4, '0') + ': ' + esc(data.title) + '</h3>' +
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
         '<div class="detail-row"><span>Priority</span>' + prioBadge(data.priority) + '</div>' +
         '<div class="detail-row"><span>Creator</span><span>' + esc(data.creator) + '</span></div>' +
@@ -5779,7 +5852,7 @@ function updateCodingTicketInfo(ticket) {
         if (label) label.textContent = 'No ticket loaded';
         return;
     }
-    var tkNum = 'TK-' + String(ticket.ticket_number).padStart(3, '0');
+    var tkNum = 'TK-' + String(ticket.ticket_number).padStart(4, '0');
     if (label) label.textContent = tkNum + ': ' + (ticket.title || '').substring(0, 40);
     if (el) {
         el.innerHTML = '<div style="background:var(--surface0);padding:8px;border-radius:6px;border-left:3px solid var(--blue)">' +
@@ -5849,7 +5922,7 @@ async function codingAutoPick() {
         if (welcome) welcome.style.display = 'none';
         showCodingAreaControls('Planning phase — review the generated prompt, then paste into your coding agent.');
 
-        showNotification('Auto-picked TK-' + String(result.ticket.ticket_number).padStart(3, '0') + ' — prompt generated!', 'success');
+        showNotification('Auto-picked TK-' + String(result.ticket.ticket_number).padStart(4, '0') + ' — prompt generated!', 'success');
     } catch (e) {
         showNotification('Auto-pick failed: ' + String(e), 'error');
     } finally {
@@ -5859,7 +5932,7 @@ async function codingAutoPick() {
 
 // v5.0: New coding chat (clear current session, start fresh)
 async function codingNewChat() {
-    var tkLabel = currentCodingTicket ? 'TK-' + String(currentCodingTicket.ticket_number).padStart(3, '0') + ': ' : '';
+    var tkLabel = currentCodingTicket ? 'TK-' + String(currentCodingTicket.ticket_number).padStart(4, '0') + ': ' : '';
     var name = tkLabel + 'Coding Chat ' + new Date().toLocaleTimeString();
     try {
         var session = await api('coding/sessions', { method: 'POST', body: { name: name } });
@@ -6255,8 +6328,12 @@ function showSettingsSection(section) {
         },
 
         advanced: () => '<div class="settings-section"><h3>Advanced</h3>' +
+            '<div id="system-info-banner" style="background:var(--surface0);border:1px solid var(--overlay);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:0.85em">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><strong style="color:var(--blue)">System Info</strong><span id="system-info-status" style="color:var(--overlay)">Loading...</span></div>' +
+            '<div id="system-info-details" style="display:grid;grid-template-columns:140px 1fr;gap:4px 12px;color:var(--text)"></div>' +
+            '</div>' +
             settingRow('Watcher Debounce (ms)', 'File change detection delay', '<input id="setting-advanced-debounce" type="number" value="' + (settingsConfig.watcher?.debounceMs || 2000) + '" onchange="updateSetting(\\'watcher.debounceMs\\', +this.value)">', 'setting-advanced-debounce') +
-            settingRow('Database Path', 'SQLite database location', '<input id="setting-advanced-dbPath" value=".coe/tickets.db" disabled style="opacity:0.6">', 'setting-advanced-dbPath') +
+            settingRow('Database Path', 'SQLite database location (relative)', '<input id="setting-advanced-dbPath" value=".coe/tickets.db" disabled style="opacity:0.6">', 'setting-advanced-dbPath') +
             settingRow('MCP Port', 'MCP server port (auto-increments if busy)', '<input id="setting-advanced-mcpPort" type="number" value="3030" disabled style="opacity:0.6">', 'setting-advanced-mcpPort') +
             '<div class="btn-row"><button class="btn btn-danger btn-sm" onclick="if(confirm(\\'Reset all settings to defaults?\\'))resetSettings()">Reset to Defaults</button></div>' +
             '</div>',
@@ -6275,6 +6352,10 @@ function showSettingsSection(section) {
     // v9.0: Auto-load permissions when section is shown
     if (section === 'agent-customization') {
         setTimeout(function() { loadPermissionsTable(); }, 50);
+    }
+    // v11.2: Auto-load system info when advanced section is shown
+    if (section === 'advanced') {
+        setTimeout(function() { loadSystemInfo(); }, 50);
     }
 }
 
@@ -6351,6 +6432,43 @@ async function resetSettings() {
         settingsConfig = await api('config');
         showSettingsSection('llm');
     } catch(e) { alert('Reset failed: ' + e); }
+}
+
+// v11.2: Load system information for Advanced settings
+async function loadSystemInfo() {
+    var statusEl = document.getElementById('system-info-status');
+    var detailsEl = document.getElementById('system-info-details');
+    if (!detailsEl) return;
+    try {
+        var info = await api('system/info');
+        if (statusEl) {
+            var healthIcon = (info.coeDirExists && info.dbFileExists) ? '🟢' : '🟡';
+            statusEl.textContent = healthIcon + ' Running (PID ' + info.pid + ', uptime ' + formatUptime(info.uptime) + ')';
+        }
+        var rows = '';
+        rows += '<span style="color:var(--overlay)">Workspace Root</span><span style="word-break:break-all;font-family:monospace;font-size:0.9em">' + escapeHtml(info.workspaceRoot) + '</span>';
+        rows += '<span style="color:var(--overlay)">Data Directory</span><span style="word-break:break-all;font-family:monospace;font-size:0.9em">' + escapeHtml(info.coeDir) + '</span>';
+        rows += '<span style="color:var(--overlay)">Database File</span><span style="word-break:break-all;font-family:monospace;font-size:0.9em">' + escapeHtml(info.absoluteDbPath) + (info.dbFileExists ? ' <span style="color:var(--green)">✓</span>' : ' <span style="color:var(--red)">✗ missing</span>') + '</span>';
+        rows += '<span style="color:var(--overlay)">.coe/ Exists</span><span>' + (info.coeDirExists ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--red)">No — data directory missing!</span>') + '</span>';
+        rows += '<span style="color:var(--overlay)">Platform</span><span>' + info.platform + ' / Node ' + info.nodeVersion + '</span>';
+        detailsEl.innerHTML = rows;
+    } catch(e) {
+        if (statusEl) statusEl.textContent = '⚠️ Could not fetch system info';
+        detailsEl.innerHTML = '<span style="color:var(--red);grid-column:1/-1">Error: ' + e + '</span>';
+    }
+}
+
+function formatUptime(seconds) {
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+    var h = Math.floor(seconds / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    return h + 'h ' + m + 'm';
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // v4.3: Fetch and populate the model dropdown from LM Studio
@@ -8403,6 +8521,7 @@ function switchAgentSubTab(sub) {
 var treeCollapsedNodes = {};
 var treeViewMode = 'diagram'; // 'diagram' or 'list'
 var allTreeNodes = [];
+var treeDirty = false; // v11.2: set when tree changes while tab is hidden
 
 // v9.0: Update a tree node status in local cache and re-render
 function updateLocalTreeNodeStatus(nodeId, newStatus) {
@@ -8414,9 +8533,15 @@ function updateLocalTreeNodeStatus(nodeId, newStatus) {
         }
     }
     // Re-render tree if currently viewing the agent tree tab
-    var container = document.getElementById('agentTreeView');
-    if (container && container.innerHTML.indexOf('No agent tree') === -1) {
-        renderAgentTree(allTreeNodes);
+    var activeTab = loadState('activeTab', 'dashboard');
+    if (activeTab === 'tree') {
+        var container = document.getElementById('agentTreeView');
+        if (container && container.innerHTML.indexOf('No agent tree') === -1) {
+            renderAgentTree(allTreeNodes);
+        }
+    } else {
+        // Mark dirty — will re-render when user switches to tree tab
+        treeDirty = true;
     }
 }
 
@@ -8838,13 +8963,19 @@ async function loadNicheAgents() {
     if (!container) return;
     try {
         var levelFilter = document.getElementById('nicheFilterLevel');
+        var domainFilter = document.getElementById('nicheFilterDomain');
         var qs = 'v9/niche-agents';
-        if (levelFilter && levelFilter.value) qs += '?level=' + levelFilter.value;
+        var params = [];
+        if (levelFilter && levelFilter.value) params.push('level=' + levelFilter.value);
+        if (domainFilter && domainFilter.value) params.push('domain=' + domainFilter.value);
+        if (params.length) qs += '?' + params.join('&');
         var result = await api(qs);
         allNicheAgents = (result && result.data) ? result.data : (Array.isArray(result) ? result : []);
+        var summary = document.getElementById('nicheAgentsSummary');
+        if (summary) summary.textContent = allNicheAgents.length + ' agents found';
         renderNicheAgents(allNicheAgents);
     } catch (err) {
-        container.innerHTML = '<div class="empty">Error: ' + esc(String(err)) + '</div>';
+        container.textContent = 'Error: ' + String(err);
     }
 }
 
@@ -8852,7 +8983,7 @@ function filterNicheAgents() {
     var search = (document.getElementById('nicheSearch') || {}).value || '';
     search = search.toLowerCase();
     var filtered = allNicheAgents.filter(function(a) {
-        return !search || (a.name || '').toLowerCase().indexOf(search) >= 0 || (a.specialty || '').toLowerCase().indexOf(search) >= 0;
+        return !search || (a.name || '').toLowerCase().indexOf(search) >= 0 || (a.specialty || '').toLowerCase().indexOf(search) >= 0 || (a.domain || '').toLowerCase().indexOf(search) >= 0;
     });
     renderNicheAgents(filtered);
 }
@@ -8860,17 +8991,47 @@ function filterNicheAgents() {
 function renderNicheAgents(agents) {
     var container = document.getElementById('nicheAgentsList');
     if (!container) return;
+    // XSS safety: all dynamic values passed through esc() helper
     container.innerHTML = agents.map(function(a) {
         var capColor = a.required_capability === 'reasoning' ? 'var(--blue)' : a.required_capability === 'code' ? 'var(--green)' : a.required_capability === 'fast' ? 'var(--yellow)' : 'var(--overlay)';
-        return '<div class="card" style="cursor:pointer" onclick="editNicheAgent(\\'' + a.id + '\\')">' +
+        var domainIcon = {code:'</>', design_ui:'</>',planning:'P',verification:'V',data:'D',docs:'DOC',custom:'*'}[a.domain] || '?';
+        var isUser = a.created_by === 'user' || a.category === 'user_created';
+        return '<div class="card" style="cursor:pointer;position:relative' + (isUser ? ';border-left:3px solid var(--green)' : '') + '" onclick="editNicheAgent(\\'' + a.id + '\\')">' +
             '<div style="display:flex;justify-content:space-between;align-items:center">' +
             '<strong style="font-size:0.9em">' + esc(a.name) + '</strong>' +
             '<span style="font-size:0.75em;padding:2px 6px;border-radius:3px;background:var(--surface0);color:var(--subtext)">L' + (a.level || '?') + '</span>' +
             '</div>' +
-            '<div style="font-size:0.8em;color:var(--overlay);margin-top:4px">' + esc(a.specialty || '') + '</div>' +
-            '<div style="font-size:0.75em;margin-top:4px"><span style="color:' + capColor + '">' + esc(a.required_capability || 'general') + '</span></div>' +
+            '<div style="font-size:0.8em;color:var(--overlay);margin-top:4px">' + esc(a.specialty || 'No specialty set') + '</div>' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">' +
+            '<span style="font-size:0.75em;color:' + capColor + '">' + esc(a.required_capability || 'general') + '</span>' +
+            '<span style="font-size:0.7em;color:var(--overlay)">' + esc(a.domain || '') + '</span>' +
+            '</div>' +
+            (isUser ? '<div style="position:absolute;top:4px;right:8px;font-size:0.65em;color:var(--green)">USER</div>' : '') +
             '</div>';
     }).join('') || '<div class="empty">No niche agents found</div>';
+}
+
+function openCreateNicheModal() {
+    document.getElementById('nicheEditMode').value = 'create';
+    document.getElementById('nicheEditId').value = '';
+    document.getElementById('nicheModalTitle').textContent = 'Create New Niche Agent';
+    // Show create fields, hide edit-only fields
+    document.getElementById('nicheNameDisplay').style.display = 'none';
+    document.getElementById('nicheNameInput').style.display = '';
+    document.getElementById('nicheLevelDisplay').style.display = 'none';
+    document.getElementById('nicheLevelInput').style.display = '';
+    document.getElementById('nicheEditCategory').textContent = 'user_created';
+    // Reset fields
+    document.getElementById('nicheEditNameInput').value = '';
+    document.getElementById('nicheEditLevelInput').value = '8';
+    document.getElementById('nicheEditDomain').value = 'custom';
+    document.getElementById('nicheEditCapability').value = 'general';
+    document.getElementById('nicheEditSpecialty').value = '';
+    document.getElementById('nicheEditPrompt').value = '';
+    document.getElementById('nicheEditTools').value = '';
+    document.getElementById('nicheDeleteBtn').style.display = 'none';
+    document.getElementById('nicheSaveBtn').textContent = 'Create Agent';
+    openModal('nicheAgentModal');
 }
 
 async function editNicheAgent(id) {
@@ -8878,17 +9039,26 @@ async function editNicheAgent(id) {
         var result = await api('v9/niche-agents/' + id);
         var agent = (result && result.data) ? result.data : result;
         if (!agent) { showToast('Agent not found', 'error'); return; }
-        // Populate modal fields
+        document.getElementById('nicheEditMode').value = 'edit';
         document.getElementById('nicheEditId').value = id;
         document.getElementById('nicheModalTitle').textContent = 'Edit: ' + (agent.name || id);
+        // Show edit fields, hide create-only fields
+        document.getElementById('nicheNameDisplay').style.display = '';
+        document.getElementById('nicheNameInput').style.display = 'none';
+        document.getElementById('nicheLevelDisplay').style.display = '';
+        document.getElementById('nicheLevelInput').style.display = 'none';
         document.getElementById('nicheEditName').textContent = agent.name || id;
         document.getElementById('nicheEditLevel').textContent = 'L' + (agent.level != null ? agent.level : '?') + ' ' + (agent.level_name || '');
         document.getElementById('nicheEditCategory').textContent = agent.category || 'unknown';
-        var capSelect = document.getElementById('nicheEditCapability');
-        capSelect.value = agent.required_capability || 'general';
+        document.getElementById('nicheEditDomain').value = agent.domain || 'custom';
+        document.getElementById('nicheEditCapability').value = agent.required_capability || 'general';
         document.getElementById('nicheEditSpecialty').value = agent.specialty || '';
         document.getElementById('nicheEditPrompt').value = agent.system_prompt_template || '';
         document.getElementById('nicheEditTools').value = Array.isArray(agent.tools) ? agent.tools.join(', ') : (agent.tools || '');
+        // Show delete for user-created agents
+        var isUser = agent.created_by === 'user' || agent.category === 'user_created';
+        document.getElementById('nicheDeleteBtn').style.display = isUser ? '' : 'none';
+        document.getElementById('nicheSaveBtn').textContent = 'Save Changes';
         openModal('nicheAgentModal');
     } catch (err) {
         showToast('Failed to load agent: ' + String(err), 'error');
@@ -8896,24 +9066,61 @@ async function editNicheAgent(id) {
 }
 
 async function saveNicheAgent() {
+    var mode = document.getElementById('nicheEditMode').value;
+    if (mode === 'create') {
+        var name = document.getElementById('nicheEditNameInput').value.trim();
+        if (!name) { showToast('Name is required', 'error'); return; }
+        var body = {
+            name: name,
+            level: parseInt(document.getElementById('nicheEditLevelInput').value),
+            domain: document.getElementById('nicheEditDomain').value,
+            specialty: document.getElementById('nicheEditSpecialty').value,
+            system_prompt_template: document.getElementById('nicheEditPrompt').value,
+            required_capability: document.getElementById('nicheEditCapability').value,
+            created_by: 'user'
+        };
+        var toolsRaw = document.getElementById('nicheEditTools').value.trim();
+        if (toolsRaw) body.tools = toolsRaw.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+        try {
+            await api('v9/niche-agents', { method: 'POST', body: body });
+            showToast('Agent created successfully', 'info');
+            closeModal('nicheAgentModal');
+            loadNicheAgents();
+        } catch (err) {
+            showToast('Failed to create: ' + String(err), 'error');
+        }
+    } else {
+        var id = document.getElementById('nicheEditId').value;
+        if (!id) return;
+        var body = {
+            system_prompt_template: document.getElementById('nicheEditPrompt').value,
+            specialty: document.getElementById('nicheEditSpecialty').value,
+            required_capability: document.getElementById('nicheEditCapability').value
+        };
+        var toolsRaw = document.getElementById('nicheEditTools').value.trim();
+        if (toolsRaw) body.tools = toolsRaw.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+        try {
+            await api('v9/niche-agents/' + id, { method: 'PUT', body: body });
+            showToast('Agent updated successfully', 'info');
+            closeModal('nicheAgentModal');
+            loadNicheAgents();
+        } catch (err) {
+            showToast('Failed to save: ' + String(err), 'error');
+        }
+    }
+}
+
+async function deleteNicheAgent() {
     var id = document.getElementById('nicheEditId').value;
     if (!id) return;
-    var body = {
-        system_prompt_template: document.getElementById('nicheEditPrompt').value,
-        specialty: document.getElementById('nicheEditSpecialty').value,
-        required_capability: document.getElementById('nicheEditCapability').value
-    };
-    var toolsRaw = document.getElementById('nicheEditTools').value.trim();
-    if (toolsRaw) {
-        body.tools = toolsRaw.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; });
-    }
+    if (!confirm('Delete this niche agent? This cannot be undone.')) return;
     try {
-        await api('v9/niche-agents/' + id, { method: 'PUT', body: body });
-        showToast('Agent updated successfully', 'info');
+        await api('v9/niche-agents/' + id, { method: 'DELETE' });
+        showToast('Agent deleted', 'info');
         closeModal('nicheAgentModal');
         loadNicheAgents();
     } catch (err) {
-        showToast('Failed to save: ' + String(err), 'error');
+        showToast('Failed to delete: ' + String(err), 'error');
     }
 }
 
@@ -9299,18 +9506,23 @@ function initSSE() {
 
     sseConnection.addEventListener('ticket:queued', function(e) {
         pollProcessingStatus();
+        loadTickets();
     });
 
     sseConnection.addEventListener('ticket:verification_passed', function(e) {
         pollProcessingStatus();
+        loadTickets();
+        updateTabBadges();
     });
 
     sseConnection.addEventListener('ticket:verification_failed', function(e) {
         pollProcessingStatus();
+        loadTickets();
     });
 
     sseConnection.addEventListener('ticket:recovered', function(e) {
         pollProcessingStatus();
+        loadTickets();
     });
 
     // v11.0: Live Activity panel — route SSE ticket events to the live output view
@@ -9421,6 +9633,47 @@ function initSSE() {
         } catch(err) { /* ignore parse errors */ }
     });
 
+    // v11.2: Tree STRUCTURE change events — reload entire tree when nodes are added/removed
+    var treeStructureEvents = [
+        'tree:default_built', 'tree:skeleton_built', 'tree:node_spawned',
+        'tree:branch_spawned', 'tree:branch_pruned', 'tree:group_created',
+        'tree:ticket_rerouted',
+    ];
+    treeStructureEvents.forEach(function(eventType) {
+        sseConnection.addEventListener(eventType, function(e) {
+            // Full reload — structure changed, local cache is stale
+            if (typeof loadAgentTree === 'function') loadAgentTree();
+        });
+    });
+
+    // v11.2: Tree node escalated — update status in local cache
+    sseConnection.addEventListener('tree:node_escalated', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'escalated');
+        } catch(err) { /* ignore parse errors */ }
+    });
+
+    // v11.2: Ticket status_changed — the MAIN lifecycle event, refresh ticket list + progress
+    sseConnection.addEventListener('ticket:status_changed', function(e) {
+        loadTickets();
+        pollProcessingStatus();
+        updateTabBadges();
+    });
+
+    // v11.2: Ticket escalation — refresh ticket list so escalated badge shows
+    sseConnection.addEventListener('ticket:escalated', function(e) {
+        loadTickets();
+        pollProcessingStatus();
+        updateTabBadges();
+    });
+
+    // v11.2: Agent errors — refresh ticket list to show error state
+    sseConnection.addEventListener('agent:error', function(e) {
+        loadTickets();
+        pollProcessingStatus();
+    });
+
     // v9.0: Refresh agent cards when ticket processing changes
     sseConnection.addEventListener('ticket:processing_started', function(e) {
         if (typeof loadAgents === 'function' && loadState('activeTab', 'dashboard') === 'agents') loadAgents();
@@ -9454,12 +9707,12 @@ function stopBossCountdownUI(activeLabel) {
     bossIsActive = true;
     if (bossCountdownInterval) { clearInterval(bossCountdownInterval); bossCountdownInterval = null; }
     bossCountdownTargetMs = 0;
-    // Update all 4 locations with active label
-    var label = activeLabel || 'Boss AI \\u2022 Active';
+    // Show "Running" label instead of countdown
+    var label = activeLabel || 'Boss AI \\u2022 Running';
     var navEl = document.getElementById('navBossCountdown');
-    if (navEl) { navEl.style.display = 'none'; }
+    if (navEl) { navEl.textContent = label; navEl.style.display = ''; navEl.style.color = 'var(--green)'; }
     var phaseEl = document.getElementById('phaseCountdown');
-    if (phaseEl) { phaseEl.style.display = 'none'; }
+    if (phaseEl) { phaseEl.textContent = label; phaseEl.style.display = ''; phaseEl.style.color = 'var(--green)'; }
 }
 
 function updateBossCountdownDisplay() {
@@ -9468,7 +9721,7 @@ function updateBossCountdownDisplay() {
     var mins = Math.floor(remainMs / 60000);
     var secs = Math.floor((remainMs % 60000) / 1000);
     var timeStr = mins + ':' + String(secs).padStart(2, '0');
-    var fullLabel = 'Boss \\u2022 ' + timeStr;
+    var fullLabel = 'Boss Halted \\u2022 ' + timeStr;
 
     // Location 1: Topnav
     var navEl = document.getElementById('navBossCountdown');
@@ -9485,7 +9738,7 @@ function updateBossCountdownDisplay() {
     // Location 3: Progress dashboard current ticket
     var pdCurrent = document.getElementById('pdCurrentTicket');
     if (pdCurrent && !bossIsActive) {
-        pdCurrent.textContent = 'Boss AI \\u2022 next check in ' + timeStr;
+        pdCurrent.textContent = 'Boss AI Halted \\u2022 next check in ' + timeStr;
         pdCurrent.style.color = 'var(--yellow)';
     }
     // Location 4: Agent badge
@@ -9493,7 +9746,7 @@ function updateBossCountdownDisplay() {
     var agentLabel = document.getElementById('pdAgentLabel');
     if (agentBadge && agentLabel && !bossIsActive) {
         agentBadge.style.display = '';
-        agentLabel.textContent = 'Boss AI \\u2022 ' + timeStr;
+        agentLabel.textContent = 'Boss Halted \\u2022 ' + timeStr;
         agentLabel.style.background = 'rgba(249,226,175,0.15)';
         agentLabel.style.color = 'var(--yellow)';
     }
@@ -9608,7 +9861,7 @@ function updateProgressDashboard(data) {
     }
     if (current) {
         if (data.currentTicket) {
-            var tkLabel = data.currentTicket.ticket_number ? 'TK-' + String(data.currentTicket.ticket_number).padStart(3, '0') + ' ' : '';
+            var tkLabel = data.currentTicket.ticket_number ? 'TK-' + String(data.currentTicket.ticket_number).padStart(4, '0') + ' ' : '';
             current.textContent = tkLabel + (data.currentTicket.title || data.currentTicket.id);
             current.title = current.textContent;
             current.style.color = 'var(--blue)';

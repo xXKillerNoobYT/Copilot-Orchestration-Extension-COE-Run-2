@@ -41,6 +41,8 @@ import { WorkflowEngine } from './core/workflow-engine';
 import { LLMProfileManager } from './core/llm-profile-manager';
 import { ToolAssignmentManager } from './core/tool-assignment-manager';
 import { StartupTicketManager } from './core/startup-tickets';
+// v11.0 services
+import { BootstrapExecutor } from './core/bootstrap-executor';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -342,6 +344,15 @@ export async function activate(context: vscode.ExtensionContext) {
         mcpServer.setConfirmationEnabled(mcpConfirmEnabled);
         outputChannel.appendLine(`MCP confirmation stage: ${mcpConfirmEnabled ? 'enabled' : 'disabled'}.`);
 
+        // v11.0: Bootstrap executor for deterministic system_operation execution
+        const bootstrapExecutor = new BootstrapExecutor(
+            database, eventBus, outputChannel,
+            llmService, agentTreeManager, nicheAgentFactory,
+            toolAssignmentManager, llmProfileManager,
+        );
+        ticketProcessor.setBootstrapExecutor(bootstrapExecutor);
+        outputChannel.appendLine('BootstrapExecutor initialized for deterministic bootstrap.');
+
         // v10.0: Startup tickets — bootstrap the system on first activation
         const startupTicketManager = new StartupTicketManager(database, eventBus, outputChannel);
         if (!startupTicketManager.isBootstrapStarted()) {
@@ -382,6 +393,8 @@ export async function activate(context: vscode.ExtensionContext) {
             codingAgentService,
             conflictResolver,
             syncService,
+            // v11.0: ticket processor for pause/resume/reset
+            ticketProcessor,
         });
 
         // Phase 6: Start file watchers

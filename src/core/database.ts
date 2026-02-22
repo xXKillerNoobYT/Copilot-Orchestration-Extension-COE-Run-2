@@ -64,6 +64,7 @@ export class Database {
         this.db = new DatabaseSync(this.dbPath);
         this.db.exec('PRAGMA journal_mode = WAL');
         this.db.exec('PRAGMA foreign_keys = ON');
+        this.db.exec('PRAGMA busy_timeout = 5000');
         this.createTables();
     }
 
@@ -5823,6 +5824,10 @@ export class Database {
         return this.db.prepare(`UPDATE niche_agent_definitions SET ${fields.join(', ')} WHERE id = ?`).run(...values).changes > 0;
     }
 
+    deleteNicheAgentDefinition(id: string): boolean {
+        return this.db.prepare('DELETE FROM niche_agent_definitions WHERE id = ?').run(id).changes > 0;
+    }
+
     getNicheAgentCount(): number {
         const row = this.db.prepare('SELECT COUNT(*) as count FROM niche_agent_definitions').get() as { count: number };
         return row.count;
@@ -6771,5 +6776,39 @@ export class Database {
         if (this.db) {
             this.db.close();
         }
+    }
+
+    /**
+     * v11.0: Check if the database file still exists on disk.
+     * SQLite WAL mode keeps data in memory even after the file is deleted,
+     * so this detects when a user has externally removed the .coe/ directory.
+     */
+    isDatabaseFilePresent(): boolean {
+        return fs.existsSync(this.dbPath);
+    }
+
+    /**
+     * v11.0: Get the absolute path to the database file.
+     */
+    getDbPath(): string {
+        return this.dbPath;
+    }
+
+    /**
+     * v11.0: Close existing connection and reinitialize from a fresh database.
+     * Used after user deletes .coe/ folder or requests a fresh start.
+     */
+    async reinitialize(): Promise<void> {
+        try { this.db.close(); } catch { /* already closed or never opened */ }
+        // Ensure the parent directory exists
+        const dir = path.dirname(this.dbPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        this.db = new DatabaseSync(this.dbPath);
+        this.db.exec('PRAGMA journal_mode = WAL');
+        this.db.exec('PRAGMA foreign_keys = ON');
+        this.db.exec('PRAGMA busy_timeout = 5000');
+        this.createTables();
     }
 }
