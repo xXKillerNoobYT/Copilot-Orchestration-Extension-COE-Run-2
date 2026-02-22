@@ -1,7 +1,6 @@
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { COEConfig, LLMConfig } from '../types';
+import { COEConfig, LLMConfig, ExtensionContextLike } from '../types';
 
 const DEFAULT_CONFIG: COEConfig = {
     version: '1.0.0',
@@ -109,13 +108,24 @@ export class ConfigManager {
     private onChangeCallbacks: Array<(config: COEConfig) => void> = [];
 
     constructor(
-        private context: vscode.ExtensionContext,
+        private context: ExtensionContextLike | null,
         private workspaceRoot: string | undefined
     ) {
         this.coeDir = workspaceRoot
             ? path.join(workspaceRoot, '.coe')
-            : path.join(context.globalStorageUri.fsPath, '.coe');
+            : this.context
+                ? path.join(this.context.globalStorageUri.fsPath, '.coe')
+                : path.join(process.cwd(), '.coe');
         this.configPath = path.join(this.coeDir, 'config.json');
+    }
+
+    /**
+     * Create a ConfigManager for standalone (non-VS Code) operation.
+     * Uses the given project directory as the workspace root.
+     * No VS Code settings overrides are applied.
+     */
+    static createStandalone(projectDir: string): ConfigManager {
+        return new ConfigManager(null, projectDir);
     }
 
     async initialize(): Promise<void> {
@@ -220,14 +230,22 @@ export class ConfigManager {
      * the user explicitly configures them in settings.json.
      */
     private applyVSCodeSettings(): void {
-        const vsConfig = vscode.workspace.getConfiguration('coe');
+        // In standalone mode (no VS Code), skip settings overrides
+        let vsConfig: any;
+        try {
+            // Dynamic require — only available when running inside VS Code
+            const vscode = require('vscode');
+            vsConfig = vscode.workspace.getConfiguration('coe');
+        } catch {
+            return; // Not running in VS Code — config.json is the sole source of truth
+        }
 
         // Helper: returns the user-set value (if any), or undefined if only the default is present
         const getUserSet = <T>(key: string): T | undefined => {
-            const inspection = vsConfig.inspect<T>(key);
+            const inspection: any = vsConfig.inspect(key);
             if (!inspection) return undefined;
             // Priority: workspaceFolder > workspace > global. Skip defaultValue.
-            return inspection.workspaceFolderValue ?? inspection.workspaceValue ?? inspection.globalValue;
+            return (inspection.workspaceFolderValue ?? inspection.workspaceValue ?? inspection.globalValue) as T | undefined;
         };
 
         const endpoint = getUserSet<string>('llm.endpoint');

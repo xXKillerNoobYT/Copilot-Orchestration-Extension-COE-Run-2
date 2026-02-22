@@ -368,7 +368,9 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.config.js --production",
+    "build:server": "node esbuild.config.js --server --production",
     "watch": "node esbuild.config.js --watch",
+    "start:server": "node dist/server.js --project .",
     "lint": "eslint src --ext ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:e2e": "npx playwright test",

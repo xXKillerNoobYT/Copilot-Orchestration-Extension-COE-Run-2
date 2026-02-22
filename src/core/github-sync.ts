@@ -1,16 +1,15 @@
-import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { GitHubClient, GitHubIssueData } from './github-client';
 import { Database } from './database';
 import { ConfigManager } from './config';
-import { TaskPriority, GitHubIssue } from '../types';
+import { TaskPriority, GitHubIssue, OutputChannelLike } from '../types';
 
 export class GitHubSyncService {
     constructor(
         private client: GitHubClient,
         private database: Database,
         private config: ConfigManager,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: OutputChannelLike
     ) {}
 
     async importIssues(): Promise<{ imported: number; updated: number; errors: number }> {

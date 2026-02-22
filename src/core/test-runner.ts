@@ -1,5 +1,5 @@
-import * as vscode from 'vscode';
 import { exec } from 'child_process';
+import { OutputChannelLike } from '../types';
 
 export interface TestRunResult {
     passed: number;
@@ -13,11 +13,11 @@ export interface TestRunResult {
 
 export class TestRunnerService {
     private workspaceRoot: string;
-    private outputChannel: vscode.OutputChannel;
+    private outputChannel: OutputChannelLike;
     private defaultCommand: string;
     private timeoutMs: number;
 
-    constructor(workspaceRoot: string, outputChannel: vscode.OutputChannel) {
+    constructor(workspaceRoot: string, outputChannel: OutputChannelLike) {
         this.workspaceRoot = workspaceRoot;
         this.outputChannel = outputChannel;
         this.defaultCommand = 'npx jest --json --coverage 2>&1';

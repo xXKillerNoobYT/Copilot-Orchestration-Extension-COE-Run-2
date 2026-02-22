@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import { OutputChannelLike } from '../types';
 
 export interface GitHubIssueData {
     id: number;
@@ -16,7 +16,7 @@ export class GitHubClient {
 
     constructor(
         private token: string,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: OutputChannelLike
     ) {}
 
     async getIssues(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'all', page = 1, perPage = 30): Promise<GitHubIssueData[]> {

@@ -8,7 +8,6 @@
  * Empty/unfilled sections are treated as "unknown" (lean toward research).
  */
 
-import * as vscode from 'vscode';
 import { Database } from './database';
 import {
     UserProfile,
@@ -56,8 +55,14 @@ export class UserProfileManager {
      * Tries to pull from VS Code settings first.
      */
     initializeProfile(): UserProfile {
-        const config = vscode.workspace.getConfiguration('coe');
-        const savedProfile = config.get<Partial<UserProfile>>('userProfile');
+        let savedProfile: Partial<UserProfile> | undefined;
+        try {
+            const vscode = require('vscode');
+            const config = vscode.workspace.getConfiguration('coe');
+            savedProfile = config.get('userProfile') as Partial<UserProfile> | undefined;
+        } catch {
+            // Not running in VS Code — skip settings lookup
+        }
 
         const profile = this.database.createUserProfile({
             programming_level: savedProfile?.programming_level ?? DEFAULT_PROFILE.programming_level,
@@ -437,11 +442,12 @@ export class UserProfileManager {
      */
     private syncToVSCodeSettings(profile: UserProfile): void {
         try {
+            const vscode = require('vscode');
             const config = vscode.workspace.getConfiguration('coe');
             const { id: _id, created_at: _ca, updated_at: _ua, ...rest } = profile;
             config.update('userProfile', rest, vscode.ConfigurationTarget.Global);
         } catch {
-            // Non-critical — VS Code settings sync is best-effort
+            // Non-critical — VS Code settings sync is best-effort / not in VS Code
         }
     }
 

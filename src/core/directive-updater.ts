@@ -1,6 +1,6 @@
-import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { OutputChannelLike } from '../types';
 
 /**
  * DirectiveUpdater appends learnings to directive files when the
@@ -12,7 +12,7 @@ export class DirectiveUpdater {
 
     constructor(
         private workspaceRoot: string,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: OutputChannelLike
     ) {
         this.directivesDir = path.join(workspaceRoot, 'directives');
     }

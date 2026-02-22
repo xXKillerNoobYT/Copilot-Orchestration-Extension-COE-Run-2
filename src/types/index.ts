@@ -10,6 +10,11 @@ export interface OutputChannelLike {
     appendLine(msg: string): void;
 }
 
+/** Minimal VS Code extension context — only the fields COE actually uses */
+export interface ExtensionContextLike {
+    globalStorageUri: { fsPath: string };
+}
+
 // --- Enums ---
 
 export enum TaskStatus {

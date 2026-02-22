@@ -1,8 +1,7 @@
-import * as vscode from 'vscode';
 import { Database } from './database';
 import { ConfigManager } from './config';
 import { LLMService } from './llm-service';
-import { TicketPriority } from '../types';
+import { TicketPriority, OutputChannelLike } from '../types';
 
 interface DetectedPattern {
     signature: string;
@@ -26,7 +25,7 @@ export class EvolutionService {
         private database: Database,
         private config: ConfigManager,
         private llm: LLMService,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: OutputChannelLike
     ) { }
 
     incrementCallCounter(): void {
