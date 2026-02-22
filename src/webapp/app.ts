@@ -841,8 +841,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
     <!-- v7.0: Team queue status bar -->
     <div id="teamQueueBar" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <label style="font-size:0.85em;color:var(--subtext)">Type:
-            <select id="ticketOperationFilter" onchange="loadTickets()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em">
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-top:0;font-size:0.85em;color:var(--subtext)">Type:
+            <select id="ticketOperationFilter" onchange="loadTickets()" style="width:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em;margin-top:0">
                 <option value="">All</option>
                 <option value="user_created">User Created</option>
                 <option value="plan_generation">Plan Generation</option>
@@ -853,8 +853,8 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
                 <option value="suggestion">Suggestions</option>
             </select>
         </label>
-        <label style="font-size:0.85em;color:var(--subtext)">Team:
-            <select id="ticketTeamFilter" onchange="loadTickets()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em">
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-top:0;font-size:0.85em;color:var(--subtext)">Team:
+            <select id="ticketTeamFilter" onchange="loadTickets()" style="width:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:0.9em;margin-top:0">
                 <option value="">All Teams</option>
                 <option value="orchestrator">Orchestrator</option>
                 <option value="planning">Planning</option>
@@ -864,7 +864,7 @@ h2 { font-size: 1.1em; margin: 20px 0 10px; color: var(--text); }
         </label>
     </div>
     <table>
-        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Team</th><th>Type</th><th>Category</th><th>Actions</th></tr></thead>
+        <thead><tr><th>#</th><th>Title</th><th>Status</th><th>Processing</th><th>Priority</th><th>Team</th><th>Actions</th></tr></thead>
         <tbody id="ticketTableBody"></tbody>
     </table>
     <div id="ticketDetail"></div>
@@ -2332,11 +2332,11 @@ async function loadTickets() {
                 });
             }
         });
-        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="9" class="empty">No tickets</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = html || '<tr><td colspan="7" class="empty">No tickets</td></tr>';
         // v7.0: Load team queue status bar
         loadTeamQueueBar();
     } catch (err) {
-        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="9" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
+        document.getElementById('ticketTableBody').innerHTML = '<tr><td colspan="7" class="empty">Error: ' + esc(String(err)) + '</td></tr>';
     }
 }
 
@@ -2352,8 +2352,6 @@ function ticketRow(t, depth, hasChildren, isExpanded, childCount) {
         '<td>' + processingBadge(t) + '</td>' +
         '<td>' + prioBadge(t.priority) + '</td>' +
         '<td>' + teamQueueBadge(t.assigned_queue) + '</td>' +
-        '<td style="font-size:0.8em;text-transform:capitalize">' + esc((t.operation_type || 'user created').replace(/_/g, ' ')) + (t.auto_created ? '<span style="font-size:0.7em;color:var(--overlay);margin-left:4px">(auto)</span>' : '') + '</td>' +
-        '<td style="font-size:0.8em;text-transform:capitalize">' + (t.ticket_category ? esc(t.ticket_category.replace(/_/g, ' ')) : '<span style="color:var(--overlay)">--</span>') + '</td>' +
         '<td>' + ticketActions(t) + '</td>' +
         '</tr>';
 }
@@ -2432,9 +2430,9 @@ async function showTicketDetail(id) {
     // v11.0: Ticket tagging badges (category + stage tag)
     var tagBadges = '';
     if (data.ticket_category) {
-        var catColors = { planning:'var(--mauve)', coding:'var(--blue)', verification:'var(--green)', review:'#d97706', design:'#ec4899', data_model:'var(--mauve)', task_creation:'var(--teal)', infrastructure:'#64748b', documentation:'var(--teal)', communication:'var(--yellow)', boss_directive:'var(--red)' };
-        var catColor = catColors[data.ticket_category] || 'var(--overlay)';
-        tagBadges += '<div class="detail-row"><span>Category</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;font-weight:600;background:' + catColor + ';color:var(--bg)">' + esc(data.ticket_category) + '</span></div>';
+        var catBadgeMap = { planning:'mauve', coding:'blue', verification:'green', review:'yellow', design:'red', data_model:'mauve', task_creation:'blue', infrastructure:'gray', documentation:'blue', communication:'yellow', boss_directive:'red', system_bootstrap:'blue', orchestration:'mauve', research:'blue', testing:'yellow', deployment:'green', security:'red', performance:'yellow', migration:'gray' };
+        var catBadgeClass = 'badge-' + (catBadgeMap[data.ticket_category] || 'gray');
+        tagBadges += '<div class="detail-row"><span>Category</span><span class="badge ' + catBadgeClass + '" style="text-transform:capitalize">' + esc(data.ticket_category.replace(/_/g, ' ')) + '</span></div>';
     }
     if (data.ticket_stage) {
         tagBadges += '<div class="detail-row"><span>Pipeline Stage</span><span style="padding:2px 8px;border-radius:4px;font-size:0.85em;background:var(--bg3);color:var(--text)">' + esc(data.ticket_stage) + '</span></div>';
@@ -2522,6 +2520,7 @@ async function showTicketDetail(id) {
         '<div class="detail-row"><span>Status</span>' + statusBadge(data.status) + '</div>' +
         '<div class="detail-row"><span>Priority</span>' + prioBadge(data.priority) + '</div>' +
         '<div class="detail-row"><span>Creator</span><span>' + esc(data.creator) + '</span></div>' +
+        '<div class="detail-row"><span>Type</span><span style="text-transform:capitalize">' + esc((data.operation_type || 'user created').replace(/_/g, ' ')) + (data.auto_created ? ' <span style="font-size:0.8em;color:var(--overlay)">(auto)</span>' : '') + '</span></div>' +
         agentBadge + processingRow + stageBadge + tagBadges +
         parentInfo + childInfo +
         (data.body ? '<div style="margin-top:12px;white-space:pre-wrap;color:var(--subtext);padding:12px;background:var(--bg);border-radius:6px">' + esc(data.body) + '</div>' : '') +
@@ -2620,6 +2619,7 @@ var liveActivityEventTypes = [
     'ticket:processing_started', 'ticket:processing_completed',
     'ticket:verification_passed', 'ticket:verification_failed',
     'boss:pre_dispatch_validation', 'agent:error',
+    'tree:delegation_step',
 ];
 
 function getActivityColor(eventType) {
@@ -2657,6 +2657,11 @@ function formatActivityEntry(activity) {
             if (d.stepIndex) parts.push('step ' + d.stepIndex + '/' + (d.totalSteps || '?'));
             if (d.verdict) parts.push('verdict: ' + d.verdict);
             if (d.shouldProcess !== undefined) parts.push(d.shouldProcess ? 'approved' : 'redirected');
+            // v11.1: Show delegation step details (level transitions, agents, scores)
+            if (d.fromLevel !== undefined && d.toLevel !== undefined) parts.push('L' + d.fromLevel + '\\u2192L' + d.toLevel);
+            if (d.agents && d.agents.length > 0) parts.push(d.agents.join(', '));
+            if (d.scores && d.scores.length > 0) parts.push('score: ' + d.scores[0]);
+            if (d.method) parts.push(d.method);
             if (parts.length > 0) details = ' <span style="color:var(--overlay);font-size:0.85em">(' + parts.join(', ') + ')</span>';
         } catch(e) { /* ignore */ }
     }
@@ -2897,18 +2902,20 @@ function applyWizardEdit() {
 }
 
 // Wizard step help text content
+// Keys must match wstep# numbers (v5.0 added Step 1: Plan Files, shifting all later steps +1)
 var wizardStepHelp = {
     0: 'Give your project a clear name and description. The AI uses this to understand what you are building and generate better suggestions.',
-    1: '<b>MVP</b> \\u2014 Pros: Fast to build, focused scope, quick validation. Cons: Limited features, may need rebuild.\\n<b>Small</b> \\u2014 Pros: Room for core features + polish. Cons: Takes longer than MVP.\\n<b>Medium</b> \\u2014 Pros: Full feature set, scalable. Cons: Significant planning needed.\\n<b>Large/Enterprise</b> \\u2014 Pros: Production-ready, all features. Cons: Long timeline, complex coordination.',
-    2: '<b>Frontend</b> \\u2014 Focus on UI/UX, page layouts, components. Best if your backend already exists.\\n<b>Backend</b> \\u2014 Focus on API, database, business logic. Best if UI is secondary.\\n<b>Full Stack</b> \\u2014 Both frontend and backend. The complete picture.',
-    3: 'Pick what matters most for your project. This helps the AI prioritize tasks and focus on what you care about.',
-    4: '<b>Sidebar</b> \\u2014 Classic layout with navigation on the left. Great for dashboards and admin panels.\\n<b>Tabs</b> \\u2014 Top tab navigation. Good for simple apps with few main sections.\\n<b>Wizard</b> \\u2014 Step-by-step flow. Perfect for forms, onboarding, or guided processes.\\n<b>Custom</b> \\u2014 Design your own layout from scratch.',
-    5: 'Pick a color theme for your app. This sets the design tokens that all components will use.',
-    6: 'Select the main pages/screens your app needs. You can also add custom pages. Each page becomes a design canvas.',
-    7: 'Define who will use your app. This helps generate proper navigation, permissions, and user stories.',
-    8: 'Select the core features your app needs. The AI uses these to suggest components, generate tasks, and plan the architecture.',
-    9: '<b>React + Node</b> \\u2014 Modern, huge ecosystem, great for SPAs.\\n<b>Vue + Express</b> \\u2014 Simple, approachable, good for smaller teams.\\n<b>HTML/CSS/JS</b> \\u2014 No framework, pure web. Simple and lightweight.\\n<b>Custom</b> \\u2014 Specify your own stack.',
-    10: '<b>Manual</b> \\u2014 You make all decisions. AI stays quiet.\\n<b>Suggestions</b> \\u2014 AI recommends, you decide. Good balance.\\n<b>Smart Defaults</b> \\u2014 AI fills in everything, you review. Fastest.\\n<b>Hybrid</b> \\u2014 AI handles routine tasks automatically, asks for important decisions.'
+    1: 'Upload reference documents like requirements, specs, or feature lists. These become the source of truth that all agents use when generating tasks and making decisions.',
+    2: '<b>MVP</b> \\u2014 Pros: Fast to build, focused scope, quick validation. Cons: Limited features, may need rebuild.\\n<b>Small</b> \\u2014 Pros: Room for core features + polish. Cons: Takes longer than MVP.\\n<b>Medium</b> \\u2014 Pros: Full feature set, scalable. Cons: Significant planning needed.\\n<b>Large/Enterprise</b> \\u2014 Pros: Production-ready, all features. Cons: Long timeline, complex coordination.',
+    3: '<b>Frontend</b> \\u2014 Focus on UI/UX, page layouts, components. Best if your backend already exists.\\n<b>Backend</b> \\u2014 Focus on API, database, business logic. Best if UI is secondary.\\n<b>Full Stack</b> \\u2014 Both frontend and backend. The complete picture.',
+    4: 'Pick what matters most for your project. This helps the AI prioritize tasks and focus on what you care about.',
+    5: '<b>Sidebar</b> \\u2014 Classic layout with navigation on the left. Great for dashboards and admin panels.\\n<b>Tabs</b> \\u2014 Top tab navigation. Good for simple apps with few main sections.\\n<b>Wizard</b> \\u2014 Step-by-step flow. Perfect for forms, onboarding, or guided processes.\\n<b>Custom</b> \\u2014 Design your own layout from scratch.',
+    6: 'Pick a color theme for your app. This sets the design tokens that all components will use.',
+    7: 'Select the main pages/screens your app needs. You can also add custom pages. Each page becomes a design canvas.',
+    8: 'Define who will use your app. This helps generate proper navigation, permissions, and user stories.',
+    9: 'Select the core features your app needs. The AI uses these to suggest components, generate tasks, and plan the architecture.',
+    10: '<b>React + Node</b> \\u2014 Modern, huge ecosystem, great for SPAs.\\n<b>Vue + Express</b> \\u2014 Simple, approachable, good for smaller teams.\\n<b>HTML/CSS/JS</b> \\u2014 No framework, pure web. Simple and lightweight.\\n<b>Custom</b> \\u2014 Specify your own stack.',
+    11: '<b>Manual</b> \\u2014 You make all decisions. AI stays quiet.\\n<b>Suggestions</b> \\u2014 AI recommends, you decide. Good balance.\\n<b>Smart Defaults</b> \\u2014 AI fills in everything, you review. Fastest.\\n<b>Hybrid</b> \\u2014 AI handles routine tasks automatically, asks for important decisions.'
 };
 
 function wizNext() {
@@ -6149,9 +6156,10 @@ function showSettingsSection(section) {
             settingRow('Model', 'Select which model to use', '<div style="display:flex;gap:8px;align-items:center;width:100%"><select id="setting-llm-model" style="flex:1;min-width:200px;padding:6px 10px;background:var(--surface0);color:var(--text);border:1px solid var(--surface2);border-radius:6px" onchange="updateSetting(\\'llm.model\\', this.value)"><option value="' + esc(settingsConfig.llm?.model || '') + '">' + esc(settingsConfig.llm?.model || 'Loading models...') + '</option></select><button class="btn btn-secondary btn-sm" onclick="refreshModelList()" title="Refresh model list" style="white-space:nowrap;padding:6px 10px">&#x21bb; Refresh</button></div>', 'setting-llm-model') +
             settingRow('Max Output Tokens', 'Maximum output response length', '<input id="setting-llm-maxTokens" type="number" value="' + (settingsConfig.llm?.maxTokens || 30000) + '" min="100" max="100000" onchange="updateSetting(\\'llm.maxTokens\\', +this.value)">', 'setting-llm-maxTokens') +
             settingRow('Max Input Tokens', 'Maximum prompt input length (LM Studio limit)', '<input id="setting-llm-maxInputTokens" type="number" value="' + (settingsConfig.llm?.maxInputTokens || 4000) + '" min="500" max="32000" onchange="updateSetting(\\'llm.maxInputTokens\\', +this.value)">', 'setting-llm-maxInputTokens') +
-            settingRow('Timeout (seconds)', 'Max total request time', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
-            settingRow('Startup Timeout', 'Wait for model load (up to 10 min)', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 600) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
-            settingRow('Stream Stall Timeout', 'Max gap between tokens (incl. thinking)', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 180) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
+            settingRow('Total Timeout (seconds)', 'Max total wall-clock time per request', '<input id="setting-llm-timeoutSeconds" type="number" value="' + (settingsConfig.llm?.timeoutSeconds || 7200) + '" onchange="updateSetting(\\'llm.timeoutSeconds\\', +this.value)">', 'setting-llm-timeoutSeconds') +
+            settingRow('Startup Timeout', 'Wait for model load (cold start)', '<input id="setting-llm-startupTimeout" type="number" value="' + (settingsConfig.llm?.startupTimeoutSeconds || 900) + '" onchange="updateSetting(\\'llm.startupTimeoutSeconds\\', +this.value)">', 'setting-llm-startupTimeout') +
+            settingRow('Thinking Timeout', 'Max time (seconds) for reasoning phase with no output. Not all models emit thinking tokens — some go silent while computing. Default: 5400 (90 min)', '<input id="setting-llm-thinkingTimeout" type="number" value="' + (settingsConfig.llm?.thinkingTimeoutSeconds || 5400) + '" onchange="updateSetting(\\'llm.thinkingTimeoutSeconds\\', +this.value)">', 'setting-llm-thinkingTimeout') +
+            settingRow('Stream Stall Timeout', 'Max gap between content tokens (after thinking completes)', '<input id="setting-llm-streamStall" type="number" value="' + (settingsConfig.llm?.streamStallTimeoutSeconds || 180) + '" onchange="updateSetting(\\'llm.streamStallTimeoutSeconds\\', +this.value)">', 'setting-llm-streamStall') +
             '</div>',
 
         agents: () => {
@@ -9313,6 +9321,7 @@ function initSSE() {
         'ticket:processing_started', 'ticket:processing_completed',
         'ticket:verification_passed', 'ticket:verification_failed',
         'boss:pre_dispatch_validation', 'agent:error',
+        'tree:delegation_step',
     ];
     liveActivitySSETypes.forEach(function(eventType) {
         sseConnection.addEventListener(eventType, function(e) {
@@ -9395,6 +9404,20 @@ function initSSE() {
         try {
             var d = JSON.parse(e.data);
             if (d.data && d.data.nodeId) updateLocalTreeNodeStatus(d.data.nodeId, 'idle');
+        } catch(err) { /* ignore parse errors */ }
+    });
+
+    // v11.1: Step-by-step delegation — update nodes at each level
+    sseConnection.addEventListener('tree:delegation_step', function(e) {
+        try {
+            var d = JSON.parse(e.data);
+            var stepData = d.data || d;
+            // Mark the source node as waiting_child
+            if (stepData.fromNodeId) updateLocalTreeNodeStatus(stepData.fromNodeId, 'waiting_child');
+            // Mark target nodes as active (or working if they're leaves)
+            if (stepData.toNodeIds && stepData.toNodeIds.length > 0) {
+                stepData.toNodeIds.forEach(function(targetId) { updateLocalTreeNodeStatus(targetId, 'active'); });
+            }
         } catch(err) { /* ignore parse errors */ }
     });
 

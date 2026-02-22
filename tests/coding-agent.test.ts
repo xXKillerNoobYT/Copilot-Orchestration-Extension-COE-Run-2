@@ -518,7 +518,7 @@ describe('CodingAgentService', () => {
                     expect.objectContaining({ role: 'system' }),
                     expect.objectContaining({ role: 'user', content: expect.stringContaining('<button>Click</button>') }),
                 ]),
-                expect.objectContaining({ stream: false })
+                expect.objectContaining({ maxTokens: 1000, temperature: 0.3 })
             );
         });
 

@@ -135,6 +135,10 @@ export type COEEventType =
     | 'tree:skeleton_built' | 'tree:branch_spawned' | 'tree:branch_pruned'
     | 'tree:default_built'
     | 'tree:question_escalated' | 'tree:question_answered'
+    // v10.0: Group-based tree events
+    | 'tree:group_created' | 'tree:upward_report' | 'tree:ticket_rerouted'
+    // v11.1: Step-by-step delegation
+    | 'tree:delegation_step'
     // v9.0: Workflow Designer & Engine
     | 'workflow:created' | 'workflow:updated' | 'workflow:deleted'
     | 'workflow:execution_started' | 'workflow:execution_completed' | 'workflow:execution_failed'
@@ -171,6 +175,16 @@ export type COEEventType =
     | 'ticket:boss_completion' | 'ticket:note_added'
     | 'ticket:reference_added' | 'ticket:stage_updated'
     | 'boss:pre_dispatch_validation' | 'boss:timer_zero_recovery'
+    // v10.0: Boss AI resilience
+    | 'boss:degraded' | 'boss:recovered' | 'boss:timeout_fallback'
+    // v10.0: LLM model reload detection
+    | 'llm:model_reloading' | 'llm:model_ready' | 'llm:auto_recovery'
+    // v10.0: System circuit breaker
+    | 'system:circuit_break' | 'system:circuit_restored'
+    // v10.0: LLM Profile Manager
+    | 'model:profile_created' | 'model:profile_switching' | 'model:profile_switched' | 'model:profile_updated'
+    // v10.0: Bootstrap
+    | 'system:bootstrap_started' | 'system:bootstrap_complete'
     // System
     | 'system:config_updated' | 'system:health_check' | 'system:error'
     | 'system:mcp_connected' | 'system:mcp_disconnected'

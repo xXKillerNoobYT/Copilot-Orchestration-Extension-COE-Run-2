@@ -8,11 +8,12 @@ const DEFAULT_CONFIG: COEConfig = {
     llm: {
         endpoint: 'http://192.168.1.205:1234/v1',
         model: 'mistralai/ministral-3-14b-reasoning',
-        timeoutSeconds: 1800,
-        startupTimeoutSeconds: 600,      // v10.0: 10 min — LM Studio model loading can take this long
-        streamStallTimeoutSeconds: 180,   // v10.0: 3 min — reasoning/thinking tokens can have long gaps
-        maxTokens: 25000,
-        maxInputTokens: 4000,
+        timeoutSeconds: 7200,             // 2 hours total wall-clock — must exceed thinkingTimeout + content generation
+        startupTimeoutSeconds: 900,       // 15 min — model loading (cold start, large models)
+        streamStallTimeoutSeconds: 180,   // 3 min — gap between content tokens (NOT thinking tokens)
+        thinkingTimeoutSeconds: 5400,     // 90 min — reasoning/thinking phase with no output. NOT included in ticket estimates.
+        maxTokens: 4096,                  // Model output limit — must match models[].maxOutputTokens
+        maxInputTokens: 24000,            // 32K context - 4K output - buffer = ~24K usable input
         maxConcurrentRequests: 4,   // v6.0: LM Studio can handle 4 simultaneous threads
         bossReservedSlots: 1,       // v6.0: 1 slot always reserved for Boss AI
         maxRequestRetries: 5,       // v6.0: retry failed LLM requests up to 5 times
@@ -250,6 +251,9 @@ export class ConfigManager {
         const streamStall = getUserSet<number>('llm.streamStallTimeoutSeconds');
         if (streamStall != null) this.config.llm.streamStallTimeoutSeconds = streamStall;
 
+        const thinkingTimeout = getUserSet<number>('llm.thinkingTimeoutSeconds');
+        if (thinkingTimeout != null) this.config.llm.thinkingTimeoutSeconds = thinkingTimeout;
+
         const maxPending = getUserSet<number>('taskQueue.maxPending');
         if (maxPending != null) this.config.taskQueue.maxPending = maxPending;
 
@@ -297,6 +301,27 @@ export class ConfigManager {
 
     getAgentContextLimit(agentType: string): number {
         return this.config.agents[agentType]?.contextLimit ?? 4000;
+    }
+
+    /**
+     * Get the max output tokens for the currently configured model.
+     * Falls back to LLM config maxTokens if model profile isn't defined.
+     * This should be used as `max_tokens` in API calls to match the model's real output limit.
+     */
+    getModelMaxOutputTokens(): number {
+        const model = this.config.llm.model;
+        const profile = this.config.models?.[model];
+        return profile?.maxOutputTokens ?? this.config.llm.maxTokens;
+    }
+
+    /**
+     * Get the total context window size for the currently configured model.
+     * Falls back to 32768 if model profile isn't defined.
+     */
+    getModelContextWindow(): number {
+        const model = this.config.llm.model;
+        const profile = this.config.models?.[model];
+        return profile?.contextWindowTokens ?? 32768;
     }
 
     isAgentEnabled(agentType: string): boolean {

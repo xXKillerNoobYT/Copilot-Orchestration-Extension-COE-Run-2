@@ -2,6 +2,7 @@ import { BaseAgent } from './base-agent';
 import { AgentType, AgentContext, AgentResponse, AgentAction, TicketPriority, TicketStatus, WorkflowExecutionStatus, TreeNodeStatus, BossPreDispatchValidation, BossCompletionAssessment, BubbleResult } from '../types';
 import type { AgentTreeManager } from '../core/agent-tree-manager';
 import type { WorkflowEngine } from '../core/workflow-engine';
+import type { EventBus } from '../core/event-bus';
 
 /**
  * Boss AI — top-level project manager of the COE system (per True Plan 03 hierarchy).
@@ -20,6 +21,8 @@ import type { WorkflowEngine } from '../core/workflow-engine';
  *
  * v6.0: True project manager with direct dispatch, parallel processing,
  *        intelligent ordering, and multi-step decision framework.
+ * v10.0: Added resilience — timeout wrappers on ALL LLM calls, degraded mode
+ *         with deterministic fallback when LLM is unreachable, auto-recovery detection.
  */
 export class BossAgent extends BaseAgent {
     readonly name = 'Boss AI';
@@ -28,6 +31,141 @@ export class BossAgent extends BaseAgent {
     // v9.0: Tree and workflow awareness
     private treeManager: AgentTreeManager | null = null;
     private workflowEngine: WorkflowEngine | null = null;
+
+    // v10.0: Resilience — tracks consecutive LLM failures to detect degraded state
+    private consecutiveFailures = 0;
+    private readonly maxConsecutiveFailures = 3;
+    private degradedMode = false;
+    private eventBusRef: EventBus | null = null;
+    private recoveryCheckInterval: ReturnType<typeof setInterval> | null = null;
+    /** v10.0: Default timeout for Boss LLM calls (30 seconds) */
+    private readonly bossTimeoutMs = 30_000;
+
+    /**
+     * v10.0: Inject EventBus for emitting resilience events (boss:degraded, boss:recovered).
+     */
+    setEventBus(eb: EventBus): void {
+        this.eventBusRef = eb;
+    }
+
+    /**
+     * v10.0: Whether Boss is currently in degraded (deterministic-only) mode.
+     * In degraded mode, all LLM calls are skipped and deterministic fallbacks are used.
+     */
+    isDegraded(): boolean {
+        return this.degradedMode;
+    }
+
+    /**
+     * v10.0: Record a successful LLM call — resets failure counter and exits degraded mode.
+     */
+    private recordSuccess(): void {
+        if (this.consecutiveFailures > 0 || this.degradedMode) {
+            const wasDegraded = this.degradedMode;
+            this.consecutiveFailures = 0;
+            this.degradedMode = false;
+            if (wasDegraded) {
+                this.eventBusRef?.emit('boss:recovered', 'boss-agent', {
+                    message: 'LLM connection restored — Boss AI resuming full operation',
+                });
+                this.stopRecoveryCheck();
+            }
+        }
+    }
+
+    /**
+     * v10.0: Record a failed LLM call — increments failure counter, enters degraded mode after threshold.
+     */
+    private recordFailure(error: string): void {
+        this.consecutiveFailures++;
+        this.eventBusRef?.emit('boss:timeout_fallback', 'boss-agent', {
+            failureCount: this.consecutiveFailures,
+            error: error.substring(0, 200),
+        });
+
+        if (this.consecutiveFailures >= this.maxConsecutiveFailures && !this.degradedMode) {
+            this.degradedMode = true;
+            this.eventBusRef?.emit('boss:degraded', 'boss-agent', {
+                message: `Boss AI entering degraded mode after ${this.consecutiveFailures} consecutive LLM failures`,
+                lastError: error.substring(0, 200),
+            });
+            this.startRecoveryCheck();
+        }
+    }
+
+    /**
+     * v10.0: Start periodic recovery check (every 60s) to detect when LLM comes back.
+     */
+    private startRecoveryCheck(): void {
+        if (this.recoveryCheckInterval) return;
+        this.recoveryCheckInterval = setInterval(async () => {
+            try {
+                // Lightweight ping — try a minimal LLM call
+                const context: AgentContext = { conversationHistory: [] };
+                const result = await Promise.race([
+                    this.processMessage('Respond with OK', context),
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+                ]);
+                if (result && result.content) {
+                    this.recordSuccess();
+                }
+            } catch {
+                // Still down — stay in degraded mode
+            }
+        }, 60_000);
+    }
+
+    /**
+     * v10.0: Stop the recovery check interval.
+     */
+    private stopRecoveryCheck(): void {
+        if (this.recoveryCheckInterval) {
+            clearInterval(this.recoveryCheckInterval);
+            this.recoveryCheckInterval = null;
+        }
+    }
+
+    /**
+     * v10.0: Wraps an LLM call with a timeout and degraded-mode bypass.
+     * If in degraded mode, returns the fallback immediately without calling LLM.
+     * If LLM call times out, records failure and returns fallback.
+     */
+    private async withBossTimeout<T>(
+        llmCall: () => Promise<T>,
+        fallback: T,
+        label: string
+    ): Promise<T> {
+        // Skip LLM entirely in degraded mode
+        if (this.degradedMode) {
+            return fallback;
+        }
+
+        try {
+            const timeoutPromise = new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), this.bossTimeoutMs)
+            );
+            const result = await Promise.race([llmCall(), timeoutPromise]);
+            if (result === null) {
+                // Timeout
+                this.recordFailure(`${label} timed out after ${this.bossTimeoutMs}ms`);
+                return fallback;
+            }
+            this.recordSuccess();
+            return result;
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            this.recordFailure(`${label} failed: ${errMsg}`);
+            return fallback;
+        }
+    }
+
+    /**
+     * v10.0: Clean up resources (recovery check interval).
+     */
+    dispose(): void {
+        this.stopRecoveryCheck();
+        super.dispose();
+    }
 
     /**
      * v9.0: Inject agent tree manager for tree-based ticket routing.
@@ -469,11 +607,21 @@ ESCALATE: [true or false]
         const context: AgentContext = { conversationHistory: [] };
 
         if (issues.length > 0) {
-            // Ask LLM for nuanced assessment when issues exist
-            const llmResponse = await this.processMessage(
-                `${healthReport}\n\nDetected issues:\n${issues.join('\n')}`,
-                context
+            // v10.0: Ask LLM for nuanced assessment — wrapped with timeout and degraded-mode bypass
+            const deterministicFallback: AgentResponse = {
+                content: `ASSESSMENT: Issues detected. ${readyTasks.length} tasks ready, ${openTickets.length} tickets open. Status: WARNING.\nISSUES: ${issues.join('; ')}\nACTIONS: ${actions.length} deterministic actions generated.\nNEXT_TICKET: ${readyTasks.length > 0 ? 'Queue has items.' : 'none'}\nESCALATE: ${escalatedTickets.length > escalationThreshold}`,
+                actions,
+            };
+
+            const llmResponse = await this.withBossTimeout(
+                () => this.processMessage(
+                    `${healthReport}\n\nDetected issues:\n${issues.join('\n')}`,
+                    context
+                ),
+                deterministicFallback,
+                'checkSystemHealth'
             );
+
             // Merge deterministic actions with any LLM might suggest
             return {
                 content: llmResponse.content,
@@ -526,27 +674,29 @@ ESCALATE: [true or false]
             return candidates.length === 1 ? candidates[0].ticketId : null;
         }
 
-        try {
-            // Build a concise summary of each candidate for the LLM
-            const candidateList = candidates.map((c, i) => {
-                const parts = [
-                    `${i + 1}. TK-${c.ticketNumber} [${c.priority}] "${c.title}"`,
-                    `   Type: ${c.operationType} | Deliverable: ${c.deliverableType}`,
-                    `   Created: ${c.createdAt.split('T')[0]}`,
-                ];
-                if (c.blockingTicketId) {
-                    parts.push(`   Blocks: another ticket (dependency chain)`);
-                }
-                if (c.retryCount > 0) {
-                    parts.push(`   Retries: ${c.retryCount} (last error: ${c.lastError?.substring(0, 80) || 'unknown'})`);
-                }
-                if (c.body) {
-                    parts.push(`   Summary: ${c.body.substring(0, 150).replace(/\n/g, ' ')}`);
-                }
-                return parts.join('\n');
-            }).join('\n\n');
+        // v10.0: Wrap entire LLM selection in timeout + degraded mode bypass
+        return this.withBossTimeout(
+            async () => {
+                // Build a concise summary of each candidate for the LLM
+                const candidateList = candidates.map((c, i) => {
+                    const parts = [
+                        `${i + 1}. TK-${c.ticketNumber} [${c.priority}] "${c.title}"`,
+                        `   Type: ${c.operationType} | Deliverable: ${c.deliverableType}`,
+                        `   Created: ${c.createdAt.split('T')[0]}`,
+                    ];
+                    if (c.blockingTicketId) {
+                        parts.push(`   Blocks: another ticket (dependency chain)`);
+                    }
+                    if (c.retryCount > 0) {
+                        parts.push(`   Retries: ${c.retryCount} (last error: ${c.lastError?.substring(0, 80) || 'unknown'})`);
+                    }
+                    if (c.body) {
+                        parts.push(`   Summary: ${c.body.substring(0, 150).replace(/\n/g, ' ')}`);
+                    }
+                    return parts.join('\n');
+                }).join('\n\n');
 
-            const selectionPrompt = `You are the Boss AI selecting the NEXT ticket to process from the queue.
+                const selectionPrompt = `You are the Boss AI selecting the NEXT ticket to process from the queue.
 Think through this step by step. Take your time — a well-chosen ticket can unblock an entire chain of work.
 
 ## Candidates (${candidates.length} tickets ready)
@@ -578,35 +728,35 @@ Look at each ticket's "Blocks" field. If processing ticket A would unblock other
 REASONING: [1-2 sentences explaining your choice]
 SELECTED: TK-<number>`;
 
-            const context = { conversationHistory: [] };
-            const llmResponse = await this.processMessage(selectionPrompt, context);
+                const context = { conversationHistory: [] };
+                const llmResponse = await this.processMessage(selectionPrompt, context);
 
-            // Parse the response — look for "SELECTED: TK-<number>"
-            const selectedMatch = llmResponse.content.match(/SELECTED:\s*TK-(\d+)/i);
-            if (selectedMatch) {
-                const selectedNumber = parseInt(selectedMatch[1], 10);
-                const found = candidates.find(c => c.ticketNumber === selectedNumber);
-                if (found) {
-                    return found.ticketId;
+                // Parse the response — look for "SELECTED: TK-<number>"
+                const selectedMatch = llmResponse.content.match(/SELECTED:\s*TK-(\d+)/i);
+                if (selectedMatch) {
+                    const selectedNumber = parseInt(selectedMatch[1], 10);
+                    const found = candidates.find(c => c.ticketNumber === selectedNumber);
+                    if (found) {
+                        return found.ticketId;
+                    }
                 }
-            }
 
-            // Fallback: try to find any TK-number in response
-            const tkMatch = llmResponse.content.match(/TK-(\d+)/);
-            if (tkMatch) {
-                const tkNumber = parseInt(tkMatch[1], 10);
-                const found = candidates.find(c => c.ticketNumber === tkNumber);
-                if (found) {
-                    return found.ticketId;
+                // Fallback: try to find any TK-number in response
+                const tkMatch = llmResponse.content.match(/TK-(\d+)/);
+                if (tkMatch) {
+                    const tkNumber = parseInt(tkMatch[1], 10);
+                    const found = candidates.find(c => c.ticketNumber === tkNumber);
+                    if (found) {
+                        return found.ticketId;
+                    }
                 }
-            }
 
-            // LLM response couldn't be parsed — fall back to deterministic
-            return null;
-        } catch (err) {
-            // LLM failure is non-fatal — fall back to deterministic sort
-            return null;
-        }
+                // LLM response couldn't be parsed — fall back to deterministic
+                return null;
+            },
+            null, // fallback: null means deterministic sort in caller
+            'selectNextTicket'
+        );
     }
 
     // ==================== v11.0: Boss Pre-Dispatch Validation ====================
@@ -658,16 +808,18 @@ SELECTED: TK-<number>`;
             return { ...defaultApproval, reason: 'Only ticket in queue — approved' };
         }
 
-        try {
-            const queueSummary = queueSnapshot.slice(0, 8).map((q, i) =>
-                `  ${i + 1}. TK-${q.ticketNumber} [${q.priority}] ${q.title.substring(0, 60)} (${q.operationType}${q.ticketCategory ? ', ' + q.ticketCategory : ''}${q.blockingTicketId ? ', BLOCKED' : ''})`
-            ).join('\n');
+        // v10.0: Use withBossTimeout for degraded mode support + unified failure tracking
+        return this.withBossTimeout(
+            async () => {
+                const queueSummary = queueSnapshot.slice(0, 8).map((q, i) =>
+                    `  ${i + 1}. TK-${q.ticketNumber} [${q.priority}] ${q.title.substring(0, 60)} (${q.operationType}${q.ticketCategory ? ', ' + q.ticketCategory : ''}${q.blockingTicketId ? ', BLOCKED' : ''})`
+                ).join('\n');
 
-            const activeSummary = activeTicketSummaries.length > 0
-                ? activeTicketSummaries.join('\n')
-                : '  (none currently processing)';
+                const activeSummary = activeTicketSummaries.length > 0
+                    ? activeTicketSummaries.join('\n')
+                    : '  (none currently processing)';
 
-            const prompt = `QUICK VALIDATION: Should this ticket be processed NEXT?
+                const prompt = `QUICK VALIDATION: Should this ticket be processed NEXT?
 
 TICKET TO PROCESS:
   TK-${ticket.ticketNumber} [${ticket.priority}] "${ticket.title}"
@@ -693,51 +845,38 @@ REASON: [1 sentence]
 ALTERNATE_TICKET: TK-<number> (only if NO)
 NOTES_FOR_AGENT: [optional guidance for the processing agent]`;
 
-            // Race against 10s timeout
-            const context = { conversationHistory: [] };
-            const timeoutMs = 10000;
+                const context = { conversationHistory: [] };
+                const result = await this.processMessage(prompt, context);
 
-            const llmPromise = this.processMessage(prompt, context);
-            const timeoutPromise = new Promise<null>((resolve) =>
-                setTimeout(() => resolve(null), timeoutMs)
-            );
+                // Parse the response
+                const content = result.content;
+                const shouldProcess = /SHOULD_PROCESS:\s*YES/i.test(content);
+                const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
+                const alternateMatch = content.match(/ALTERNATE_TICKET:\s*TK-(\d+)/i);
+                const notesMatch = content.match(/NOTES_FOR_AGENT:\s*(.+?)(?:\n|$)/i);
 
-            const result = await Promise.race([llmPromise, timeoutPromise]);
-            if (!result) {
-                // Timeout — approve by default
-                return { ...defaultApproval, reason: 'Approved (Boss validation timed out after 10s)' };
-            }
+                const validation: BossPreDispatchValidation = {
+                    shouldProcess,
+                    reason: reasonMatch?.[1]?.trim() ?? (shouldProcess ? 'Approved' : 'Rejected by Boss'),
+                };
 
-            // Parse the response
-            const content = result.content;
-            const shouldProcess = /SHOULD_PROCESS:\s*YES/i.test(content);
-            const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
-            const alternateMatch = content.match(/ALTERNATE_TICKET:\s*TK-(\d+)/i);
-            const notesMatch = content.match(/NOTES_FOR_AGENT:\s*(.+?)(?:\n|$)/i);
-
-            const validation: BossPreDispatchValidation = {
-                shouldProcess,
-                reason: reasonMatch?.[1]?.trim() ?? (shouldProcess ? 'Approved' : 'Rejected by Boss'),
-            };
-
-            if (!shouldProcess && alternateMatch) {
-                const altNumber = parseInt(alternateMatch[1], 10);
-                const altTicket = queueSnapshot.find(q => q.ticketNumber === altNumber);
-                if (altTicket) {
-                    // We'd need the ticket ID — for now store the number so caller can look it up
-                    validation.alternateTicketId = `TK-${altNumber}`;
+                if (!shouldProcess && alternateMatch) {
+                    const altNumber = parseInt(alternateMatch[1], 10);
+                    const altTicket = queueSnapshot.find(q => q.ticketNumber === altNumber);
+                    if (altTicket) {
+                        validation.alternateTicketId = `TK-${altNumber}`;
+                    }
                 }
-            }
 
-            if (notesMatch?.[1]?.trim()) {
-                validation.notesForAgent = notesMatch[1].trim();
-            }
+                if (notesMatch?.[1]?.trim()) {
+                    validation.notesForAgent = notesMatch[1].trim();
+                }
 
-            return validation;
-        } catch (err) {
-            // LLM failure is non-fatal — approve by default
-            return { ...defaultApproval, reason: 'Approved (Boss validation failed — fallback)' };
-        }
+                return validation;
+            },
+            defaultApproval,
+            'validateNextTicket'
+        );
     }
 
     /**
@@ -771,15 +910,17 @@ NOTES_FOR_AGENT: [optional guidance for the processing agent]`;
             qualityScore: 70,
         };
 
-        try {
-            const chainSummary = bubbleChain.map((b, i) =>
-                `  L${b.level} ${b.agentName}: [${b.status}] ${b.summary.substring(0, 150)}${b.reviewNotes ? ' | Review: ' + b.reviewNotes.substring(0, 100) : ''}${b.errorExplanation ? ' | ERROR: ' + b.errorExplanation.substring(0, 100) : ''}`
-            ).join('\n');
+        // v10.0: Use withBossTimeout for unified failure tracking + degraded mode
+        return this.withBossTimeout(
+            async () => {
+                const chainSummary = bubbleChain.map((b, _i) =>
+                    `  L${b.level} ${b.agentName}: [${b.status}] ${b.summary.substring(0, 150)}${b.reviewNotes ? ' | Review: ' + b.reviewNotes.substring(0, 100) : ''}${b.errorExplanation ? ' | ERROR: ' + b.errorExplanation.substring(0, 100) : ''}`
+                ).join('\n');
 
-            const hasErrors = bubbleChain.some(b => b.status === 'failed' || b.status === 'escalate');
-            const hasReworkRequests = bubbleChain.some(b => b.status === 'needs_rework');
+                const hasErrors = bubbleChain.some(b => b.status === 'failed' || b.status === 'escalate');
+                const hasReworkRequests = bubbleChain.some(b => b.status === 'needs_rework');
 
-            const prompt = `COMPLETION ASSESSMENT: Is this ticket's work done and correct?
+                const prompt = `COMPLETION ASSESSMENT: Is this ticket's work done and correct?
 
 TICKET: TK-${ticketSummary.ticketNumber} "${ticketSummary.title}"
 Type: ${ticketSummary.operationType}
@@ -792,8 +933,8 @@ ${leafResult.substring(0, 600)}
 REVIEW CHAIN (leaf → Boss):
 ${chainSummary || '  (no intermediate reviews)'}
 
-${hasErrors ? '⚠️ ERRORS were reported in the chain — review carefully.' : ''}
-${hasReworkRequests ? '⚠️ REWORK was requested by an intermediate reviewer.' : ''}
+${hasErrors ? 'ERRORS were reported in the chain — review carefully.' : ''}
+${hasReworkRequests ? 'REWORK was requested by an intermediate reviewer.' : ''}
 
 ASSESS THE WORK:
 1. Does the output address the ticket's requirements?
@@ -808,52 +949,41 @@ QUALITY_SCORE: <number 0-100>
 REWORK_INSTRUCTIONS: [only if NEEDS_REWORK — what should be fixed]
 ESCALATION_MESSAGE: [only if ESCALATE — what to tell the user]`;
 
-            const context = { conversationHistory: [] };
-            const timeoutMs = 15000;
+                const context = { conversationHistory: [] };
+                const result = await this.processMessage(prompt, context);
+                const content = result.content;
 
-            const llmPromise = this.processMessage(prompt, context);
-            const timeoutPromise = new Promise<null>((resolve) =>
-                setTimeout(() => resolve(null), timeoutMs)
-            );
+                // Parse verdict
+                let verdict: BossCompletionAssessment['verdict'] = 'done';
+                if (/VERDICT:\s*NEEDS_REWORK/i.test(content)) {
+                    verdict = 'needs_rework';
+                } else if (/VERDICT:\s*ESCALATE/i.test(content)) {
+                    verdict = 'escalate_to_user';
+                }
 
-            const result = await Promise.race([llmPromise, timeoutPromise]);
-            if (!result) {
-                return { ...defaultAssessment, reason: 'Approved (Boss assessment timed out after 15s)' };
-            }
+                const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
+                const scoreMatch = content.match(/QUALITY_SCORE:\s*(\d+)/i);
+                const reworkMatch = content.match(/REWORK_INSTRUCTIONS:\s*(.+?)(?:\n|$)/i);
+                const escalateMatch = content.match(/ESCALATION_MESSAGE:\s*(.+?)(?:\n|$)/i);
 
-            const content = result.content;
+                const assessment: BossCompletionAssessment = {
+                    verdict,
+                    reason: reasonMatch?.[1]?.trim() ?? (verdict === 'done' ? 'Work approved' : 'Issues found'),
+                    qualityScore: scoreMatch ? Math.min(100, Math.max(0, parseInt(scoreMatch[1], 10))) : 70,
+                };
 
-            // Parse verdict
-            let verdict: BossCompletionAssessment['verdict'] = 'done';
-            if (/VERDICT:\s*NEEDS_REWORK/i.test(content)) {
-                verdict = 'needs_rework';
-            } else if (/VERDICT:\s*ESCALATE/i.test(content)) {
-                verdict = 'escalate_to_user';
-            }
+                if (verdict === 'needs_rework' && reworkMatch?.[1]?.trim()) {
+                    assessment.reworkInstructions = reworkMatch[1].trim();
+                }
 
-            const reasonMatch = content.match(/REASON:\s*(.+?)(?:\n|$)/i);
-            const scoreMatch = content.match(/QUALITY_SCORE:\s*(\d+)/i);
-            const reworkMatch = content.match(/REWORK_INSTRUCTIONS:\s*(.+?)(?:\n|$)/i);
-            const escalateMatch = content.match(/ESCALATION_MESSAGE:\s*(.+?)(?:\n|$)/i);
+                if (verdict === 'escalate_to_user' && escalateMatch?.[1]?.trim()) {
+                    assessment.escalationMessage = escalateMatch[1].trim();
+                }
 
-            const assessment: BossCompletionAssessment = {
-                verdict,
-                reason: reasonMatch?.[1]?.trim() ?? (verdict === 'done' ? 'Work approved' : 'Issues found'),
-                qualityScore: scoreMatch ? Math.min(100, Math.max(0, parseInt(scoreMatch[1], 10))) : 70,
-            };
-
-            if (verdict === 'needs_rework' && reworkMatch?.[1]?.trim()) {
-                assessment.reworkInstructions = reworkMatch[1].trim();
-            }
-
-            if (verdict === 'escalate_to_user' && escalateMatch?.[1]?.trim()) {
-                assessment.escalationMessage = escalateMatch[1].trim();
-            }
-
-            return assessment;
-        } catch (err) {
-            // LLM failure — approve by default to not block the pipeline
-            return { ...defaultAssessment, reason: 'Approved (Boss assessment failed — fallback)' };
-        }
+                return assessment;
+            },
+            defaultAssessment,
+            'assessTicketCompletion'
+        );
     }
 }

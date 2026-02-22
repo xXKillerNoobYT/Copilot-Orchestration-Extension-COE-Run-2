@@ -53,6 +53,13 @@ function makeOrchestrator(response?: Partial<AgentResponse>): OrchestratorLike &
         getReviewAgent: jest.fn().mockReturnValue(reviewMock),
         getBossAgent: jest.fn().mockReturnValue(bossMock),
         getClarityAgent: jest.fn().mockReturnValue(clarityMock),
+        callTreeNodeAgent: jest.fn().mockResolvedValue({
+            content: 'Tree node agent response',
+            confidence: 85,
+            sources: [],
+            actions: [],
+            tokensUsed: 50,
+        }),
     };
 }
 
@@ -2070,6 +2077,173 @@ describe('TicketProcessorService', () => {
             if (updated?.processing_status === 'holding') {
                 expect(updated.processing_status).toBe('holding');
             }
+        });
+    });
+
+    // ==================== v10.0: AUTO-UNBLOCK ON COMPLETION ====================
+
+    describe('v10.0: Auto-unblock dependent tickets', () => {
+
+        test('completing a ticket unblocks Blocked-status dependents → Validated', () => {
+            // Create blocker ticket and set it to resolved (legacy status)
+            const blocker = createTestTicket(db, { title: 'Blocker task' });
+
+            // Create dependent ticket that is Blocked by the blocker
+            const dependent = createTestTicket(db, {
+                title: 'Depends on blocker',
+                blocking_ticket_id: blocker.id,
+            } as any);
+            db.updateTicket(dependent.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: blocker.id,
+            } as any);
+
+            // Verify the dependent is in Blocked status
+            const beforeUnblock = db.getTicket(dependent.id);
+            expect(beforeUnblock?.status).toBe(TicketStatus.Blocked);
+            expect(beforeUnblock?.blocking_ticket_id).toBe(blocker.id);
+
+            // Use transitionTicketStatus to complete the blocker via Boss
+            const result = processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+
+            // transitionTicketStatus should succeed (Boss can complete)
+            // Note: it may fail due to state transition rules (Open→Completed is not valid),
+            // so let's set blocker to Verified first
+            db.updateTicket(blocker.id, { status: TicketStatus.Verified } as any);
+            const result2 = processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+            expect(result2).toBe(true);
+
+            // The dependent ticket should now be Validated (unblocked)
+            const afterUnblock = db.getTicket(dependent.id);
+            expect(afterUnblock?.status).toBe(TicketStatus.Validated);
+            expect(afterUnblock?.blocking_ticket_id).toBeNull();
+            expect(afterUnblock?.processing_status).toBe('queued');
+        });
+
+        test('completing a ticket unblocks open-status dependents', () => {
+            const blocker = createTestTicket(db, { title: 'Blocker task' });
+            const dependent = createTestTicket(db, {
+                title: 'Open ticket blocked by blocker',
+            });
+            db.updateTicket(dependent.id, {
+                blocking_ticket_id: blocker.id,
+            } as any);
+
+            // Set blocker to Verified then Complete
+            db.updateTicket(blocker.id, { status: TicketStatus.Verified } as any);
+            processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+
+            const afterUnblock = db.getTicket(dependent.id);
+            expect(afterUnblock?.blocking_ticket_id).toBeNull();
+            expect(afterUnblock?.processing_status).toBe('queued');
+        });
+
+        test('cancelling a ticket also unblocks dependents', () => {
+            const blocker = createTestTicket(db, { title: 'Will be cancelled' });
+            const dependent = createTestTicket(db, { title: 'Blocked by cancelled' });
+            db.updateTicket(dependent.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: blocker.id,
+            } as any);
+
+            // Open → Cancelled is a valid transition
+            processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Cancelled,
+                { agent_name: 'BossAgent' }
+            );
+
+            const afterUnblock = db.getTicket(dependent.id);
+            expect(afterUnblock?.status).toBe(TicketStatus.Validated);
+            expect(afterUnblock?.blocking_ticket_id).toBeNull();
+        });
+
+        test('unblock emits ticket:unblocked event', () => {
+            const unblockedEvents: string[] = [];
+            eventBus.on('ticket:unblocked', (event: any) => {
+                unblockedEvents.push(event.data.ticketId);
+            });
+
+            const blocker = createTestTicket(db, { title: 'Blocker' });
+            const dep1 = createTestTicket(db, { title: 'Dep 1' });
+            const dep2 = createTestTicket(db, { title: 'Dep 2' });
+            db.updateTicket(dep1.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: blocker.id,
+            } as any);
+            db.updateTicket(dep2.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: blocker.id,
+            } as any);
+
+            // Complete the blocker
+            db.updateTicket(blocker.id, { status: TicketStatus.Verified } as any);
+            processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+
+            expect(unblockedEvents).toContain(dep1.id);
+            expect(unblockedEvents).toContain(dep2.id);
+            expect(unblockedEvents).toHaveLength(2);
+        });
+
+        test('unblock adds system reply to dependent ticket', () => {
+            const blocker = createTestTicket(db, { title: 'Blocker' });
+            const dependent = createTestTicket(db, { title: 'Dependent' });
+            db.updateTicket(dependent.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: blocker.id,
+            } as any);
+
+            db.updateTicket(blocker.id, { status: TicketStatus.Verified } as any);
+            processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+
+            // Check that a system reply was added
+            const replies = db.getTicketReplies(dependent.id);
+            const unblockReply = replies.find(r =>
+                r.body?.includes('unblocked') && r.body?.includes('re-validated')
+            );
+            expect(unblockReply).toBeTruthy();
+        });
+
+        test('tickets not blocked by the resolved ticket are not affected', () => {
+            const blocker = createTestTicket(db, { title: 'Blocker' });
+            const otherBlocker = createTestTicket(db, { title: 'Other blocker' });
+            const dependentOnOther = createTestTicket(db, { title: 'Blocked by other' });
+            db.updateTicket(dependentOnOther.id, {
+                status: TicketStatus.Blocked,
+                blocking_ticket_id: otherBlocker.id,
+            } as any);
+
+            db.updateTicket(blocker.id, { status: TicketStatus.Verified } as any);
+            processor.transitionTicketStatus(
+                blocker.id,
+                TicketStatus.Completed,
+                { agent_name: 'BossAgent' }
+            );
+
+            // The ticket blocked by a different blocker should remain blocked
+            const stillBlocked = db.getTicket(dependentOnOther.id);
+            expect(stillBlocked?.status).toBe(TicketStatus.Blocked);
+            expect(stillBlocked?.blocking_ticket_id).toBe(otherBlocker.id);
         });
     });
 });

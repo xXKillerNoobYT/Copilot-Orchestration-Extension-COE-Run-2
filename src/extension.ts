@@ -37,6 +37,10 @@ import { NicheAgentFactory } from './core/niche-agent-factory';
 import { AgentTreeManager } from './core/agent-tree-manager';
 import { WorkflowDesigner } from './core/workflow-designer';
 import { WorkflowEngine } from './core/workflow-engine';
+// v10.0 services
+import { LLMProfileManager } from './core/llm-profile-manager';
+import { ToolAssignmentManager } from './core/tool-assignment-manager';
+import { StartupTicketManager } from './core/startup-tickets';
 
 let database: Database;
 let configManager: ConfigManager;
@@ -190,6 +194,10 @@ export async function activate(context: vscode.ExtensionContext) {
         orchestrator.setEventBus(eventBus);
         outputChannel.appendLine('EventBus wired into Orchestrator.');
 
+        // v10.0: Wire EventBus into LLMService for model reload detection events
+        llmService.setEventBus(eventBus);
+        outputChannel.appendLine('EventBus wired into LLMService (auto-recovery timer started at construction).');
+
         const transparencyLogger = new TransparencyLogger(database, eventBus, outputChannel);
         outputChannel.appendLine('TransparencyLogger initialized.');
 
@@ -277,6 +285,19 @@ export async function activate(context: vscode.ExtensionContext) {
         userProfileManager.getProfile(); // Auto-creates default profile on first run
         outputChannel.appendLine('UserProfileManager initialized.');
 
+        // v10.0: LLM Profile Manager — manages 5 profile types with single-model queue
+        const llmProfileManager = new LLMProfileManager(database, eventBus, outputChannel);
+        llmProfileManager.seedDefaultProfile(
+            configManager.getLLMConfig().endpoint,
+            configManager.getLLMConfig().model
+        );
+        outputChannel.appendLine('LLMProfileManager initialized' +
+            (llmProfileManager.isSetupComplete() ? ' (profiles configured).' : ' (awaiting first-run setup).'));
+
+        // v10.0: Tool Assignment Manager — per-agent tool grants with inheritance and escalation
+        const toolAssignmentManager = new ToolAssignmentManager(database, eventBus, outputChannel);
+        outputChannel.appendLine('ToolAssignmentManager initialized.');
+
         const nicheAgentFactory = new NicheAgentFactory(database);
         nicheAgentFactory.seedDefaultDefinitions();
         outputChannel.appendLine('NicheAgentFactory initialized with default niche agent definitions seeded.');
@@ -296,14 +317,17 @@ export async function activate(context: vscode.ExtensionContext) {
         orchestrator.injectPermissionManager(agentPermissionManager);
         orchestrator.injectModelRouter(modelRouter);
         orchestrator.injectAgentTreeManager(agentTreeManager);
+        orchestrator.injectNicheAgentFactory(nicheAgentFactory);
         orchestrator.injectUserProfileManager(userProfileManager);
-        outputChannel.appendLine('v9.0 services injected into Orchestrator.');
+        outputChannel.appendLine('v9.0 services injected into Orchestrator (including NicheAgentFactory).');
 
         // v9.0: Wire tree + workflow into BossAgent
         const bossAgent = orchestrator.getBossAgent();
         bossAgent.setTreeManager(agentTreeManager);
         bossAgent.setWorkflowEngine(workflowEngine);
-        outputChannel.appendLine('AgentTreeManager and WorkflowEngine wired into BossAgent.');
+        // v10.0: Wire EventBus into BossAgent for resilience events (degraded/recovered)
+        bossAgent.setEventBus(eventBus);
+        outputChannel.appendLine('AgentTreeManager, WorkflowEngine, and EventBus wired into BossAgent.');
 
         // v9.0: Wire config changes to LLMService + ModelRouter so model updates propagate at runtime.
         // This must be after all services are created so they're in scope.
@@ -317,6 +341,21 @@ export async function activate(context: vscode.ExtensionContext) {
         const mcpConfirmEnabled = configManager.getConfig().mcpConfirmationRequired !== false;
         mcpServer.setConfirmationEnabled(mcpConfirmEnabled);
         outputChannel.appendLine(`MCP confirmation stage: ${mcpConfirmEnabled ? 'enabled' : 'disabled'}.`);
+
+        // v10.0: Startup tickets — bootstrap the system on first activation
+        const startupTicketManager = new StartupTicketManager(database, eventBus, outputChannel);
+        if (!startupTicketManager.isBootstrapStarted()) {
+            const result = startupTicketManager.createBootstrapTickets();
+            outputChannel.appendLine(`[StartupTickets] Created ${result.created} bootstrap tickets.`);
+        } else if (startupTicketManager.isBootstrapComplete()) {
+            outputChannel.appendLine('[StartupTickets] Bootstrap already complete.');
+        } else {
+            const progress = startupTicketManager.getBootstrapProgress();
+            outputChannel.appendLine(
+                `[StartupTickets] Bootstrap in progress: ${progress.completed}/${progress.total} completed, ` +
+                `${progress.in_progress} active, ${progress.blocked} blocked.`
+            );
+        }
 
         // Phase 4: Initialize UI — single status view (full app opens in browser)
         const statusView = new StatusViewProvider(database, mcpServer);
@@ -393,6 +432,8 @@ export async function deactivate() {
     if (syncService) { await syncService.dispose(); }
     if (fileWatcher) { fileWatcher.stop(); }
     if (mcpServer) { mcpServer.dispose(); }
+    // v10.0: Clean up LLMService auto-recovery timer
+    if (llmService) { llmService.dispose(); }
     if (orchestrator) { orchestrator.dispose(); }
     if (database) { database.close(); }
 }

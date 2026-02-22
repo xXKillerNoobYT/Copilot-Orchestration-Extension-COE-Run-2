@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { LLMConfig, LLMMessage, LLMRequest, LLMResponse, LLMStreamChunk } from '../types';
+import type { EventBus } from './event-bus';
 
 /** v6.0: Request priority — boss requests get a reserved LLM slot */
 type LLMPriority = 'boss' | 'normal';
@@ -38,6 +39,15 @@ export class LLMService {
     private lastHealthCheck: { healthy: boolean; timestamp: number } | null = null;
     private readonly healthCheckCooldownMs = 60_000;
 
+    // v10.0: Model reload detection
+    private eventBusRef: EventBus | null = null;
+    private modelReloading = false;
+    /** v10.0: Timestamp of last successful LLM call — used for 15-min auto-recovery */
+    private lastSuccessfulCallMs: number = Date.now();
+    /** v10.0: Auto-recovery timer (15 min without success → force health check) */
+    private autoRecoveryTimer: ReturnType<typeof setInterval> | null = null;
+    private readonly autoRecoveryIntervalMs = 15 * 60 * 1000; // 15 minutes
+
     constructor(
         private config: LLMConfig,
         private outputChannel: vscode.OutputChannel
@@ -45,6 +55,7 @@ export class LLMService {
         this.maxConcurrent = config.maxConcurrentRequests ?? 4;
         this.bossReservedSlots = config.bossReservedSlots ?? 1;
         this.maxRetries = config.maxRequestRetries ?? 5;
+        this.startAutoRecoveryTimer();
     }
 
     updateConfig(config: LLMConfig): void {
@@ -52,6 +63,87 @@ export class LLMService {
         this.maxConcurrent = config.maxConcurrentRequests ?? 4;
         this.bossReservedSlots = config.bossReservedSlots ?? 1;
         this.maxRetries = config.maxRequestRetries ?? 5;
+    }
+
+    /**
+     * v10.0: Inject EventBus for emitting model reload events.
+     */
+    setEventBus(eb: EventBus): void {
+        this.eventBusRef = eb;
+    }
+
+    /**
+     * v10.0: Whether the LLM model is currently reloading (400/503 detected).
+     */
+    isModelReloading(): boolean {
+        return this.modelReloading;
+    }
+
+    /**
+     * v10.0: Start the 15-minute auto-recovery timer.
+     * If no successful LLM call happens in 15 minutes, force a health check
+     * and clear any stale queue entries.
+     */
+    private startAutoRecoveryTimer(): void {
+        if (this.autoRecoveryTimer) return;
+        this.autoRecoveryTimer = setInterval(async () => {
+            const timeSinceLastSuccess = Date.now() - this.lastSuccessfulCallMs;
+            if (timeSinceLastSuccess >= this.autoRecoveryIntervalMs) {
+                this.outputChannel.appendLine(
+                    `[LLMService] Auto-recovery: No successful LLM call in ${Math.round(timeSinceLastSuccess / 60000)} minutes — forcing health check`
+                );
+                // Force health check (bypass cooldown)
+                this.lastHealthCheck = null;
+                const healthy = await this.healthCheck();
+                if (healthy) {
+                    this.eventBusRef?.emit('llm:auto_recovery', 'llm-service', {
+                        message: 'LLM auto-recovery succeeded — connection restored',
+                    });
+                    this.lastSuccessfulCallMs = Date.now();
+                    if (this.modelReloading) {
+                        this.modelReloading = false;
+                        this.eventBusRef?.emit('llm:model_ready', 'llm-service', {
+                            message: 'Model ready after auto-recovery',
+                        });
+                    }
+                }
+                // Clear stale queue entries (older than 5 min)
+                const staleThreshold = Date.now() - 5 * 60 * 1000;
+                const staleCount = this.queue.length;
+                this.queue = this.queue.filter((item) => {
+                    // We don't track enqueue time on items, so clear all if unhealthy
+                    if (!healthy) {
+                        item.reject(new Error('LLM auto-recovery: clearing stale queue entry'));
+                        return false;
+                    }
+                    return true;
+                });
+                if (staleCount > this.queue.length) {
+                    this.outputChannel.appendLine(
+                        `[LLMService] Auto-recovery: Cleared ${staleCount - this.queue.length} stale queue entries`
+                    );
+                }
+            }
+        }, 60_000); // Check every minute
+    }
+
+    /**
+     * v10.0: Stop the auto-recovery timer (cleanup).
+     */
+    dispose(): void {
+        if (this.autoRecoveryTimer) {
+            clearInterval(this.autoRecoveryTimer);
+            this.autoRecoveryTimer = null;
+        }
+    }
+
+    /**
+     * v10.0: Detect if an HTTP error indicates model reloading (LM Studio unload/reload).
+     * LM Studio returns 400 when model is unloaded and being reloaded,
+     * and 503 when the server is overloaded or model is loading.
+     */
+    private isModelReloadError(status: number, statusText: string): boolean {
+        return status === 400 || status === 503;
     }
 
     async chat(messages: LLMMessage[], options?: { maxTokens?: number; temperature?: number; stream?: boolean; priority?: LLMPriority; model?: string }): Promise<LLMResponse> {
@@ -201,6 +293,8 @@ export class LLMService {
 
     /**
      * v6.0: Execute a request with retry logic (up to maxRetries attempts).
+     * v10.0: Enhanced with model reload detection — uses longer backoff (5s, 10s, 20s, 30s)
+     *        when 400/503 errors indicate the model is being reloaded by LM Studio.
      */
     private async executeWithRetry(item: QueuedRequest): Promise<LLMResponse> {
         let lastError: Error | null = null;
@@ -210,6 +304,18 @@ export class LLMService {
                 const response = item.request.stream
                     ? await this.executeStreaming(item.request)
                     : await this.executeNonStreaming(item.request);
+
+                // v10.0: Successful call — update tracking
+                this.lastSuccessfulCallMs = Date.now();
+                if (this.modelReloading) {
+                    this.modelReloading = false;
+                    this.outputChannel.appendLine('[LLMService] Model reload complete — resuming normal operation');
+                    this.eventBusRef?.emit('llm:model_ready', 'llm-service', {
+                        message: 'Model reloaded successfully',
+                        attempts: attempt + 1,
+                    });
+                }
+
                 return response;
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error(String(error));
@@ -220,11 +326,31 @@ export class LLMService {
                     throw lastError;
                 }
 
-                if (attempt < this.maxRetries) {
-                    // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-                    const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+                // v10.0: Detect model reload errors (400/503) and use longer backoff
+                const isReload = errMsg.includes('400') || errMsg.includes('503')
+                    || errMsg.includes('bad request') || errMsg.includes('service unavailable');
+
+                if (isReload && !this.modelReloading) {
+                    this.modelReloading = true;
                     this.outputChannel.appendLine(
-                        `[LLMService] Request failed (attempt ${attempt + 1}/${this.maxRetries + 1}), retrying in ${delay}ms: ${lastError.message.substring(0, 100)}`
+                        '[LLMService] Model reload detected (400/503) — switching to reload backoff schedule'
+                    );
+                    this.eventBusRef?.emit('llm:model_reloading', 'llm-service', {
+                        message: 'LM Studio model reloading — requests will retry with backoff',
+                        error: lastError.message.substring(0, 200),
+                    });
+                }
+
+                if (attempt < this.maxRetries) {
+                    // v11.0: Model reload backoff: 10s, 20s, 40s, 60s, 90s (generous — model load can take 60s+)
+                    // Normal backoff: 2s, 4s, 8s, 16s, 30s (capped at 30s)
+                    const delay = isReload
+                        ? Math.min(10000 * Math.pow(2, attempt), 90000)  // 10s, 20s, 40s, 80s→90s
+                        : Math.min(2000 * Math.pow(2, attempt), 30000);  // 2s, 4s, 8s, 16s, 30s
+
+                    this.outputChannel.appendLine(
+                        `[LLMService] Request failed (attempt ${attempt + 1}/${this.maxRetries + 1}), ` +
+                        `${isReload ? 'model reload ' : ''}retrying in ${delay}ms: ${lastError.message.substring(0, 100)}`
                     );
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
@@ -250,36 +376,63 @@ export class LLMService {
 
         let firstTokenReceived = false;
         let fullContent = '';
+        let fullReasoningContent = '';  // v11.0: Capture reasoning for debugging/fallback
         let tokensUsed = 0;
         let thinkingTokens = 0;  // v10.0: Track reasoning/thinking tokens separately
         let finishReason = 'stop';
 
-        // v10.0: Liveness check uses configurable streamStallTimeoutSeconds (default 180s)
-        // Tolerates slow generation AND long thinking pauses between reasoning tokens.
-        // Only aborts if ZERO tokens (content OR thinking) were generated in the interval.
-        const stallCheckMs = (this.config.streamStallTimeoutSeconds ?? 180) * 1000;
+        // Dual-mode liveness check:
+        // - Content phase: uses streamStallTimeoutSeconds (default 180s) — short interval for active generation
+        // - Thinking phase: uses thinkingTimeoutSeconds (default 5400s / 90 min) — long interval for reasoning
+        //   Not all models emit thinking/reasoning tokens while computing. Some go completely silent.
+        //   The thinking timeout handles this: zero tokens of any kind for up to 90 minutes is OK.
+        // - Thinking time is NOT included in ticket time estimates.
+        const contentStallMs = (this.config.streamStallTimeoutSeconds ?? 180) * 1000;
+        const thinkingStallMs = (this.config.thinkingTimeoutSeconds ?? 5400) * 1000;
         let lastCheckTokenCount = 0;
         let lastCheckThinkingCount = 0;
         let abortReason = '';
-        const livenessInterval = setInterval(() => {
-            if (!firstTokenReceived) return; // startup timer handles pre-first-token
-            const totalActivity = tokensUsed + thinkingTokens;
-            const lastActivity = lastCheckTokenCount + lastCheckThinkingCount;
-            if (totalActivity === lastActivity) {
-                // No new tokens (content or thinking) in the stall interval — truly stalled
-                abortReason = 'stall';
-                controller.abort();
-            } else {
-                const newContent = tokensUsed - lastCheckTokenCount;
-                const newThinking = thinkingTokens - lastCheckThinkingCount;
-                this.outputChannel.appendLine(
-                    `LLM liveness: ${newContent} content + ${newThinking} thinking tokens ` +
-                    `(${tokensUsed} content, ${thinkingTokens} thinking total)`
-                );
-                lastCheckTokenCount = tokensUsed;
-                lastCheckThinkingCount = thinkingTokens;
-            }
-        }, stallCheckMs);
+        let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const scheduleLivenessCheck = () => {
+            // Choose interval based on whether we have content tokens yet.
+            // If no content tokens have arrived, we're in thinking/startup → use thinking timeout.
+            // Once content starts flowing, switch to the shorter content stall interval.
+            const intervalMs = tokensUsed > 0 ? contentStallMs : thinkingStallMs;
+            livenessTimer = setTimeout(() => {
+                if (!firstTokenReceived) {
+                    // startup timer handles pre-first-token — just reschedule
+                    scheduleLivenessCheck();
+                    return;
+                }
+                const totalActivity = tokensUsed + thinkingTokens;
+                const lastActivity = lastCheckTokenCount + lastCheckThinkingCount;
+                if (totalActivity === lastActivity) {
+                    // No new tokens (content or thinking) in the interval — truly stalled
+                    const phase = tokensUsed > 0 ? 'content' : 'thinking';
+                    const timeoutSec = tokensUsed > 0
+                        ? (this.config.streamStallTimeoutSeconds ?? 180)
+                        : (this.config.thinkingTimeoutSeconds ?? 5400);
+                    this.outputChannel.appendLine(
+                        `LLM stall detected in ${phase} phase: no tokens for ${timeoutSec}s. ` +
+                        `(${tokensUsed} content, ${thinkingTokens} thinking total)`
+                    );
+                    abortReason = 'stall';
+                    controller.abort();
+                } else {
+                    const newContent = tokensUsed - lastCheckTokenCount;
+                    const newThinking = thinkingTokens - lastCheckThinkingCount;
+                    this.outputChannel.appendLine(
+                        `LLM liveness: ${newContent} content + ${newThinking} thinking tokens ` +
+                        `(${tokensUsed} content, ${thinkingTokens} thinking total)`
+                    );
+                    lastCheckTokenCount = tokensUsed;
+                    lastCheckThinkingCount = thinkingTokens;
+                    scheduleLivenessCheck();
+                }
+            }, intervalMs);
+        };
+        scheduleLivenessCheck();
 
         try {
             const body = JSON.stringify({
@@ -292,7 +445,7 @@ export class LLMService {
 
             this.outputChannel.appendLine(
                 `LLM request: ${request.messages.length} messages, stream=true ` +
-                `(startup=${this.config.startupTimeoutSeconds}s, stall=${this.config.streamStallTimeoutSeconds}s, total=${this.config.timeoutSeconds}s)`
+                `(startup=${this.config.startupTimeoutSeconds}s, thinking=${this.config.thinkingTimeoutSeconds ?? 5400}s, stall=${this.config.streamStallTimeoutSeconds}s, total=${this.config.timeoutSeconds}s)`
             );
 
             const response = await fetch(url, {
@@ -355,6 +508,7 @@ export class LLMService {
 
                         if (reasoningContent) {
                             // Reasoning/thinking token — counts as activity but not content
+                            fullReasoningContent += reasoningContent;
                             thinkingTokens++;
                             if (!inThinkingPhase) {
                                 inThinkingPhase = true;
@@ -396,6 +550,26 @@ export class LLMService {
                 );
             }
 
+            // v11.0: Handle reasoning-only responses — the model exhausted its output budget
+            // on thinking tokens and produced no content. This is common with reasoning models
+            // when max_tokens is too low or the model is overthinking a simple prompt.
+            if (fullContent.trim() === '' && thinkingTokens > 0) {
+                this.outputChannel.appendLine(
+                    `[LLMService] WARNING: Model produced ${thinkingTokens} reasoning tokens but NO content. ` +
+                    `Reasoning preview: "${fullReasoningContent.substring(0, 200)}..." ` +
+                    `This typically means max_tokens was consumed by reasoning before content generation.`
+                );
+                // Return reasoning as content fallback so the agent gets SOMETHING
+                // rather than an empty string that causes ticket failures
+                const fallbackContent = `[Model reasoning only — no final answer produced]\n\n${fullReasoningContent}`;
+                return {
+                    content: fallbackContent,
+                    tokens_used: tokensUsed + thinkingTokens,
+                    model: this.config.model,
+                    finish_reason: 'length',
+                };
+            }
+
             return {
                 content: fullContent,
                 tokens_used: tokensUsed,
@@ -411,7 +585,10 @@ export class LLMService {
                 errMsg.includes('aborted') || errMsg.includes('abort') ||
                 errStr.includes('AbortError') || errStr.includes('aborted');
             if (isAbort) {
-                const stallSec = this.config.streamStallTimeoutSeconds ?? 180;
+                const phase = tokensUsed > 0 ? 'content' : 'thinking';
+                const stallSec = tokensUsed > 0
+                    ? (this.config.streamStallTimeoutSeconds ?? 180)
+                    : (this.config.thinkingTimeoutSeconds ?? 5400);
                 if (!firstTokenReceived) {
                     throw new Error(
                         `LLM startup timeout: No response within ${this.config.startupTimeoutSeconds}s. ` +
@@ -419,7 +596,7 @@ export class LLMService {
                     );
                 } else if (abortReason === 'stall') {
                     throw new Error(
-                        `LLM stream stalled: No new tokens (content or thinking) for ${stallSec}s. ` +
+                        `LLM stream stalled (${phase} phase): No new tokens for ${stallSec}s. ` +
                         `Got ${tokensUsed} content + ${thinkingTokens} thinking tokens before stall.`
                     );
                 } else {
@@ -445,7 +622,7 @@ export class LLMService {
         } finally {
             clearTimeout(startupTimer);
             clearTimeout(totalTimer);
-            clearInterval(livenessInterval);
+            if (livenessTimer) clearTimeout(livenessTimer);
         }
     }
 

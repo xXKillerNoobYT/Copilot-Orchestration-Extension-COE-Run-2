@@ -6047,6 +6047,403 @@ Only return the JSON array.`;
             return true;
         }
 
+        // ==================== v10.0: GROUPS ====================
+
+        // GET /api/v10/groups — list all groups
+        if (route === 'v10/groups' && method === 'GET') {
+            const groups = database.getAllAgentGroups();
+            json(res, { success: true, data: groups });
+            return true;
+        }
+
+        // POST /api/v10/groups — create a group
+        if (route === 'v10/groups' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.id || !body.branch || body.level === undefined || !body.head_node_id) {
+                json(res, { error: 'id, branch, level, head_node_id required' }, 400);
+                return true;
+            }
+            const group = database.createAgentGroup({
+                id: body.id as string,
+                branch: body.branch as any,
+                level: body.level as number,
+                parent_group_id: (body.parent_group_id as string) ?? null,
+                head_node_id: body.head_node_id as string,
+                max_members: (body.max_members as number) ?? 10,
+            });
+            json(res, { success: true, data: group });
+            return true;
+        }
+
+        // GET/DELETE /api/v10/groups/:id
+        if (route.startsWith('v10/groups/') && !route.includes('/members')) {
+            const groupId = route.split('/')[2];
+            if (method === 'GET') {
+                const group = database.getAgentGroup(groupId);
+                if (!group) { json(res, { error: 'Group not found' }, 404); return true; }
+                json(res, { success: true, data: group });
+                return true;
+            }
+        }
+
+        // GET /api/v10/groups/:id/members — group membership
+        if (route.match(/^v10\/groups\/[^/]+\/members$/) && method === 'GET') {
+            const groupId = route.split('/')[2];
+            const members = database.getGroupMembers(groupId);
+            json(res, { success: true, data: members });
+            return true;
+        }
+
+        // POST /api/v10/groups/:id/members — add member to group
+        if (route.match(/^v10\/groups\/[^/]+\/members$/) && method === 'POST') {
+            const groupId = route.split('/')[2];
+            const body = await parseBody(req);
+            if (!body.node_id || !body.role || body.slot_index === undefined) {
+                json(res, { error: 'node_id, role, slot_index required' }, 400);
+                return true;
+            }
+            database.addGroupMember({
+                group_id: groupId,
+                node_id: body.node_id as string,
+                role: body.role as any,
+                slot_index: body.slot_index as number,
+            });
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== v10.0: UPWARD REPORTS ====================
+
+        // GET /api/v10/upward-reports — list reports (optionally by node or ticket)
+        if (route === 'v10/upward-reports' && method === 'GET') {
+            const urlObj = new URL(req.url ?? '', 'http://localhost');
+            const nodeId = urlObj.searchParams.get('node_id');
+            const ticketId = urlObj.searchParams.get('ticket_id');
+            const limit = parseInt(urlObj.searchParams.get('limit') ?? '50', 10);
+
+            let reports;
+            if (ticketId) {
+                reports = database.getUpwardReportsForTicket(ticketId);
+            } else if (nodeId) {
+                reports = database.getUpwardReportsForNode(nodeId, limit);
+            } else {
+                // Return recent reports (default: up to 100)
+                reports = database.getUpwardReportsForNode('', limit);
+            }
+            json(res, { success: true, data: reports });
+            return true;
+        }
+
+        // POST /api/v10/upward-reports — submit an upward report
+        if (route === 'v10/upward-reports' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.id || !body.from_node_id || !body.to_node_id || !body.ticket_id || !body.report_type || !body.content) {
+                json(res, { error: 'id, from_node_id, to_node_id, ticket_id, report_type, content required' }, 400);
+                return true;
+            }
+            const report = database.createUpwardReport({
+                id: body.id as string,
+                from_node_id: body.from_node_id as string,
+                to_node_id: body.to_node_id as string,
+                ticket_id: body.ticket_id as string,
+                report_type: body.report_type as any,
+                content: body.content as string,
+            });
+            json(res, { success: true, data: report });
+            return true;
+        }
+
+        // GET /api/v10/upward-reports/:id
+        if (route.startsWith('v10/upward-reports/') && method === 'GET') {
+            const reportId = route.split('/')[2];
+            const report = database.getUpwardReport(reportId);
+            if (!report) { json(res, { error: 'Report not found' }, 404); return true; }
+            json(res, { success: true, data: report });
+            return true;
+        }
+
+        // POST /api/v10/upward-reports/:id/acknowledge
+        if (route.match(/^v10\/upward-reports\/[^/]+\/acknowledge$/) && method === 'POST') {
+            const reportId = route.split('/')[2];
+            database.acknowledgeUpwardReport(reportId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== v10.0: TOOL ASSIGNMENTS ====================
+
+        // GET /api/v10/tool-assignments — list all tool assignments (optionally by node)
+        if (route === 'v10/tool-assignments' && method === 'GET') {
+            const urlObj = new URL(req.url ?? '', 'http://localhost');
+            const nodeId = urlObj.searchParams.get('node_id');
+            if (nodeId) {
+                const assignments = database.getToolAssignmentsForNode(nodeId);
+                json(res, { success: true, data: assignments });
+            } else {
+                // Without node_id, return empty (too many to dump all)
+                json(res, { success: true, data: [], message: 'Provide ?node_id= to filter' });
+            }
+            return true;
+        }
+
+        // POST /api/v10/tool-assignments — grant a tool to a node
+        if (route === 'v10/tool-assignments' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.node_id || !body.tool_name) {
+                json(res, { error: 'node_id, tool_name required' }, 400);
+                return true;
+            }
+            const assignedBy = (body.assigned_by as 'self' | 'parent' | 'system') ?? 'system';
+            // Check if already assigned
+            if (database.hasToolAssignment(body.node_id as string, body.tool_name as string)) {
+                json(res, { success: true, data: null, message: 'Tool already assigned' });
+                return true;
+            }
+            const { randomUUID } = await import('crypto');
+            const assignment = database.createToolAssignment({
+                id: randomUUID(),
+                node_id: body.node_id as string,
+                tool_name: body.tool_name as string,
+                assigned_by: assignedBy,
+                expires_at: (body.expires_at as string) ?? null,
+            });
+            json(res, { success: true, data: assignment });
+            return true;
+        }
+
+        // DELETE /api/v10/tool-assignments — revoke a tool from a node
+        if (route === 'v10/tool-assignments' && method === 'DELETE') {
+            const body = await parseBody(req);
+            if (!body.node_id || !body.tool_name) {
+                json(res, { error: 'node_id, tool_name required' }, 400);
+                return true;
+            }
+            database.removeToolAssignment(body.node_id as string, body.tool_name as string);
+            json(res, { success: true });
+            return true;
+        }
+
+        // GET /api/v10/tool-assignments/check — check if a node has access to a tool
+        if (route === 'v10/tool-assignments/check' && method === 'GET') {
+            const urlObj = new URL(req.url ?? '', 'http://localhost');
+            const nodeId = urlObj.searchParams.get('node_id');
+            const toolName = urlObj.searchParams.get('tool_name');
+            if (!nodeId || !toolName) {
+                json(res, { error: 'node_id and tool_name query params required' }, 400);
+                return true;
+            }
+            const hasTool = database.hasToolAssignment(nodeId, toolName);
+            json(res, { success: true, data: { allowed: hasTool, node_id: nodeId, tool_name: toolName } });
+            return true;
+        }
+
+        // ==================== v10.0: TICKET TODOS ====================
+
+        // GET /api/v10/ticket-todos?ticket_id=... — get todos for a ticket
+        if (route === 'v10/ticket-todos' && method === 'GET') {
+            const urlObj = new URL(req.url ?? '', 'http://localhost');
+            const ticketId = urlObj.searchParams.get('ticket_id');
+            if (!ticketId) {
+                json(res, { error: 'ticket_id query param required' }, 400);
+                return true;
+            }
+            const todos = database.getTicketTodos(ticketId);
+            json(res, { success: true, data: todos });
+            return true;
+        }
+
+        // POST /api/v10/ticket-todos — create a todo
+        if (route === 'v10/ticket-todos' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.ticket_id || !body.description) {
+                json(res, { error: 'ticket_id, description required' }, 400);
+                return true;
+            }
+            const todo = database.createTicketTodo({
+                ticket_id: body.ticket_id as string,
+                description: body.description as string,
+                sort_order: body.sort_order as number | undefined,
+            });
+            json(res, { success: true, data: todo });
+            return true;
+        }
+
+        // POST /api/v10/ticket-todos/:id/complete — mark a todo complete
+        if (route.match(/^v10\/ticket-todos\/[^/]+\/complete$/) && method === 'POST') {
+            const todoId = route.split('/')[2];
+            const body = await parseBody(req);
+            const completedBy = (body.completed_by as string) ?? 'system';
+            database.completeTicketTodo(todoId, completedBy);
+            json(res, { success: true });
+            return true;
+        }
+
+        // POST /api/v10/ticket-todos/:id/uncomplete — un-complete a todo
+        if (route.match(/^v10\/ticket-todos\/[^/]+\/uncomplete$/) && method === 'POST') {
+            const todoId = route.split('/')[2];
+            database.uncompleteTicketTodo(todoId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // DELETE /api/v10/ticket-todos/:id — delete a todo
+        if (route.match(/^v10\/ticket-todos\/[^/]+$/) && method === 'DELETE') {
+            const todoId = route.split('/')[2];
+            database.deleteTicketTodo(todoId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // ==================== v10.0: LLM PROFILES ====================
+
+        // GET /api/v10/llm-profiles — list all LLM profiles
+        if (route === 'v10/llm-profiles' && method === 'GET') {
+            const profiles = database.getAllLLMProfiles();
+            json(res, { success: true, data: profiles });
+            return true;
+        }
+
+        // POST /api/v10/llm-profiles — create a new profile
+        if (route === 'v10/llm-profiles' && method === 'POST') {
+            const body = await parseBody(req);
+            if (!body.id || !body.type || !body.model_name || !body.endpoint) {
+                json(res, { error: 'id, type, model_name, endpoint required' }, 400);
+                return true;
+            }
+            const profile = database.createLLMProfile({
+                id: body.id as string,
+                type: body.type as any,
+                model_name: body.model_name as string,
+                endpoint: body.endpoint as string,
+                capabilities: (body.capabilities as string[]) ?? [],
+                is_active: (body.is_active as boolean) ?? false,
+            });
+            json(res, { success: true, data: profile });
+            return true;
+        }
+
+        // GET /api/v10/llm-profiles/active — get the active profile
+        if (route === 'v10/llm-profiles/active' && method === 'GET') {
+            const active = database.getActiveLLMProfile();
+            json(res, { success: true, data: active });
+            return true;
+        }
+
+        // GET /api/v10/llm-profiles/:id
+        if (route.startsWith('v10/llm-profiles/') && !route.includes('/active') && method === 'GET') {
+            const profileId = route.split('/')[2];
+            const profile = database.getLLMProfile(profileId);
+            if (!profile) { json(res, { error: 'Profile not found' }, 404); return true; }
+            json(res, { success: true, data: profile });
+            return true;
+        }
+
+        // PUT /api/v10/llm-profiles/:id — update a profile
+        if (route.startsWith('v10/llm-profiles/') && !route.includes('/active') && !route.includes('/switch') && method === 'PUT') {
+            const profileId = route.split('/')[2];
+            const body = await parseBody(req);
+            const updates: Record<string, unknown> = {};
+            if (body.model_name) updates.model_name = body.model_name;
+            if (body.endpoint) updates.endpoint = body.endpoint;
+            if (body.capabilities) updates.capabilities = body.capabilities;
+            if (body.type) updates.type = body.type;
+            database.updateLLMProfile(profileId, updates as any);
+            const updated = database.getLLMProfile(profileId);
+            json(res, { success: true, data: updated });
+            return true;
+        }
+
+        // DELETE /api/v10/llm-profiles/:id — delete a profile
+        if (route.startsWith('v10/llm-profiles/') && !route.includes('/active') && !route.includes('/switch') && method === 'DELETE') {
+            const profileId = route.split('/')[2];
+            const profile = database.getLLMProfile(profileId);
+            if (!profile) { json(res, { error: 'Profile not found' }, 404); return true; }
+            if (profile.is_active) {
+                json(res, { error: 'Cannot delete the active profile. Switch to another profile first.' }, 400);
+                return true;
+            }
+            database.deleteLLMProfile(profileId);
+            json(res, { success: true });
+            return true;
+        }
+
+        // POST /api/v10/llm-profiles/:id/switch — switch active profile
+        if (route.match(/^v10\/llm-profiles\/[^/]+\/switch$/) && method === 'POST') {
+            const profileId = route.split('/')[2];
+            const profile = database.getLLMProfile(profileId);
+            if (!profile) { json(res, { error: 'Profile not found' }, 404); return true; }
+            database.setActiveLLMProfile(profileId);
+            const updated = database.getLLMProfile(profileId);
+            eventBus.emit('model:profile_switched', 'api', {
+                profile_id: profileId,
+                type: updated?.type,
+                model_name: updated?.model_name,
+            });
+            json(res, { success: true, data: updated });
+            return true;
+        }
+
+        // ==================== v10.0: TREE BRANCHES ====================
+
+        // GET /api/v10/tree/branches — branch overview
+        if (route === 'v10/tree/branches' && method === 'GET') {
+            const allGroups = database.getAllAgentGroups();
+            // Organize by branch
+            const branchMap: Record<string, { branch: string; groups: typeof allGroups; total_nodes: number }> = {};
+            for (const group of allGroups) {
+                if (!branchMap[group.branch]) {
+                    branchMap[group.branch] = { branch: group.branch, groups: [], total_nodes: 0 };
+                }
+                branchMap[group.branch].groups.push(group);
+                branchMap[group.branch].total_nodes += group.members.length;
+            }
+            json(res, { success: true, data: Object.values(branchMap) });
+            return true;
+        }
+
+        // GET /api/v10/tree/groups-by-branch/:branch — groups for a specific branch
+        if (route.startsWith('v10/tree/groups-by-branch/') && method === 'GET') {
+            const branch = route.split('/')[3];
+            const groups = database.getGroupsByBranch(branch as any);
+            json(res, { success: true, data: groups });
+            return true;
+        }
+
+        // GET /api/v10/tree/groups-by-level/:level — groups at a specific level
+        if (route.startsWith('v10/tree/groups-by-level/') && method === 'GET') {
+            const level = parseInt(route.split('/')[3], 10);
+            const groups = database.getGroupsByLevel(level);
+            json(res, { success: true, data: groups });
+            return true;
+        }
+
+        // ==================== v10.0: BOOTSTRAP ====================
+
+        // POST /api/v10/bootstrap — trigger startup tickets
+        if (route === 'v10/bootstrap' && method === 'POST') {
+            const { StartupTicketManager } = await import('../core/startup-tickets');
+            const startupMgr = new StartupTicketManager(database, eventBus, { appendLine() {} });
+            const result = startupMgr.createBootstrapTickets();
+            json(res, { success: true, data: result });
+            return true;
+        }
+
+        // GET /api/v10/bootstrap/progress — get bootstrap progress
+        if (route === 'v10/bootstrap/progress' && method === 'GET') {
+            const { StartupTicketManager } = await import('../core/startup-tickets');
+            const startupMgr = new StartupTicketManager(database, eventBus, { appendLine() {} });
+            const progress = startupMgr.getBootstrapProgress();
+            json(res, {
+                success: true,
+                data: {
+                    ...progress,
+                    is_complete: startupMgr.isBootstrapComplete(),
+                    is_started: startupMgr.isBootstrapStarted(),
+                },
+            });
+            return true;
+        }
+
         // Not found
         json(res, { error: 'API route not found: ' + route }, 404);
         return true;

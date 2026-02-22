@@ -27,7 +27,7 @@ export class EvolutionService {
         private config: ConfigManager,
         private llm: LLMService,
         private outputChannel: vscode.OutputChannel
-    ) {}
+    ) { }
 
     incrementCallCounter(): void {
         this.callCounter++;
@@ -56,7 +56,7 @@ export class EvolutionService {
                 } else {
                     const severity = entry.detail.toLowerCase().includes('critical') ? 3
                         : entry.detail.toLowerCase().includes('timeout') ? 2
-                        : 1;
+                            : 1;
                     errorGroups.set(signature, { count: 1, severity, examples: [entry.detail] });
                 }
             }
@@ -112,7 +112,7 @@ export class EvolutionService {
                     role: 'user',
                     content: `Pattern: ${pattern.signature}\nFrequency: ${pattern.frequency} times\nSeverity: ${pattern.severity}/3\nExamples:\n${pattern.examples.join('\n')}`
                 }
-            ], { maxTokens: 200, temperature: 0.3, stream: false });
+            ], { maxTokens: 500, temperature: 0.3 });
 
             const match = response.content.match(/\{[\s\S]*\}/);
             if (!match) return null;

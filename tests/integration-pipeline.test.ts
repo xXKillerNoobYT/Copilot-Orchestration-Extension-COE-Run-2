@@ -45,6 +45,8 @@ describe('Integration Pipeline', () => {
             agents: {},
         }),
         getAgentContextLimit: () => 4096,
+        getModelMaxOutputTokens: () => 4096,
+        getModelContextWindow: () => 32768,
         getLLMConfig: () => ({
             endpoint: 'http://localhost:1234/v1',
             model: 'test-model',

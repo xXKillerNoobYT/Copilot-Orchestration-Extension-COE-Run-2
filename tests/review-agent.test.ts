@@ -19,6 +19,8 @@ const mockLLM = {
 
 const mockConfig = {
     getAgentContextLimit: jest.fn().mockReturnValue(4000),
+    getModelMaxOutputTokens: jest.fn().mockReturnValue(4096),
+    getModelContextWindow: jest.fn().mockReturnValue(32768),
     getConfig: jest.fn().mockReturnValue({ verification: { delaySeconds: 0 } }),
 } as any;
 
@@ -54,6 +56,11 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
         last_error_at: null,
         assigned_queue: null,
         cancellation_reason: null,
+        ticket_category: null,
+        ticket_stage: null,
+        related_ticket_ids: null,
+        agent_notes: null,
+        tree_route_path: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         ...overrides,

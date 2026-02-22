@@ -88,7 +88,7 @@ export class CustomAgentRunner extends BaseAgent {
                         this.llm.chat([
                             { role: 'system', content: config.systemPrompt },
                             { role: 'user', content: `Goal ${i + 1}: ${goal.description}\n\nContext: ${message}\n\nChecklist:\n${config.checklist.map(c => `- ${c.item}`).join('\n')}` },
-                        ], { maxTokens: this.config.getAgentContextLimit('custom') }),
+                        ], { maxTokens: this.config.getModelMaxOutputTokens() }),
                         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Goal timeout')), goalTimeoutMs)),
                     ]);
 

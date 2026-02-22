@@ -22,7 +22,7 @@ The developer is the **designer** — they provide the vision, the architecture,
 ## Architecture (3 Layers)
 
 1. **Directives** (`directives/*.md`) — Markdown SOPs telling agents what to do. Living documents; update them when you learn something new.
-2. **Agents** (`src/agents/`) — 8 specialists routed by `orchestrator.ts` via keyword-based intent classification. All extend `BaseAgent` (`base-agent.ts`) which provides LLM access, token management, and audit logging.
+2. **Agents** (`src/agents/`) — 18 specialists routed by `orchestrator.ts` via keyword-based intent classification (16 categories). All extend `BaseAgent` (`base-agent.ts`) which provides LLM access, token management, and audit logging. v10.0 adds group-based agent tree (6 branches, 10-slot groups) with upward reporting chain.
 3. **Core Services** (`src/core/`) — Deterministic TypeScript. Database, LLM client, file watcher, test runner, evolution engine, etc. This is where most business logic lives.
 
 **Key data flow:** User message → `Orchestrator.classifyIntent()` (keyword scoring, NOT LLM) → specialist agent → LLM call via `LLMService.chat()` → result stored in SQLite → response to user.
@@ -33,17 +33,17 @@ The developer is the **designer** — they provide the vision, the architecture,
 |------|------|
 | `src/extension.ts` | VS Code entry. Initializes all services in dependency order, wires them together. |
 | `src/agents/orchestrator.ts` | Central router. `KEYWORD_MAP` + `INTENT_PRIORITY` determine routing. Never answer directly — always delegate. |
-| `src/core/database.ts` | SQLite via `node:sqlite` (Node built-in, NOT `better-sqlite3`). WAL mode, 15+ tables, full CRUD. |
-| `src/core/llm-service.ts` | OpenAI-compatible HTTP client. Serial queue (max 5), 5-min response cache, health checks. |
-| `src/core/event-bus.ts` | Pub/sub system. All database mutations and agent completions emit typed events. |
-| `src/mcp/server.ts` | HTTP + JSON-RPC server (port 3030). 6 tools: `getNextTask`, `reportTaskDone`, `askQuestion`, `getErrors`, `callCOEAgent`, `scanCodeBase`. |
+| `src/core/database.ts` | SQLite via `node:sqlite` (Node built-in, NOT `better-sqlite3`). WAL mode, 54+ tables, full CRUD. |
+| `src/core/llm-service.ts` | OpenAI-compatible HTTP client. Concurrent queue, 4-tier timeout (startup/thinking/stall/total), model reload backoff (400/503), response cache, health checks. |
+| `src/core/event-bus.ts` | Pub/sub system. 120+ typed events. All database mutations and agent completions emit typed events. |
+| `src/mcp/server.ts` | HTTP + JSON-RPC server (port 3030). 9 tools including `getNextTask`, `reportTaskDone`, `askQuestion`, `getErrors`, `callCOEAgent`, `scanCodeBase`, `getAgentDescriptions`, `confirmAgentCall`. |
 | `src/types/index.ts` | All enums, interfaces, and types. Single source of truth — never duplicate type definitions elsewhere. |
 
 ## LLM Configuration
 
 - **Endpoint**: `http://192.168.1.205:1234/v1` (LM Studio on local network)
 - **Model**: `mistralai/ministral-3-14b-reasoning`
-- **Timeouts**: startup 600s (10 min model load), stall 180s (thinking tokens), total 1800s
+- **Timeouts**: startup 600s (10 min model load), thinking 5400s (90 min reasoning), stall 180s (content tokens), total 1800s
 - **Database**: `.coe/tickets.db` (SQLite, WAL mode)
 - **MCP Port**: 3030 (auto-increments if busy)
 

@@ -101,6 +101,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             timeoutSeconds: 30,
             startupTimeoutSeconds: 10,
             streamStallTimeoutSeconds: 10,
+            thinkingTimeoutSeconds: 60,
             maxTokens: 500,
             maxInputTokens: 4000,
             maxRequestRetries: 0,
@@ -122,6 +123,8 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             getLLMConfig: () => llmConfig,
             getCOEDir: () => tmpDir,
             getAgentContextLimit: () => 4000,
+            getModelMaxOutputTokens: () => 4096,
+            getModelContextWindow: () => 32768,
             isAgentEnabled: () => true,
             initialize: jest.fn(),
             dispose: jest.fn(),
@@ -203,7 +206,7 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
 
         const tools = body.result.tools;
         expect(Array.isArray(tools)).toBe(true);
-        expect(tools.length).toBe(9);
+        expect(tools.length).toBe(11);
 
         // Verify each tool has the required MCP fields
         const expectedToolNames = [
@@ -216,6 +219,8 @@ describe('MCP JSON-RPC Protocol Compliance', () => {
             'getTicketHistory',
             'getAgentDescriptions',
             'confirmAgentCall',
+            'addTicketNote',
+            'addTicketReference',
         ];
 
         const toolNames = tools.map((t: any) => t.name);

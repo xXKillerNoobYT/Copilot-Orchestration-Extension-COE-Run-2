@@ -24,6 +24,9 @@ import {
     Ticket, TicketStatus, TicketPriority, AgentContext, AgentResponse, AgentAction, TicketRun,
     ProjectPhase, PHASE_ORDER, PhaseGateResult, LeadAgentQueue, TeamQueueStatus,
     TreeRoutedPipeline, BossPreDispatchValidation, BubbleResult, BossCompletionAssessment,
+    TreeNodeStatus,
+    // v10.0
+    TICKET_STATE_TRANSITIONS,
 } from '../types';
 
 // ==================== INTERFACES ====================
@@ -90,6 +93,8 @@ export interface ClarityAgentLike {
 
 export interface OrchestratorLike {
     callAgent(agentName: string, message: string, context: AgentContext): Promise<AgentResponse>;
+    /** v10.0: Call an agent by tree node ID — resolves niche agents, registered agents, or ancestors */
+    callTreeNodeAgent(nodeId: string, message: string, context: AgentContext): Promise<AgentResponse>;
     /** v4.1 (WS5B): Direct access to ReviewAgent for full-context reviews */
     getReviewAgent(): ReviewAgentLike;
     /** v4.2: Direct access to BossAgent for inter-ticket orchestration */
@@ -125,6 +130,10 @@ export interface AgentTreeManagerLike {
     activatePipelinePath?(pipeline: TreeRoutedPipeline, ticketTitle: string): void;
     /** v11.0: Reset all nodes along a tree-routed pipeline path back to idle */
     resetPipelinePath?(pipeline: TreeRoutedPipeline): void;
+    /** v11.1: Step-by-step delegation from Boss→leaf, emitting events at each level */
+    delegateStepByStep?(taskDescription: string, taskId?: string): TreeRoutedPipeline | null;
+    /** Get a tree node by ID */
+    getNode?(id: string): import('../types').AgentTreeNode | null;
 }
 
 interface QueuedTicket {
@@ -403,10 +412,26 @@ function routeTicketViaTree(
     const taskDescription = `${ticket.title}\n${ticket.body || ''}\nOperation: ${op}`;
 
     try {
+        // v11.1: Use step-by-step delegation (one level at a time) instead of
+        // findBestLeaf (which jumps from Boss to leaf in a single call).
+        // delegateStepByStep calls delegateOneLevel repeatedly, emitting events
+        // at each level so the UI can show the delegation cascade in real time.
+        if (treeMgr.delegateStepByStep) {
+            const treeRoute = treeMgr.delegateStepByStep(taskDescription, ticket.task_id ?? undefined);
+            if (treeRoute) {
+                outputChannel.appendLine(
+                    `[TicketProcessor] Tree route (step-by-step) for TK-${ticket.ticket_number}: ` +
+                    `${treeRoute.agentPath.join(' → ')} (${treeRoute.delegationSteps?.length ?? 0} steps)`
+                );
+                return treeRoute;
+            }
+        }
+
+        // Fallback to legacy findBestLeaf if delegateStepByStep unavailable or returned null
         const treeRoute = treeMgr.findBestLeaf(taskDescription, ticket.task_id ?? undefined);
         if (treeRoute) {
             outputChannel.appendLine(
-                `[TicketProcessor] Tree route found for TK-${ticket.ticket_number}: ${treeRoute.agentPath.join(' → ')} ` +
+                `[TicketProcessor] Tree route (legacy) for TK-${ticket.ticket_number}: ${treeRoute.agentPath.join(' → ')} ` +
                 `(${treeRoute.delegationReason})`
             );
             return treeRoute;
@@ -470,6 +495,12 @@ export class TicketProcessorService {
     // v5.0: Guard against kickBossCycle() during startup assessment LLM call
     private startupAssessmentRunning = false;
     private kickRequestedDuringStartup = false;
+    // v10.0: Circuit breaker — pauses queue processing after consecutive failures
+    private consecutiveProcessingFailures = 0;
+    private readonly circuitBreakerThreshold = 5;
+    private circuitBreakerActive = false;
+    private circuitBreakerTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly circuitBreakerPauseMs = 60_000; // 60 seconds
     /** v6.0: Hold queue for tickets waiting on a different model */
     private holdQueue: Array<{
         ticketId: string;
@@ -516,6 +547,144 @@ export class TicketProcessorService {
     setAgentTreeManager(atm: AgentTreeManagerLike): void {
         this.agentTreeMgr = atm;
         this.outputChannel.appendLine('[TicketProcessor] AgentTreeManager injected for live status.');
+    }
+
+    // ==================== v10.0: TICKET STATE MACHINE ====================
+
+    /**
+     * v10.0: Validate whether a ticket state transition is allowed.
+     * Returns true if the transition from `currentStatus` to `newStatus` is valid.
+     */
+    isValidTransition(currentStatus: TicketStatus, newStatus: TicketStatus): boolean {
+        const allowed = TICKET_STATE_TRANSITIONS[currentStatus];
+        if (!allowed) return false;
+        return allowed.includes(newStatus);
+    }
+
+    /**
+     * v10.0: Attempt to transition a ticket to a new status.
+     * Validates the transition against the state machine and updates the ticket.
+     * Returns true if the transition was successful.
+     *
+     * @param ticketId - The ticket ID
+     * @param newStatus - The target status
+     * @param meta - Optional metadata (validated_by, etc.)
+     */
+    transitionTicketStatus(
+        ticketId: string,
+        newStatus: TicketStatus,
+        meta?: { validated_by?: string; agent_name?: string }
+    ): boolean {
+        const ticket = this.database.getTicket(ticketId);
+        if (!ticket) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] v10.0: Cannot transition — ticket ${ticketId} not found`
+            );
+            return false;
+        }
+
+        if (!this.isValidTransition(ticket.status, newStatus)) {
+            this.outputChannel.appendLine(
+                `[TicketProcessor] v10.0: Invalid transition ${ticket.status} → ${newStatus} for ticket ${ticketId}`
+            );
+            return false;
+        }
+
+        // Boss-only completion gate: only Boss can move to Completed
+        if (newStatus === TicketStatus.Completed) {
+            if (!meta?.agent_name || meta.agent_name.toLowerCase() !== 'bossagent') {
+                this.outputChannel.appendLine(
+                    `[TicketProcessor] v10.0: Only Boss can mark ticket ${ticketId} as Completed (attempted by ${meta?.agent_name ?? 'unknown'})`
+                );
+                return false;
+            }
+        }
+
+        // Apply the transition
+        const updates: Record<string, unknown> = { status: newStatus };
+        if (newStatus === TicketStatus.Validated && meta?.validated_by) {
+            updates.validated_by = meta.validated_by;
+            updates.validated_at = new Date().toISOString();
+        }
+
+        this.database.updateTicket(ticketId, updates as Partial<Ticket>);
+
+        this.outputChannel.appendLine(
+            `[TicketProcessor] v10.0: Ticket ${ticketId} transitioned: ${ticket.status} → ${newStatus}`
+        );
+
+        this.eventBus.emit('ticket:status_changed', 'ticket-processor', {
+            ticket_id: ticketId,
+            old_status: ticket.status,
+            new_status: newStatus,
+            transitioned_by: meta?.agent_name ?? 'system',
+        });
+
+        // v10.0: When a ticket reaches a terminal resolved state, auto-unblock dependents
+        if (newStatus === TicketStatus.Completed || newStatus === TicketStatus.Cancelled) {
+            this.unblockDependentTickets(ticketId, ticket.ticket_number);
+            this.enqueueChildTickets(ticketId, ticket.ticket_number);
+        }
+
+        return true;
+    }
+
+    // ==================== CIRCUIT BREAKER (v10.0) ====================
+
+    /**
+     * v10.0: Record a successful ticket processing — resets failure counter.
+     */
+    private recordProcessingSuccess(): void {
+        if (this.consecutiveProcessingFailures > 0) {
+            this.consecutiveProcessingFailures = 0;
+        }
+        if (this.circuitBreakerActive) {
+            this.circuitBreakerActive = false;
+            this.outputChannel.appendLine('[TicketProcessor] Circuit breaker reset — processing resumed');
+            this.eventBus.emit('system:circuit_restored', 'ticket-processor', {
+                message: 'Queue processing restored after successful ticket processing',
+            });
+        }
+    }
+
+    /**
+     * v10.0: Record a failed ticket processing — increments counter, trips breaker after threshold.
+     */
+    private recordProcessingFailure(error: string): void {
+        this.consecutiveProcessingFailures++;
+        if (this.consecutiveProcessingFailures >= this.circuitBreakerThreshold && !this.circuitBreakerActive) {
+            this.circuitBreakerActive = true;
+            this.outputChannel.appendLine(
+                `[TicketProcessor] Circuit breaker TRIPPED — ${this.consecutiveProcessingFailures} consecutive failures. ` +
+                `Pausing queue for ${this.circuitBreakerPauseMs / 1000}s`
+            );
+            this.eventBus.emit('system:circuit_break', 'ticket-processor', {
+                message: `Queue processing paused after ${this.consecutiveProcessingFailures} consecutive failures`,
+                lastError: error.substring(0, 200),
+                pauseSeconds: this.circuitBreakerPauseMs / 1000,
+            });
+
+            // Auto-restore after pause period
+            this.circuitBreakerTimer = setTimeout(() => {
+                this.circuitBreakerActive = false;
+                this.consecutiveProcessingFailures = 0;
+                this.outputChannel.appendLine('[TicketProcessor] Circuit breaker auto-restored — resuming queue');
+                this.eventBus.emit('system:circuit_restored', 'ticket-processor', {
+                    message: 'Circuit breaker auto-restored after pause period',
+                });
+                // Try to resume processing
+                if (!this.disposed) {
+                    this.kickBossCycle();
+                }
+            }, this.circuitBreakerPauseMs);
+        }
+    }
+
+    /**
+     * v10.0: Whether the circuit breaker is currently active (queue paused).
+     */
+    isCircuitBreakerActive(): boolean {
+        return this.circuitBreakerActive;
     }
 
     /**
@@ -1498,6 +1667,11 @@ export class TicketProcessorService {
      */
     private fillSlots(): void {
         if (this.disposed || this.fillingSlots) return;
+        // v10.0: Circuit breaker — skip filling if breaker is tripped
+        if (this.circuitBreakerActive) {
+            this.outputChannel.appendLine('[TicketProcessor] fillSlots() skipped — circuit breaker active');
+            return;
+        }
         this.fillingSlots = true;
 
         try {
@@ -1805,6 +1979,8 @@ export class TicketProcessorService {
             const ticket = this.database.getTicket(entry.ticketId);
 
             if (success) {
+                // v10.0: Circuit breaker — record success
+                this.recordProcessingSuccess();
                 this.eventBus.emit('boss:slot_completed', 'ticket-processor', {
                     slotId,
                     ticketId: entry.ticketId,
@@ -1818,6 +1994,8 @@ export class TicketProcessorService {
                     activeSlots: this.activeSlots.size - 1,
                 });
             } else {
+                // v10.0: Circuit breaker — record failure
+                this.recordProcessingFailure(`Ticket TK-${ticket?.ticket_number ?? '?'} processing returned false`);
                 this.eventBus.emit('boss:slot_error', 'ticket-processor', {
                     slotId,
                     ticketId: entry.ticketId,
@@ -1826,6 +2004,8 @@ export class TicketProcessorService {
                 // processTicketPipeline handles re-enqueue/escalation internally
             }
         } catch (error) {
+            // v10.0: Circuit breaker — record failure on exception
+            this.recordProcessingFailure(String(error).substring(0, 200));
             this.outputChannel.appendLine(
                 `[TicketProcessor] Slot ${slotId} error: ${String(error).substring(0, 200)}`
             );
@@ -2475,9 +2655,9 @@ export class TicketProcessorService {
                 this.logTicketActivity(ticketId, 'boss_validation',
                     `Boss pre-dispatch: ${validation.shouldProcess ? 'APPROVED' : 'REJECTED'} — ${validation.reason}`,
                     'Boss AI', undefined, {
-                        shouldProcess: validation.shouldProcess, alternateTicketId: validation.alternateTicketId,
-                        blockingTicketIds: validation.blockingTicketIds, priorityOverride: validation.priorityOverride,
-                    },
+                    shouldProcess: validation.shouldProcess, alternateTicketId: validation.alternateTicketId,
+                    blockingTicketIds: validation.blockingTicketIds, priorityOverride: validation.priorityOverride,
+                },
                 );
 
                 if (!validation.shouldProcess) {
@@ -2672,26 +2852,73 @@ export class TicketProcessorService {
             if (this.agentTreeMgr) {
                 try {
                     if (treeRoute) {
-                        // v11.0: Activate the entire tree path from Boss to leaf
+                        // v11.1: Step-by-step tree activation — emit per-level events
                         activeTreeNodeId = treeRoute.leafNodeId;
-                        if (this.agentTreeMgr.activatePipelinePath) {
-                            this.agentTreeMgr.activatePipelinePath(treeRoute, ticket.title);
+
+                        if (treeRoute.delegationSteps && treeRoute.delegationSteps.length > 0) {
+                            // New path: iterate delegation steps, activate + emit one level at a time
+                            for (const step of treeRoute.delegationSteps) {
+                                // Activate source node as WaitingChild
+                                const fromNode = this.agentTreeMgr?.getNode?.(step.fromNodeId);
+                                if (fromNode) {
+                                    this.database.updateTreeNode(step.fromNodeId, { status: TreeNodeStatus.WaitingChild });
+                                }
+
+                                // Activate target nodes (fan-out aware)
+                                for (const targetId of step.toNodeIds) {
+                                    const isLeaf = targetId === treeRoute.leafNodeId;
+                                    const targetStatus = isLeaf ? TreeNodeStatus.Working : TreeNodeStatus.WaitingChild;
+                                    this.database.updateTreeNode(targetId, { status: targetStatus });
+                                }
+
+                                // Emit per-level delegation event for Live Activity
+                                this.eventBus.emit('ticket:tree_delegation' as COEEventType, 'ticket-processor', {
+                                    ticketId,
+                                    ticketNumber: ticket.ticket_number,
+                                    fromNode: step.fromNodeId,
+                                    toNodes: step.toNodeIds,
+                                    fromLevel: step.fromLevel,
+                                    toLevel: step.toLevel,
+                                    agents: step.toAgentNames,
+                                    method: step.delegationMethod,
+                                    scores: step.scores,
+                                    reason: treeRoute.delegationReason,
+                                });
+
+                                // Log per-level activity
+                                const fromName = fromNode?.name ?? step.fromNodeId;
+                                const toNames = step.toAgentNames.join(', ');
+                                this.logTicketActivity(ticketId, 'tree_delegation',
+                                    `L${step.fromLevel}→L${step.toLevel}: ${fromName} delegated to ${toNames}`,
+                                    fromName, step.toNodeIds[0],
+                                    { fromLevel: step.fromLevel, toLevel: step.toLevel, agents: step.toAgentNames, scores: step.scores },
+                                );
+
+                                this.outputChannel.appendLine(
+                                    `[TicketProcessor] Tree delegation L${step.fromLevel}→L${step.toLevel}: ${fromName} → ${toNames}`
+                                );
+                            }
                         } else {
-                            // Fallback: activate just the leaf
-                            this.agentTreeMgr.activateNode(treeRoute.leafNodeId);
+                            // Fallback: activate entire path at once (legacy behavior)
+                            if (this.agentTreeMgr.activatePipelinePath) {
+                                this.agentTreeMgr.activatePipelinePath(treeRoute, ticket.title);
+                            } else {
+                                this.agentTreeMgr.activateNode(treeRoute.leafNodeId);
+                            }
+                            this.eventBus.emit('ticket:tree_delegation' as COEEventType, 'ticket-processor', {
+                                ticketId,
+                                ticketNumber: ticket.ticket_number,
+                                fromNode: treeRoute.treeNodePath[0],
+                                toNode: treeRoute.leafNodeId,
+                                path: treeRoute.agentPath,
+                                reason: treeRoute.delegationReason,
+                            });
+                            this.logTicketActivity(ticketId, 'tree_delegation',
+                                `Delegated via tree: ${treeRoute.agentPath.join(' → ')} (${treeRoute.delegationReason})`,
+                                'Boss AI', treeRoute.leafNodeId, { path: treeRoute.agentPath },
+                            );
                         }
-                        this.eventBus.emit('ticket:tree_delegation' as COEEventType, 'ticket-processor', {
-                            ticketId,
-                            ticketNumber: ticket.ticket_number,
-                            fromNode: treeRoute.treeNodePath[0],
-                            toNode: treeRoute.leafNodeId,
-                            path: treeRoute.agentPath,
-                            reason: treeRoute.delegationReason,
-                        });
-                        this.logTicketActivity(ticketId, 'tree_delegation',
-                            `Delegated via tree: ${treeRoute.agentPath.join(' → ')} (${treeRoute.delegationReason})`,
-                            'Boss AI', treeRoute.leafNodeId, { path: treeRoute.agentPath },
-                        );
+
                         this.outputChannel.appendLine(
                             `[TicketProcessor] Tree path activated: ${treeRoute.agentPath.join(' → ')} (L0→L${treeRoute.treeNodePath.length - 1})`
                         );
@@ -2778,8 +3005,9 @@ export class TicketProcessorService {
                     },
                 };
 
-                // Call the leaf agent
-                response = await this.orchestrator.callAgent(leafAgent, pipelineContext, leafContext);
+                // v10.0: Call the leaf agent via tree node resolution
+                // This resolves niche agents directly instead of failing with "Agent not found"
+                response = await this.orchestrator.callTreeNodeAgent(treeRoute.leafNodeId, pipelineContext, leafContext);
 
                 // Complete leaf run step
                 this.database.completeRunStep(leafRunStep.id, {
@@ -2851,8 +3079,9 @@ export class TicketProcessorService {
                             `Subordinate's output:\n${currentResult}`;
 
                         try {
-                            const parentReview = await this.orchestrator.callAgent(
-                                parentAgent, parentMessage, { ticket, conversationHistory: [] }
+                            // v10.0: Call parent via tree node resolution for proper niche agent support
+                            const parentReview = await this.orchestrator.callTreeNodeAgent(
+                                bubbleNode.nodeId, parentMessage, { ticket, conversationHistory: [] }
                             );
 
                             this.database.completeRunStep(reviewRunStep.id, {
@@ -3048,10 +3277,10 @@ export class TicketProcessorService {
                     this.logTicketActivity(ticketId, 'agent_step_completed',
                         `Agent '${step.agentName}' completed step ${stepIdx + 1}/${pipeline!.steps.length} (${linearStepDuration}ms)`,
                         step.agentName, undefined, {
-                            stepIndex: stepIdx + 1, totalSteps: pipeline!.steps.length,
-                            deliverableType: step.deliverableType, durationMs: linearStepDuration,
-                            outputLength: response.content.length,
-                        });
+                        stepIndex: stepIdx + 1, totalSteps: pipeline!.steps.length,
+                        deliverableType: step.deliverableType, durationMs: linearStepDuration,
+                        outputLength: response.content.length,
+                    });
 
                     // Feed this step's output as context for the next step
                     if (!isLastStep) {
@@ -3137,10 +3366,10 @@ export class TicketProcessorService {
                     this.logTicketActivity(ticketId, 'boss_completion',
                         `Boss verdict: ${bossAssessment.verdict.toUpperCase()} — ${bossAssessment.reason.substring(0, 200)}`,
                         'Boss AI', undefined, {
-                            verdict: bossAssessment.verdict,
-                            reworkInstructions: bossAssessment.reworkInstructions,
-                            escalationMessage: bossAssessment.escalationMessage,
-                        },
+                        verdict: bossAssessment.verdict,
+                        reworkInstructions: bossAssessment.reworkInstructions,
+                        escalationMessage: bossAssessment.escalationMessage,
+                    },
                     );
 
                     // Add Boss assessment as a note
@@ -3770,26 +3999,44 @@ export class TicketProcessorService {
     /**
      * v4.1: When a ticket is resolved, find all tickets that were blocked by it
      * and unblock them (clear blocking_ticket_id, re-enqueue).
+     * v10.0: Also scans tickets in Blocked status and auto-transitions them back to Validated.
      */
     private unblockDependentTickets(resolvedTicketId: string, resolvedTicketNumber: number): void {
         try {
-            // Find all open tickets where blocking_ticket_id matches the resolved ticket
+            // v10.0: Scan all statuses where a ticket might be waiting on a blocker
             const allOpen = this.database.getTicketsByStatus('open');
             const allInReview = this.database.getTicketsByStatus('in_review');
-            const allTickets = [...allOpen, ...allInReview];
+            const allBlocked = this.database.getTicketsByStatus(TicketStatus.Blocked);
+            const allValidated = this.database.getTicketsByStatus(TicketStatus.Validated);
+            const allTickets = [...allOpen, ...allInReview, ...allBlocked, ...allValidated];
 
             for (const t of allTickets) {
                 if (t.blocking_ticket_id === resolvedTicketId) {
-                    this.database.updateTicket(t.id, {
-                        blocking_ticket_id: null as any,
-                        processing_status: 'queued',
-                    });
-                    this.database.addTicketReply(t.id, 'system',
-                        `Blocking ticket TK-${resolvedTicketNumber} resolved — this ticket is now unblocked.`);
+                    // v10.0: If ticket was in Blocked status, transition back to Validated
+                    // so it re-enters the normal processing flow
+                    if (t.status === TicketStatus.Blocked) {
+                        this.database.updateTicket(t.id, {
+                            status: TicketStatus.Validated,
+                            blocking_ticket_id: null as any,
+                            processing_status: 'queued',
+                        });
+                        this.database.addTicketReply(t.id, 'system',
+                            `Blocking ticket TK-${resolvedTicketNumber} completed — this ticket is now unblocked and re-validated for processing.`);
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] TK-${t.ticket_number} unblocked: Blocked → Validated (blocker TK-${resolvedTicketNumber} resolved)`
+                        );
+                    } else {
+                        this.database.updateTicket(t.id, {
+                            blocking_ticket_id: null as any,
+                            processing_status: 'queued',
+                        });
+                        this.database.addTicketReply(t.id, 'system',
+                            `Blocking ticket TK-${resolvedTicketNumber} resolved — this ticket is now unblocked.`);
+                        this.outputChannel.appendLine(
+                            `[TicketProcessor] TK-${t.ticket_number} unblocked (blocker TK-${resolvedTicketNumber} resolved)`
+                        );
+                    }
                     this.eventBus.emit('ticket:unblocked', 'ticket-processor', { ticketId: t.id });
-                    this.outputChannel.appendLine(
-                        `[TicketProcessor] TK-${t.ticket_number} unblocked (blocker TK-${resolvedTicketNumber} resolved)`
-                    );
                 }
             }
         } catch (err) {
@@ -3906,9 +4153,9 @@ export class TicketProcessorService {
         this.database.addAgentNote(ticket.id, {
             author: `ReviewAgent (${route.agentName})`,
             note: `VERIFICATION FAILED (attempt ${currentRetry + 1}/${maxRetries})\n` +
-                  `Reason: ${failureDetails}\n` +
-                  `Clarity score: ${verResult.clarity_score ?? 'N/A'}\n` +
-                  `The next agent MUST address these issues before resubmitting.`,
+                `Reason: ${failureDetails}\n` +
+                `Clarity score: ${verResult.clarity_score ?? 'N/A'}\n` +
+                `The next agent MUST address these issues before resubmitting.`,
             errorContext: `Verification by ${route.agentName} | clarity=${verResult.clarity_score} | attempt=${currentRetry + 1}`,
             suggestedActions: retrySuggestions,
         });
@@ -5532,6 +5779,12 @@ export class TicketProcessorService {
         if (this.bossCycleTimer) {
             clearTimeout(this.bossCycleTimer);
             this.bossCycleTimer = null;
+        }
+
+        // v10.0: Clean up circuit breaker timer
+        if (this.circuitBreakerTimer) {
+            clearTimeout(this.circuitBreakerTimer);
+            this.circuitBreakerTimer = null;
         }
 
         // Remove all event listeners

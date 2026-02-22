@@ -22,6 +22,7 @@ describe('LLMService', () => {
             timeoutSeconds: 10,
             startupTimeoutSeconds: 5,
             streamStallTimeoutSeconds: 3,
+            thinkingTimeoutSeconds: 60,    // v10.0: thinking/reasoning phase timeout (short for tests)
             maxTokens: 100,
             maxInputTokens: 4000,
             maxRequestRetries: 0,          // v6.0: no retries in tests (avoids exponential backoff timeouts)
@@ -472,18 +473,9 @@ describe('LLMService', () => {
     }, 15000);
 
     test('streaming: stall abort throws when tokens stop flowing (lines 149-156, 247-248)', async () => {
-        // To exercise lines 149-156 (the liveness interval), we intercept setInterval
-        // so the callback fires immediately. When tokens stall, the callback aborts the stream.
+        // The liveness check uses setTimeout-based scheduling (scheduleLivenessCheck).
+        // We use a very short streamStallTimeoutSeconds so the real setTimeout fires quickly.
         const originalFetch = global.fetch;
-        const originalSetInterval = global.setInterval;
-
-        // Track the liveness callback
-        let livenessCallback: (() => void) | null = null;
-        global.setInterval = ((fn: () => void, ms: number) => {
-            livenessCallback = fn;
-            // Return a real interval ID but with a very short interval (10ms)
-            return originalSetInterval(fn, 10);
-        }) as any;
 
         let readCallCount = 0;
         let rejectSecondRead: ((err: Error) => void) | null = null;
@@ -501,7 +493,7 @@ describe('LLMService', () => {
                                 value: encoder.encode('data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n\n'),
                             });
                         }
-                        // Second read: hang until abort
+                        // Second read: hang until abort, then reject with AbortError
                         return new Promise((_resolve, reject) => {
                             rejectSecondRead = reject;
                         });
@@ -516,6 +508,8 @@ describe('LLMService', () => {
             llmService = new LLMService(createConfig({
                 timeoutSeconds: 300,
                 startupTimeoutSeconds: 300,
+                streamStallTimeoutSeconds: 0.05,  // 50ms — triggers liveness check quickly
+                thinkingTimeoutSeconds: 0.05,     // 50ms — initial check also fires quickly (before first content token)
             }), outputChannel);
 
             const chatPromise = llmService.chat(
@@ -523,34 +517,29 @@ describe('LLMService', () => {
                 { stream: true }
             );
 
-            // Wait for the first read to complete and liveness interval to fire
-            // (it fires every 10ms thanks to our mock)
-            await new Promise(r => setTimeout(r, 100));
+            // Wait for the first read to complete and liveness setTimeout checks to fire.
+            // First check fires at ~50ms (thinking timeout, before content arrives).
+            // After first token: reschedules with streamStallTimeoutSeconds (50ms).
+            // Second check fires at ~100ms, detects stall, aborts controller.
+            await new Promise(r => setTimeout(r, 500));
 
             // The liveness callback should have detected the stall (tokensUsed === lastCheckTokenCount)
-            // and called controller.abort(). However the second read is hanging — we need to reject it.
+            // and called controller.abort(). The second read is hanging — reject it with AbortError.
             (rejectSecondRead as any)?.(new DOMException('Aborted', 'AbortError'));
 
             await expect(chatPromise).rejects.toThrow(/LLM stream stalled/);
         } finally {
-            global.setInterval = originalSetInterval;
             global.fetch = originalFetch;
         }
     }, 15000);
 
     test('streaming: liveness interval logs when new tokens arrive (lines 155-156)', async () => {
-        // Use a mock fetch with controlled reads, and intercept setInterval so we can
-        // control exactly when the liveness check fires. We let the first liveness check
-        // see new tokens (alive path), then immediately finish the stream.
+        // The liveness check uses setTimeout-based scheduling (scheduleLivenessCheck).
+        // We use a short streamStallTimeoutSeconds so the real setTimeout fires quickly,
+        // sees that tokens have been generated (alive path), and logs "LLM liveness:".
+        // We send 3 content tokens quickly, then a 4th read returns [DONE] after a delay
+        // to ensure the liveness check fires while tokens > lastCheckTokenCount.
         const originalFetch = global.fetch;
-        const originalSetInterval = global.setInterval;
-
-        // We'll collect interval callbacks and fire them manually
-        const intervalCallbacks: (() => void)[] = [];
-        global.setInterval = ((fn: () => void, _ms: number) => {
-            intervalCallbacks.push(fn);
-            return 999 as any; // fake timer ID
-        }) as any;
 
         let readCallCount = 0;
         global.fetch = jest.fn().mockResolvedValue({
@@ -566,11 +555,12 @@ describe('LLMService', () => {
                                 value: encoder.encode(`data: {"choices":[{"delta":{"content":"tok${readCallCount}"},"finish_reason":null}]}\n\n`),
                             });
                         }
+                        // Delay the [DONE] to give liveness check time to fire
                         if (readCallCount === 4) {
-                            return Promise.resolve({
+                            return new Promise(resolve => setTimeout(() => resolve({
                                 done: false,
                                 value: encoder.encode('data: [DONE]\n\n'),
-                            });
+                            }), 200));
                         }
                         return Promise.resolve({ done: true, value: undefined });
                     },
@@ -584,6 +574,8 @@ describe('LLMService', () => {
             llmService = new LLMService(createConfig({
                 timeoutSeconds: 300,
                 startupTimeoutSeconds: 300,
+                streamStallTimeoutSeconds: 0.05,  // 50ms — liveness check fires quickly
+                thinkingTimeoutSeconds: 0.05,     // 50ms — initial check fires quickly
             }), outputChannel);
 
             const chatPromise = llmService.chat(
@@ -591,24 +583,14 @@ describe('LLMService', () => {
                 { stream: true }
             );
 
-            // Wait for reads to resolve
-            await new Promise(r => setTimeout(r, 50));
-
-            // Manually fire the liveness interval — tokens have been generated (3 tokens)
-            // so the "alive" branch should execute (line 155-156)
-            for (const cb of intervalCallbacks) {
-                cb();
-            }
-
             const response = await chatPromise;
             expect(response.content).toContain('tok1');
 
-            // Check that the liveness log was emitted
+            // Check that the liveness log was emitted (alive path: tokens > lastCheckTokenCount)
             expect(outputChannel.appendLine).toHaveBeenCalledWith(
                 expect.stringContaining('LLM liveness:')
             );
         } finally {
-            global.setInterval = originalSetInterval;
             global.fetch = originalFetch;
         }
     }, 15000);
@@ -695,6 +677,7 @@ describe('LLMService', () => {
             timeoutSeconds: 99,
             startupTimeoutSeconds: 88,
             streamStallTimeoutSeconds: 77,
+            thinkingTimeoutSeconds: 300,
             maxTokens: 500,
             maxInputTokens: 4000,
         };

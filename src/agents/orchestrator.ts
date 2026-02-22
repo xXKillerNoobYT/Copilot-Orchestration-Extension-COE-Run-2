@@ -29,9 +29,11 @@ import type { AgentPermissionManager } from '../core/agent-permission-manager';
 import type { ModelRouter } from '../core/model-router';
 import type { AgentTreeManager } from '../core/agent-tree-manager';
 import type { UserProfileManager } from '../core/user-profile-manager';
+import type { NicheAgentFactory } from '../core/niche-agent-factory';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
-    ConversationRole, Task, TaskStatus, TicketPriority
+    ConversationRole, Task, TaskStatus, TicketPriority,
+    LLMMessage, AgentTreeNode, NicheAgentDefinition
 } from '../types';
 
 const INTENT_CATEGORIES = [
@@ -252,6 +254,7 @@ If you cannot proceed or information is missing:
     private evolutionService: EvolutionService | null = null;
     private eventBus: EventBus | null = null;
     private injectedTreeManager: AgentTreeManager | undefined;
+    private injectedNicheFactory: NicheAgentFactory | undefined;
     // v4.1: Track scheduled timers for cleanup on dispose
     private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -352,7 +355,9 @@ If you cannot proceed or information is missing:
     async callAgent(agentName: string, message: string, context: AgentContext): Promise<AgentResponse> {
         const agent = this.getAgentByName(agentName);
         if (!agent) {
-            return { content: `Agent not found: ${agentName}` };
+            // v10.0: Agent not in the 18 registered agents — resolve via tree node
+            // This handles niche agents (L5-L9) whose names are tree node names, not agent types
+            return this.resolveAndCallTreeAgent(agentName, message, context);
         }
         this.database.addAuditLog('orchestrator', 'direct_call', `Direct call to ${agentName}`);
         this.database.updateAgentStatus(agentName, AgentStatus.Working, message.substring(0, 100));
@@ -366,6 +371,48 @@ If you cannot proceed or information is missing:
         } finally {
             this.database.updateAgentStatus(agentName, AgentStatus.Idle);
         }
+    }
+
+    /**
+     * v10.0: Resolve an unregistered agent name to a tree node and call it.
+     *
+     * When callAgent() receives a name like "CodeExampleWorker" that's not in the
+     * 18 registered agents, this method looks up the tree node by name and routes
+     * through callTreeNodeAgent() which handles niche agent resolution.
+     */
+    private async resolveAndCallTreeAgent(
+        agentName: string,
+        message: string,
+        context: AgentContext
+    ): Promise<AgentResponse> {
+        const treeMgr = this.injectedTreeManager;
+        if (!treeMgr) {
+            this.outputChannel.appendLine(`[Orchestrator] Agent "${agentName}" not found and no tree manager available`);
+            return { content: `Agent not found: ${agentName}` };
+        }
+
+        // Look up tree node by name
+        const node = this.database.getTreeNodeByName(agentName);
+        if (node) {
+            this.outputChannel.appendLine(
+                `[Orchestrator] Resolved unregistered agent "${agentName}" → tree node "${node.name}" (L${node.level})`
+            );
+            return this.callTreeNodeAgent(node.id, message, context);
+        }
+
+        // Also try agent_type match (e.g., "niche_frontend.components.react")
+        const nodeByType = this.database.getTreeNodeByAgentType(agentName);
+        if (nodeByType) {
+            this.outputChannel.appendLine(
+                `[Orchestrator] Resolved unregistered agent "${agentName}" → tree node "${nodeByType.name}" by agent_type`
+            );
+            return this.callTreeNodeAgent(nodeByType.id, message, context);
+        }
+
+        this.outputChannel.appendLine(`[Orchestrator] Agent "${agentName}" not found in registry or tree`);
+        this.database.addAuditLog('orchestrator', 'agent_not_found',
+            `"${agentName}" not in registry or tree — returning error`);
+        return { content: `Agent not found: ${agentName} (not a registered agent or tree node)` };
     }
 
     /**
@@ -700,6 +747,200 @@ If you cannot proceed or information is missing:
      */
     getAgentTreeManager(): AgentTreeManager | undefined {
         return this.injectedTreeManager;
+    }
+
+    /**
+     * v10.0: Inject niche agent factory for tree-based agent resolution.
+     */
+    injectNicheAgentFactory(naf: NicheAgentFactory): void {
+        this.injectedNicheFactory = naf;
+        this.outputChannel.appendLine('NicheAgentFactory injected into Orchestrator.');
+    }
+
+    /**
+     * v10.0: Resolve a tree node to an executable agent.
+     *
+     * Resolution chain:
+     * 1. If the node's agent_type matches a registered agent → use that agent directly
+     * 2. If the node has a niche_definition_id → build system prompt, call LLM directly
+     * 3. Walk UP ancestors to find the nearest registered agent → delegate to it with niche context
+     *
+     * This makes every niche agent a "real" agent — they call the LLM with their
+     * specialized system prompt rather than going through a BaseAgent subclass.
+     */
+    async callTreeNodeAgent(
+        nodeId: string,
+        message: string,
+        context: AgentContext
+    ): Promise<AgentResponse> {
+        const treeMgr = this.injectedTreeManager;
+        if (!treeMgr) {
+            return { content: 'Error: AgentTreeManager not available' };
+        }
+
+        const node = treeMgr.getNode(nodeId);
+        if (!node) {
+            return { content: `Error: Tree node not found: ${nodeId}` };
+        }
+
+        // Step 1: Check if node's agent_type is a registered orchestrator agent
+        const registeredAgent = this.getAgentByName(node.agent_type);
+        if (registeredAgent) {
+            this.outputChannel.appendLine(
+                `[Orchestrator] Tree node "${node.name}" resolved to registered agent "${node.agent_type}"`
+            );
+            this.database.addAuditLog('orchestrator', 'tree_agent_call',
+                `Node "${node.name}" (L${node.level}) → registered agent "${node.agent_type}"`);
+            this.database.updateAgentStatus(node.agent_type, AgentStatus.Working, message.substring(0, 100));
+
+            try {
+                // Bind agent to this tree node for context slicing
+                registeredAgent.setTreeNodeId(nodeId);
+                const response = await registeredAgent.processMessage(message, context);
+                this.evolutionService?.incrementCallCounter();
+                return response;
+            } catch (error) {
+                return this.handleAgentError(node.agent_type, error, message, context, false);
+            } finally {
+                registeredAgent.setTreeNodeId(null);
+                this.database.updateAgentStatus(node.agent_type, AgentStatus.Idle);
+            }
+        }
+
+        // Step 2: Check if node has a niche definition → call LLM with niche system prompt
+        if (node.niche_definition_id && this.injectedNicheFactory) {
+            const nicheDef = this.injectedNicheFactory.getDefinition(node.niche_definition_id);
+            if (nicheDef) {
+                return this.callNicheAgentDirect(node, nicheDef, message, context);
+            }
+        }
+
+        // Step 3: Walk up ancestors to find the nearest registered agent
+        const ancestors = treeMgr.getAncestors(nodeId);
+        for (const ancestor of ancestors) {
+            const ancestorAgent = this.getAgentByName(ancestor.agent_type);
+            if (ancestorAgent) {
+                this.outputChannel.appendLine(
+                    `[Orchestrator] Tree node "${node.name}" (L${node.level}) → ` +
+                    `ancestor agent "${ancestor.agent_type}" (L${ancestor.level})`
+                );
+                this.database.addAuditLog('orchestrator', 'tree_agent_fallback',
+                    `Node "${node.name}" → ancestor "${ancestor.name}" (${ancestor.agent_type})`);
+
+                // Enrich message with node context
+                const enrichedMessage = `[Tree Context: Acting as "${node.name}" (L${node.level}, scope: ${node.scope})]\n\n${message}`;
+
+                this.database.updateAgentStatus(ancestor.agent_type, AgentStatus.Working, message.substring(0, 100));
+                try {
+                    ancestorAgent.setTreeNodeId(nodeId);
+                    const response = await ancestorAgent.processMessage(enrichedMessage, context);
+                    this.evolutionService?.incrementCallCounter();
+                    return response;
+                } catch (error) {
+                    return this.handleAgentError(ancestor.agent_type, error, message, context, false);
+                } finally {
+                    ancestorAgent.setTreeNodeId(null);
+                    this.database.updateAgentStatus(ancestor.agent_type, AgentStatus.Idle);
+                }
+            }
+        }
+
+        // Final fallback — should never reach here since L0 Boss is always registered
+        this.outputChannel.appendLine(
+            `[Orchestrator] WARN: No agent resolution for node "${node.name}" — using answer agent`
+        );
+        return this.answerAgent.processMessage(message, context);
+    }
+
+    /**
+     * v10.0: Call a niche agent directly using LLM with its specialized system prompt.
+     *
+     * Instead of routing through a BaseAgent subclass, we build the system prompt
+     * from the niche definition and call the LLM directly. This makes every niche
+     * agent in the tree (~230) a fully functional agent with its own identity.
+     */
+    private async callNicheAgentDirect(
+        node: AgentTreeNode,
+        nicheDef: NicheAgentDefinition,
+        message: string,
+        context: AgentContext
+    ): Promise<AgentResponse> {
+        this.outputChannel.appendLine(
+            `[Orchestrator] Calling niche agent "${node.name}" (L${node.level}, ${nicheDef.specialty}) directly via LLM`
+        );
+        this.database.addAuditLog('orchestrator', 'niche_agent_call',
+            `Niche agent "${node.name}" (${nicheDef.specialty}) called directly`);
+
+        // Build the system prompt from the niche definition template
+        const parentContext = context.additionalContext?.tree_route ?? '';
+        const systemPrompt = this.injectedNicheFactory!.buildNicheSystemPrompt(
+            nicheDef,
+            node.scope,
+            String(parentContext)
+        );
+
+        const messages: LLMMessage[] = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message },
+        ];
+
+        // Add conversation history if present
+        if (context.conversationHistory?.length) {
+            const historyMessages: LLMMessage[] = context.conversationHistory.map(h => ({
+                role: h.role === ConversationRole.Agent ? 'assistant' as const : 'user' as const,
+                content: h.content,
+            }));
+            // Insert history between system and current message
+            messages.splice(1, 0, ...historyMessages);
+        }
+
+        try {
+            const response = await this.llm.chat(messages, {
+                maxTokens: this.config.getModelMaxOutputTokens(),
+            });
+
+            this.evolutionService?.incrementCallCounter();
+
+            // Record conversation in tree-isolated history
+            this.database.createAgentConversation({
+                tree_node_id: node.id,
+                level: node.level,
+                role: ConversationRole.User,
+                content: message,
+            });
+            this.database.createAgentConversation({
+                tree_node_id: node.id,
+                level: node.level,
+                role: ConversationRole.Agent,
+                content: response.content,
+                tokens_used: response.tokens_used,
+            });
+
+            // Update node telemetry
+            this.database.updateTreeNode(node.id, {
+                tokens_consumed: (node.tokens_consumed ?? 0) + (response.tokens_used ?? 0),
+            } as Partial<AgentTreeNode>);
+
+            return {
+                content: response.content,
+                tokensUsed: response.tokens_used,
+                agentName: node.name,
+            };
+        } catch (error) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this.outputChannel.appendLine(`[Orchestrator] Niche agent "${node.name}" error: ${errMsg}`);
+            this.database.addAuditLog('orchestrator', 'niche_agent_error',
+                `${node.name}: ${errMsg}`);
+
+            this.eventBus?.emit('agent:error', 'orchestrator', {
+                agentName: node.name,
+                error: errMsg,
+                ticketId: context.ticket?.id,
+                nodeId: node.id,
+            });
+
+            return { content: `Error from niche agent "${node.name}": ${errMsg}` };
+        }
     }
 
     /**

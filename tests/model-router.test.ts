@@ -17,6 +17,7 @@ describe('ModelRouter', () => {
         timeoutSeconds: 900,
         startupTimeoutSeconds: 300,
         streamStallTimeoutSeconds: 120,
+        thinkingTimeoutSeconds: 5400,
     };
 
     beforeEach(async () => {

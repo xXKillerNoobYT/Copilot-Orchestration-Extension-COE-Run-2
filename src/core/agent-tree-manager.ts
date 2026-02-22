@@ -28,7 +28,10 @@ import {
     TreeNodeStatus, EscalationChain, EscalationChainStatus,
     AgentConversation, AgentContext, NicheAgentDefinition,
     ConversationRole, ModelCapability,
-    TreeRoutedPipeline, BubbleResult
+    TreeRoutedPipeline, BubbleResult, DelegationStep,
+    // v10.0
+    AgentGroup, GroupMember, GroupRole, Branch,
+    GroupCompositionValidation, UpwardReport, UpwardReportType,
 } from '../types';
 import { randomUUID } from 'crypto';
 
@@ -95,7 +98,7 @@ export class AgentTreeManager {
         private eventBus: EventBus,
         private config: ConfigManager,
         private outputChannel: OutputChannelLike
-    ) {}
+    ) { }
 
     // ==================== DEFAULT TREE AUTO-BUILD ====================
 
@@ -1249,6 +1252,216 @@ export class AgentTreeManager {
         };
     }
 
+    // ==================== v11.1: STEP-BY-STEP DELEGATION ====================
+
+    /**
+     * Delegate ONE level down from a given node.
+     *
+     * Scores immediate children by keyword overlap with the task description,
+     * returns the best match(es). Fan-out: if multiple children score equally
+     * (or above a threshold), return all of them so they can work in parallel.
+     *
+     * This is the atomic building block — the ticket processor calls this
+     * repeatedly to walk down the tree one step at a time.
+     *
+     * @param nodeId  The parent node doing the delegation
+     * @param taskDescription  Task text for keyword scoring
+     * @param maxFanOut  Maximum number of children to delegate to (default 3)
+     * @returns DelegationStep with chosen children, or null if this node is a leaf
+     */
+    delegateOneLevel(
+        nodeId: string,
+        taskDescription: string,
+        maxFanOut: number = 3,
+    ): DelegationStep | null {
+        const node = this.getNode(nodeId);
+        if (!node) {
+            this.outputChannel.appendLine(`[AgentTree] delegateOneLevel: node ${nodeId} not found`);
+            return null;
+        }
+
+        // Get immediate children, auto-spawning if needed
+        let children = this.getChildren(nodeId);
+        if (children.length === 0 && node.level < AgentLevel.L9_Checker) {
+            try {
+                this.spawnBranch(nodeId, AgentLevel.L9_Checker);
+                children = this.getChildren(nodeId);
+            } catch {
+                // Spawn failed — this node is the effective leaf
+            }
+        }
+
+        if (children.length === 0) {
+            // Node is a leaf — nothing to delegate to
+            return null;
+        }
+
+        // Score children by keyword overlap
+        const taskKeywords = this.extractKeywords(taskDescription.toLowerCase());
+        const scoredChildren = children.map(child => {
+            const childKeywords = child.scope
+                .split(',')
+                .map(s => s.trim().toLowerCase())
+                .filter(Boolean);
+            let score = 0;
+            for (const tk of taskKeywords) {
+                for (const ck of childKeywords) {
+                    if (ck.includes(tk) || tk.includes(ck)) {
+                        score++;
+                        break; // Don't double-count same task keyword
+                    }
+                }
+            }
+            return { child, score };
+        });
+
+        // Sort by score descending
+        scoredChildren.sort((a, b) => b.score - a.score);
+
+        const topScore = scoredChildren[0].score;
+
+        // Fan-out: take all children that match the top score (up to maxFanOut)
+        // If no keywords matched at all (topScore === 0), just take the first child
+        let targets: typeof scoredChildren;
+        if (topScore === 0) {
+            // No keyword matches — pick the first child (deterministic fallback)
+            targets = [scoredChildren[0]];
+        } else {
+            // Take all children with the same top score, bounded by maxFanOut
+            targets = scoredChildren
+                .filter(sc => sc.score === topScore)
+                .slice(0, maxFanOut);
+        }
+
+        // Set parent to WaitingChild, children to Active
+        this.database.updateTreeNode(nodeId, { status: TreeNodeStatus.WaitingChild });
+        for (const t of targets) {
+            this.database.updateTreeNode(t.child.id, { status: TreeNodeStatus.Active });
+        }
+
+        // Record this delegation in the parent's conversation log
+        const targetNames = targets.map(t => t.child.name).join(', ');
+        this.database.createAgentConversation({
+            tree_node_id: nodeId,
+            level: node.level,
+            role: ConversationRole.Agent,
+            content: `[DELEGATE-ONE-LEVEL] → ${targetNames} (score: ${topScore}, fan-out: ${targets.length})`,
+        });
+
+        // Emit event for UI updates
+        this.eventBus.emit('tree:delegation_step', 'AgentTreeManager', {
+            fromNodeId: nodeId,
+            fromNodeName: node.name,
+            fromLevel: node.level,
+            toNodeIds: targets.map(t => t.child.id),
+            toNodeNames: targets.map(t => t.child.name),
+            toLevel: node.level + 1,
+            fanOut: targets.length,
+            topScore,
+        });
+
+        this.outputChannel.appendLine(
+            `[AgentTree] delegateOneLevel: ${node.name} (L${node.level}) → ` +
+            `${targetNames} (L${node.level + 1}) [score=${topScore}, fan-out=${targets.length}]`
+        );
+
+        const step: DelegationStep = {
+            fromNodeId: nodeId,
+            toNodeIds: targets.map(t => t.child.id),
+            fromLevel: node.level,
+            toLevel: node.level + 1,
+            toAgentNames: targets.map(t => t.child.agent_type),
+            delegationMethod: 'keyword',
+            scores: targets.map(t => t.score),
+            timestamp: Date.now(),
+        };
+
+        return step;
+    }
+
+    /**
+     * Walk the tree step-by-step from Boss to leaf, building the pipeline
+     * incrementally. Each call to delegateOneLevel advances ONE level.
+     *
+     * Fan-out: If a level produces multiple targets, we pick the best one
+     * for the primary pipeline path (the rest are tracked but only the
+     * primary path continues downward). This keeps the pipeline single-path
+     * while still allowing the ticket processor to spawn parallel work on
+     * the fan-out nodes externally.
+     *
+     * @param taskDescription  Task text for keyword scoring at each level
+     * @param taskId  Optional task ID for logging
+     * @returns TreeRoutedPipeline built step-by-step, or null if tree is empty
+     */
+    delegateStepByStep(taskDescription: string, taskId?: string): TreeRoutedPipeline | null {
+        // Find Boss (L0) root
+        const roots = this.database.getTreeNodesByLevel(AgentLevel.L0_Boss);
+        if (roots.length === 0) {
+            this.outputChannel.appendLine('[AgentTree] No L0 Boss node found — cannot route via tree');
+            return null;
+        }
+        const boss = roots[0];
+
+        const treeNodePath: string[] = [boss.id];
+        const agentPath: string[] = [boss.agent_type];
+        const delegationSteps: DelegationStep[] = [];
+        let currentNodeId = boss.id;
+
+        this.outputChannel.appendLine(
+            `[AgentTree] delegateStepByStep: starting from ${boss.name}` +
+            (taskId ? ` (task=${taskId})` : '')
+        );
+
+        // Walk down one level at a time
+        for (let depth = 0; depth < 10; depth++) {
+            const step = this.delegateOneLevel(currentNodeId, taskDescription);
+            if (!step) {
+                // Current node is a leaf — we've reached the bottom
+                break;
+            }
+
+            delegationSteps.push(step);
+
+            // For the primary pipeline path, follow the first target
+            // (highest-scoring child, since delegateOneLevel sorts by score)
+            const primaryTargetId = step.toNodeIds[0];
+            const primaryTarget = this.getNode(primaryTargetId);
+            if (!primaryTarget) {
+                this.outputChannel.appendLine(
+                    `[AgentTree] delegateStepByStep: primary target ${primaryTargetId} disappeared mid-walk`
+                );
+                break;
+            }
+
+            treeNodePath.push(primaryTargetId);
+            agentPath.push(primaryTarget.agent_type);
+            currentNodeId = primaryTargetId;
+        }
+
+        // The last node on the path is the leaf
+        const leafNodeId = treeNodePath[treeNodePath.length - 1];
+        const leafNode = this.getNode(leafNodeId);
+        const leafAgentType = leafNode?.agent_type ?? 'unknown';
+
+        const delegationReason =
+            `Step-by-step delegation: ${agentPath.join(' → ')} ` +
+            `(${delegationSteps.length} steps, ` +
+            `keywords: ${this.extractKeywords(taskDescription.toLowerCase()).slice(0, 5).join(', ')})`;
+
+        this.outputChannel.appendLine(`[AgentTree] delegateStepByStep: ${agentPath.join(' → ')}`);
+
+        return {
+            treeNodePath,
+            agentPath,
+            leafNodeId,
+            leafAgentType,
+            delegationReason,
+            usedFallback: false,
+            delegationSteps,
+            stepByStep: true,
+        };
+    }
+
     /**
      * Get the bubble-up path from a leaf node back to the Boss (L0).
      *
@@ -1610,6 +1823,356 @@ export class AgentTreeManager {
         } catch {
             return [];
         }
+    }
+
+    // ==================== v10.0: GROUP-BASED TREE OPERATIONS ====================
+
+    /**
+     * v10.0: Validate a group's composition against mandatory rules.
+     *
+     * Hard rules (errors):
+     *   - Exactly 1 HeadOrchestrator (slot 0)
+     *   - Exactly 1 OpenSlot (slot 9)
+     *   - Exactly 1 Planning agent
+     *   - Exactly 1 Verification agent
+     *   - Exactly 1 Review agent
+     *   - Exactly 1 Observation agent
+     *   - Exactly 1 StructureImprovement agent
+     *
+     * Soft rules (warnings):
+     *   - Recommended 3 Orchestrators (warn if fewer)
+     */
+    validateGroupComposition(group: AgentGroup): GroupCompositionValidation {
+        const errors: string[] = [];
+        const warnings: string[] = [];
+        const members = group.members;
+
+        // Check mandatory single-role requirements
+        const mandatorySingles: [GroupRole, string][] = [
+            [GroupRole.HeadOrchestrator, 'Head Orchestrator'],
+            [GroupRole.Planning, 'Planning agent'],
+            [GroupRole.Verification, 'Verification agent'],
+            [GroupRole.Review, 'Review agent'],
+            [GroupRole.Observation, 'Observation agent'],
+            [GroupRole.StructureImprovement, 'Structure-Improvement agent'],
+            [GroupRole.OpenSlot, 'Open Slot'],
+        ];
+
+        for (const [role, label] of mandatorySingles) {
+            const count = members.filter(m => m.role === role).length;
+            if (count === 0) {
+                errors.push(`Missing required ${label} (${role})`);
+            } else if (count > 1) {
+                errors.push(`Multiple ${label}s found (${count}) — exactly 1 required`);
+            }
+        }
+
+        // HeadOrchestrator must be slot 0
+        const head = members.find(m => m.role === GroupRole.HeadOrchestrator);
+        if (head && head.slot_index !== 0) {
+            errors.push(`Head Orchestrator must be slot 0, found at slot ${head.slot_index}`);
+        }
+
+        // OpenSlot must be slot 9
+        const openSlot = members.find(m => m.role === GroupRole.OpenSlot);
+        if (openSlot && openSlot.slot_index !== 9) {
+            errors.push(`Open Slot must be slot 9, found at slot ${openSlot.slot_index}`);
+        }
+
+        // Orchestrator count (soft rule: recommend 3)
+        const orchCount = members.filter(m => m.role === GroupRole.Orchestrator).length;
+        if (orchCount < 3) {
+            warnings.push(`Only ${orchCount} Orchestrator(s) — 3 recommended for optimal routing`);
+        }
+
+        // Max 10 members
+        if (members.length > 10) {
+            errors.push(`Group has ${members.length} members — maximum is 10`);
+        }
+
+        return {
+            valid: errors.length === 0,
+            errors,
+            warnings,
+        };
+    }
+
+    /**
+     * v10.0: Build a new group for a specific branch and level.
+     * Creates the group with 10 slots following mandatory composition.
+     *
+     * Slot layout:
+     *   0: Head Orchestrator
+     *   1: Planning
+     *   2: Verification
+     *   3: Review
+     *   4: Observation
+     *   5: Structure-Improvement
+     *   6-8: Orchestrators (3)
+     *   9: Open Slot (never auto-fill)
+     */
+    buildGroupForLevel(
+        branch: Branch,
+        level: number,
+        parentGroupId: string | null,
+        taskId: string
+    ): AgentGroup {
+        const groupId = randomUUID();
+        const slots: { role: GroupRole; agentType: string; nameSuffix: string }[] = [
+            { role: GroupRole.HeadOrchestrator, agentType: 'orchestrator', nameSuffix: 'HeadOrch' },
+            { role: GroupRole.Planning, agentType: 'planning', nameSuffix: 'Planner' },
+            { role: GroupRole.Verification, agentType: 'verification', nameSuffix: 'Verifier' },
+            { role: GroupRole.Review, agentType: 'review', nameSuffix: 'Reviewer' },
+            { role: GroupRole.Observation, agentType: 'research', nameSuffix: 'Observer' },
+            { role: GroupRole.StructureImprovement, agentType: 'planning', nameSuffix: 'StructImprover' },
+            { role: GroupRole.Orchestrator, agentType: 'orchestrator', nameSuffix: 'Orch1' },
+            { role: GroupRole.Orchestrator, agentType: 'orchestrator', nameSuffix: 'Orch2' },
+            { role: GroupRole.Orchestrator, agentType: 'orchestrator', nameSuffix: 'Orch3' },
+            { role: GroupRole.OpenSlot, agentType: 'orchestrator', nameSuffix: 'OpenSlot' },
+        ];
+
+        // Find parent node for the head orchestrator
+        let parentNodeId: string | null = null;
+        if (parentGroupId) {
+            const parentGroup = this.database.getAgentGroup(parentGroupId);
+            if (parentGroup) {
+                parentNodeId = parentGroup.head_node_id;
+            }
+        }
+
+        const members: GroupMember[] = [];
+        let headNodeId = '';
+
+        for (let i = 0; i < slots.length; i++) {
+            const slot = slots[i];
+            const branchLabel = branch.replace(/_/g, '');
+            const nodeName = `${branchLabel}_L${level}_${slot.nameSuffix}`;
+
+            const isFilled = slot.role !== GroupRole.OpenSlot;
+
+            // Create the tree node for this slot
+            const node = this.spawnNode(
+                i === 0 ? (parentNodeId ?? '') : headNodeId,
+                slot.agentType,
+                nodeName,
+                {
+                    level: level as AgentLevel,
+                    scope: `${branch},${slot.role}`,
+                    contextIsolation: true,
+                    historyIsolation: true,
+                    taskId,
+                }
+            );
+
+            // Update node with group metadata
+            this.database.updateTreeNodeGroupMeta(node.id, groupId, branch, slot.role);
+
+            if (i === 0) {
+                headNodeId = node.id;
+            }
+
+            // Register as group member
+            this.database.addGroupMember({
+                group_id: groupId,
+                node_id: node.id,
+                role: slot.role,
+                slot_index: i,
+                is_filled: isFilled,
+            });
+
+            members.push({
+                node_id: node.id,
+                role: slot.role,
+                slot_index: i,
+                is_filled: isFilled,
+            });
+        }
+
+        // Create the group record
+        const group = this.database.createAgentGroup({
+            id: groupId,
+            branch,
+            level,
+            parent_group_id: parentGroupId,
+            head_node_id: headNodeId,
+            max_members: 10,
+        });
+
+        this.outputChannel.appendLine(
+            `[AgentTree] v10.0: Built group ${groupId} for ${branch} L${level} with ${members.length} members`
+        );
+
+        // Emit event
+        this.eventBus.emit('tree:group_created', 'agent-tree-manager', {
+            group_id: groupId,
+            branch,
+            level,
+            member_count: members.length,
+        });
+
+        return group;
+    }
+
+    /**
+     * v10.0: Build the L1 top orchestrator group + L2 branch heads.
+     * This is the skeleton of the new 6-branch architecture.
+     */
+    buildV10Skeleton(taskId: string): AgentGroup[] {
+        const groups: AgentGroup[] = [];
+
+        // L1: Top Orchestrator group (under Boss)
+        const l1Group = this.buildGroupForLevel(Branch.Orchestrator, 1, null, taskId);
+        groups.push(l1Group);
+
+        // L2: One group per branch
+        const branches = [
+            Branch.Planning,
+            Branch.Verification,
+            Branch.CodingExecution,
+            Branch.CoDirector,
+            Branch.Data,
+            Branch.Orchestrator,
+        ];
+
+        for (const branch of branches) {
+            const l2Group = this.buildGroupForLevel(branch, 2, l1Group.id, taskId);
+            groups.push(l2Group);
+        }
+
+        this.outputChannel.appendLine(
+            `[AgentTree] v10.0: Built skeleton with ${groups.length} groups ` +
+            `(1 L1 + ${branches.length} L2 branch heads)`
+        );
+
+        return groups;
+    }
+
+    /**
+     * v10.0: Build L3 sub-groups for a specific branch.
+     */
+    buildL3SubGroups(branch: Branch, taskId: string): AgentGroup[] {
+        // Find the L2 group for this branch
+        const l2Groups = this.database.getGroupsByBranch(branch).filter((g: AgentGroup) => g.level === 2);
+        if (l2Groups.length === 0) {
+            this.outputChannel.appendLine(`[AgentTree] v10.0: No L2 group found for branch ${branch} — skipping L3 build`);
+            return [];
+        }
+
+        const parentGroup = l2Groups[0];
+        const group = this.buildGroupForLevel(branch, 3, parentGroup.id, taskId);
+        this.outputChannel.appendLine(
+            `[AgentTree] v10.0: Built L3 sub-group for ${branch}`
+        );
+        return [group];
+    }
+
+    /**
+     * v10.0: Submit an upward report from one agent to another.
+     * Reports flow: Workers → Group Orchestrator → Branch Head → L1 → Boss.
+     */
+    submitUpwardReport(
+        fromNodeId: string,
+        ticketId: string,
+        reportType: UpwardReportType,
+        content: string,
+        metadata?: string
+    ): UpwardReport | null {
+        // Find the parent node to route the report to
+        const fromNode = this.database.getTreeNode(fromNodeId);
+        if (!fromNode || !fromNode.parent_id) {
+            this.outputChannel.appendLine(
+                `[AgentTree] v10.0: Cannot submit upward report — node ${fromNodeId} has no parent`
+            );
+            return null;
+        }
+
+        const report = this.database.createUpwardReport({
+            id: randomUUID(),
+            from_node_id: fromNodeId,
+            to_node_id: fromNode.parent_id,
+            ticket_id: ticketId,
+            report_type: reportType,
+            content,
+            metadata,
+        });
+
+        this.eventBus.emit('tree:upward_report', 'agent-tree-manager', {
+            report_id: report.id,
+            from_node_id: fromNodeId,
+            to_node_id: fromNode.parent_id,
+            ticket_id: ticketId,
+            report_type: reportType,
+        });
+
+        this.outputChannel.appendLine(
+            `[AgentTree] v10.0: Upward report ${report.id} (${reportType}) from ${fromNodeId} → ${fromNode.parent_id}`
+        );
+
+        return report;
+    }
+
+    /**
+     * v10.0: Reroute a ticket from one branch to another.
+     * Creates an upward report with type 'reroute' and returns the target branch head.
+     */
+    rerouteTicket(
+        ticketId: string,
+        fromNodeId: string,
+        toBranch: Branch,
+        reason: string
+    ): { report: UpwardReport; targetGroupHeadId: string } | null {
+        // Find the target branch's L2 group head
+        const targetGroups = this.database.getGroupsByBranch(toBranch).filter((g: AgentGroup) => g.level === 2);
+        if (targetGroups.length === 0) {
+            this.outputChannel.appendLine(
+                `[AgentTree] v10.0: Cannot reroute to ${toBranch} — no L2 group exists`
+            );
+            return null;
+        }
+
+        const targetGroup = targetGroups[0];
+        const report = this.submitUpwardReport(
+            fromNodeId,
+            ticketId,
+            UpwardReportType.Reroute,
+            `Reroute to ${toBranch}: ${reason}`,
+            JSON.stringify({ target_branch: toBranch, target_group_id: targetGroup.id })
+        );
+
+        if (!report) return null;
+
+        this.eventBus.emit('tree:ticket_rerouted', 'agent-tree-manager', {
+            ticket_id: ticketId,
+            from_node_id: fromNodeId,
+            to_branch: toBranch,
+            to_group_head: targetGroup.head_node_id,
+            reason,
+        });
+
+        this.outputChannel.appendLine(
+            `[AgentTree] v10.0: Ticket ${ticketId} rerouted to ${toBranch} (head: ${targetGroup.head_node_id})`
+        );
+
+        return { report, targetGroupHeadId: targetGroup.head_node_id };
+    }
+
+    /**
+     * v10.0: Get all groups in the tree, organized by branch and level.
+     */
+    getAllGroups(): { branch: Branch; groups: AgentGroup[] }[] {
+        const branches = Object.values(Branch);
+        return branches.map(branch => ({
+            branch,
+            groups: this.database.getGroupsByBranch(branch),
+        }));
+    }
+
+    /**
+     * v10.0: Get unacknowledged upward reports for a node.
+     */
+    getPendingReports(nodeId: string): UpwardReport[] {
+        return this.database.getUpwardReportsForNode(nodeId)
+            .filter((r: UpwardReport) => !r.acknowledged);
     }
 
     /**

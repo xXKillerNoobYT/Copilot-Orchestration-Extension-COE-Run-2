@@ -30,10 +30,10 @@ describe('NicheAgentFactory', () => {
     // ==================== SEED DEFAULTS ====================
 
     describe('seedDefaultDefinitions', () => {
-        test('seeds ~230 niche agents on first call and returns count', () => {
+        test('seeds ~600 niche agents on first call and returns count', () => {
             const count = factory.seedDefaultDefinitions();
-            expect(count).toBeGreaterThanOrEqual(100);
-            expect(count).toBeLessThanOrEqual(300);
+            expect(count).toBeGreaterThanOrEqual(400);
+            expect(count).toBeLessThanOrEqual(700);
         });
 
         test('returns 0 on second call (idempotent)', () => {

@@ -174,7 +174,7 @@ export class CodingAgentService {
         private eventBus: EventBus,
         private transparencyLogger: TransparencyLoggerLike,
         private outputChannel: OutputChannelLike
-    ) {}
+    ) { }
 
     // ==================== MAIN ENTRY POINT ====================
 
@@ -502,7 +502,7 @@ export class CodingAgentService {
 
         const confidence = componentIds.length > 0 && warnings.length === 0 ? 90
             : componentIds.length > 0 ? 70
-            : 30;
+                : 30;
 
         return {
             code: mainCode.trimEnd(),
@@ -585,9 +585,8 @@ export class CodingAgentService {
         ];
 
         const response = await this.llmService.chat(messages, {
-            maxTokens: 500,
+            maxTokens: 1000,
             temperature: 0.3,
-            stream: false,
         });
 
         return {
@@ -634,9 +633,8 @@ export class CodingAgentService {
         ];
 
         const response = await this.llmService.chat(messages, {
-            maxTokens: 1000,
+            maxTokens: 2000,
             temperature: 0.2,
-            stream: false,
         });
 
         // Parse the LLM response
@@ -1063,9 +1061,8 @@ export class CodingAgentService {
 
         try {
             const response = await this.llmService.chat(messages, {
-                maxTokens: 2000,
+                maxTokens: 4096,
                 temperature: 0.3,
-                stream: false,
             });
 
             let code = response.content.trim();
@@ -1122,9 +1119,8 @@ export class CodingAgentService {
 
         try {
             const response = await this.llmService.chat(messages, {
-                maxTokens: 2000,
+                maxTokens: 4096,
                 temperature: 0.2,
-                stream: false,
             });
 
             let code = response.content.trim();
@@ -1502,7 +1498,7 @@ export class CodingAgentService {
         try {
             const result = await this.llmService.chat(
                 [systemMessage, userMessage],
-                { maxTokens: 2048, temperature: 0.4, stream: false }
+                { maxTokens: 4096, temperature: 0.4 }
             );
 
             return { prompt: result.content, tokens_used: result.tokens_used ?? 0 };

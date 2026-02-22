@@ -43,6 +43,8 @@ const mockLLM: any = {
 
 const mockConfig: any = {
     getAgentContextLimit: jest.fn().mockReturnValue(4000),
+    getModelMaxOutputTokens: jest.fn().mockReturnValue(4096),
+    getModelContextWindow: jest.fn().mockReturnValue(32768),
     getConfig: jest.fn().mockReturnValue({ verification: { delaySeconds: 0 } }),
     getCOEDir: jest.fn(),
     getLLMConfig: jest.fn().mockReturnValue({
@@ -582,7 +584,7 @@ describe('GitHubSyncService line 146: issue.body empty string', () => {
 
         // Create a GitHubSyncService and actually call convertIssueToTask
         // to exercise the `issue.body || ''` branch
-        const mockClient = { } as unknown as GitHubClient;
+        const mockClient = {} as unknown as GitHubClient;
         const mockConfig = {
             getConfig: jest.fn(() => ({
                 github: { token: 'x', owner: 'o', repo: 'r', syncIntervalMinutes: 5, autoImport: false },

@@ -50,6 +50,8 @@ const configManager = {
     }),
     getLLMConfig: () => ({ endpoint: 'http://localhost:1234/v1', model: 'test', timeoutSeconds: 30, startupTimeoutSeconds: 10, streamStallTimeoutSeconds: 60, maxTokens: 4000, maxRequestRetries: 0, maxConcurrentRequests: 4, bossReservedSlots: 1 }),
     getAgentContextLimit: () => 4000,
+    getModelMaxOutputTokens: () => 4096,
+    getModelContextWindow: () => 32768,
     getCOEDir: () => tmpDir,
 } as unknown as ConfigManager;
 
@@ -217,7 +219,7 @@ describe('EvolutionService', () => {
         }
 
         // Mock LLM for proposal generation
-        mockNonStreamingResponse('{"proposal": "Increase timeout to 60s", "affects_p1": false, "change_type": "config"}');
+        mockLLMResponse('{"proposal": "Increase timeout to 60s", "affects_p1": false, "change_type": "config"}');
 
         const patterns = await evo.detectPatterns();
         expect(patterns.length).toBeGreaterThan(0);
@@ -265,7 +267,7 @@ describe('EvolutionService', () => {
             database.addAuditLog('agent', 'error', 'Critical auth failure in login module');
         }
 
-        mockNonStreamingResponse('{"proposal": "Fix auth module retry logic", "affects_p1": true, "change_type": "config"}');
+        mockLLMResponse('{"proposal": "Fix auth module retry logic", "affects_p1": true, "change_type": "config"}');
 
         const patterns = await evo.detectPatterns();
         // Should have created a ticket for P1 change
@@ -283,7 +285,7 @@ describe('EvolutionService', () => {
             database.addAuditLog('agent', 'error', 'Timeout connecting to external service');
         }
 
-        mockNonStreamingResponse('{"proposal": "Increase timeout to 60s", "affects_p1": false, "change_type": "config"}');
+        mockLLMResponse('{"proposal": "Increase timeout to 60s", "affects_p1": false, "change_type": "config"}');
 
         await evo.detectPatterns();
         const evoLog = database.getEvolutionLog(50);
@@ -318,7 +320,7 @@ describe('EvolutionService', () => {
         // The signature is "error:Connection timeout to LLM service" (action + first 50 chars)
         database.addEvolutionEntry('error:Connection timeout to LLM service', 'Already proposed fix');
 
-        mockNonStreamingResponse('{"proposal": "Should not create", "affects_p1": false, "change_type": "config"}');
+        mockLLMResponse('{"proposal": "Should not create", "affects_p1": false, "change_type": "config"}');
         await evo.detectPatterns();
 
         // Should not create a duplicate proposal
@@ -335,7 +337,7 @@ describe('EvolutionService', () => {
             database.addAuditLog('agent', 'timeout_check', 'LLM timeout exceeded 30s');
         }
 
-        mockNonStreamingResponse('{"proposal": "Increase timeout", "affects_p1": false, "change_type": "config"}');
+        mockLLMResponse('{"proposal": "Increase timeout", "affects_p1": false, "change_type": "config"}');
         const patterns = await evo.detectPatterns();
         if (patterns.length > 0) {
             expect(patterns[0].severity).toBe(2);

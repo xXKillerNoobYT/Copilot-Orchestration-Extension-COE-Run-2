@@ -119,8 +119,12 @@ export abstract class BaseAgent {
             // v9.0: Model selection via ModelRouter
             const modelId = this.getModelForRequest();
 
+            // Use model's actual max output tokens (not the agent's context limit)
+            // to prevent requesting more tokens than the model can produce
+            const maxOutputTokens = this.config.getModelMaxOutputTokens();
+
             const response = await this.llm.chat(messages, {
-                maxTokens: this.config.getAgentContextLimit(this.type),
+                maxTokens: maxOutputTokens,
                 ...(modelId ? { model: modelId } : {}),
             });
 

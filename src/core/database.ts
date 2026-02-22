@@ -42,6 +42,11 @@ import {
     EscalationChain, EscalationChainStatus,
     ModelAssignment,
     MCPConfirmation, MCPConfirmationStatus,
+    // v10.0 types
+    AgentGroup, GroupMember, GroupRole, Branch,
+    LLMProfile, LLMProfileType,
+    UpwardReport, UpwardReportType,
+    ToolAssignment, TicketTodo,
 } from '../types';
 
 export class Database {
@@ -1486,6 +1491,126 @@ export class Database {
             ['tree_route_path', 'TEXT DEFAULT NULL'],
         ];
         for (const [col, colType] of v11TicketCols) {
+            try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${colType}`); } catch { /* already exists */ }
+        }
+
+        // ==================== v10.0: Group-Based Tree, LLM Profiles, Tool Assignments ====================
+
+        // v10.0: Agent groups — groups of up to 10 agents within a branch at a level
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS agent_groups (
+                id TEXT PRIMARY KEY,
+                branch TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                parent_group_id TEXT,
+                head_node_id TEXT NOT NULL,
+                max_members INTEGER NOT NULL DEFAULT 10,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_agent_groups_branch ON agent_groups(branch)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_agent_groups_level ON agent_groups(level)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_agent_groups_parent ON agent_groups(parent_group_id)'); } catch { /* */ }
+
+        // v10.0: Group members — node-to-group membership with role and slot
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_members (
+                id TEXT PRIMARY KEY,
+                group_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                slot_index INTEGER NOT NULL DEFAULT 0,
+                is_filled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_group_members_node ON group_members(node_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_group_members_slot ON group_members(group_id, slot_index)'); } catch { /* */ }
+
+        // v10.0: LLM profiles — model profiles for multi-model routing
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS llm_profiles (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                capabilities_json TEXT NOT NULL DEFAULT '[]',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_llm_profiles_type ON llm_profiles(type)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_llm_profiles_active ON llm_profiles(is_active)'); } catch { /* */ }
+
+        // v10.0: Upward reports — agent-to-agent reports flowing up the tree
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS upward_reports (
+                id TEXT PRIMARY KEY,
+                from_node_id TEXT NOT NULL,
+                to_node_id TEXT NOT NULL,
+                ticket_id TEXT NOT NULL,
+                report_type TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                metadata TEXT,
+                acknowledged INTEGER NOT NULL DEFAULT 0,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_upward_reports_ticket ON upward_reports(ticket_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_upward_reports_to ON upward_reports(to_node_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_upward_reports_from ON upward_reports(from_node_id)'); } catch { /* */ }
+
+        // v10.0: Tool assignments — per-agent tool grants
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS tool_assignments (
+                id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                assigned_by TEXT NOT NULL DEFAULT 'system',
+                granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tool_assignments_node ON tool_assignments(node_id)'); } catch { /* */ }
+        try { this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_assignments_unique ON tool_assignments(node_id, tool_name)'); } catch { /* */ }
+
+        // v10.0: Ticket todos — sub-items within a ticket
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS ticket_todos (
+                id TEXT PRIMARY KEY,
+                ticket_id TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                completed INTEGER NOT NULL DEFAULT 0,
+                completed_by TEXT,
+                completed_at TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        `);
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_todos_ticket ON ticket_todos(ticket_id)'); } catch { /* */ }
+
+        // v10.0: Add group/branch columns to agent_tree_nodes
+        const v10TreeNodeCols: [string, string][] = [
+            ['group_id', 'TEXT DEFAULT NULL'],
+            ['branch', 'TEXT DEFAULT NULL'],
+            ['group_role', 'TEXT DEFAULT NULL'],
+        ];
+        for (const [col, colType] of v10TreeNodeCols) {
+            try { this.db.exec(`ALTER TABLE agent_tree_nodes ADD COLUMN ${col} ${colType}`); } catch { /* already exists */ }
+        }
+
+        // v10.0: Add lifecycle columns to tickets table
+        const v10TicketCols: [string, string][] = [
+            ['validated_by', 'TEXT DEFAULT NULL'],
+            ['validated_at', 'TEXT DEFAULT NULL'],
+            ['decomposed_from', 'TEXT DEFAULT NULL'],
+            ['todo_count', 'INTEGER DEFAULT 0'],
+            ['todo_completed', 'INTEGER DEFAULT 0'],
+        ];
+        for (const [col, colType] of v10TicketCols) {
             try { this.db.exec(`ALTER TABLE tickets ADD COLUMN ${col} ${colType}`); } catch { /* already exists */ }
         }
     }
@@ -5372,6 +5497,13 @@ export class Database {
         return (this.db.prepare('SELECT * FROM agent_tree_nodes WHERE level = ?').all(level) as Record<string, unknown>[]).map(r => this.rowToTreeNode(r));
     }
 
+    /** v10.0: Find a tree node by its display name (e.g. 'CodeExampleWorker', 'AuthManager'). Returns first match. */
+    getTreeNodeByName(name: string): AgentTreeNode | null {
+        const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE name = ? LIMIT 1').get(name) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.rowToTreeNode(row);
+    }
+
     /** v9.0: Find tree nodes by agent_type (e.g. 'planning', 'verification'). Returns first match at lowest level. */
     getTreeNodeByAgentType(agentType: string): AgentTreeNode | null {
         const row = this.db.prepare('SELECT * FROM agent_tree_nodes WHERE agent_type = ? ORDER BY level ASC LIMIT 1').get(agentType) as Record<string, unknown> | undefined;
@@ -5518,6 +5650,15 @@ export class Database {
             queue.push(...children);
         }
         return allNodes;
+    }
+
+    /** v10.0: Update group metadata on a tree node (group_id, branch, group_role). */
+    updateTreeNodeGroupMeta(id: string, groupId: string, branch: string, groupRole: string): void {
+        try {
+            this.db.prepare(
+                'UPDATE agent_tree_nodes SET group_id = ?, branch = ?, group_role = ?, updated_at = datetime(\'now\') WHERE id = ?'
+            ).run(groupId, branch, groupRole, id);
+        } catch { /* columns may not exist */ }
     }
 
     updateTreeNode(id: string, updates: Partial<AgentTreeNode>): boolean {
@@ -6279,6 +6420,351 @@ export class Database {
             user_response: (row.user_response as string) ?? null,
             created_at: row.created_at as string, updated_at: row.updated_at as string,
         };
+    }
+
+    // ==================== v10.0: AGENT GROUPS ====================
+
+    createAgentGroup(data: Omit<AgentGroup, 'members' | 'created_at'> & { created_at?: string }): AgentGroup {
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+            INSERT INTO agent_groups (id, branch, level, parent_group_id, head_node_id, max_members, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(data.id, data.branch, data.level, data.parent_group_id ?? null,
+            data.head_node_id, data.max_members ?? 10, data.created_at ?? now, now);
+        return this.getAgentGroup(data.id)!;
+    }
+
+    getAgentGroup(id: string): AgentGroup | null {
+        const stmt = this.db.prepare('SELECT * FROM agent_groups WHERE id = ?');
+        const row = stmt.get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        const members = this.getGroupMembers(id);
+        return {
+            id: row.id as string,
+            branch: row.branch as Branch,
+            level: row.level as number,
+            parent_group_id: (row.parent_group_id as string) ?? null,
+            head_node_id: row.head_node_id as string,
+            members,
+            max_members: row.max_members as number,
+            created_at: row.created_at as string,
+        };
+    }
+
+    getAllAgentGroups(): AgentGroup[] {
+        const stmt = this.db.prepare('SELECT id FROM agent_groups ORDER BY level ASC, branch ASC');
+        const rows = stmt.all() as { id: string }[];
+        return rows.map(r => this.getAgentGroup(r.id)!).filter(Boolean);
+    }
+
+    getGroupsByBranch(branch: Branch): AgentGroup[] {
+        const stmt = this.db.prepare('SELECT id FROM agent_groups WHERE branch = ? ORDER BY level ASC');
+        const rows = stmt.all(branch) as { id: string }[];
+        return rows.map(r => this.getAgentGroup(r.id)!).filter(Boolean);
+    }
+
+    getGroupsByLevel(level: number): AgentGroup[] {
+        const stmt = this.db.prepare('SELECT id FROM agent_groups WHERE level = ? ORDER BY branch ASC');
+        const rows = stmt.all(level) as { id: string }[];
+        return rows.map(r => this.getAgentGroup(r.id)!).filter(Boolean);
+    }
+
+    getChildGroups(parentGroupId: string): AgentGroup[] {
+        const stmt = this.db.prepare('SELECT id FROM agent_groups WHERE parent_group_id = ? ORDER BY branch ASC');
+        const rows = stmt.all(parentGroupId) as { id: string }[];
+        return rows.map(r => this.getAgentGroup(r.id)!).filter(Boolean);
+    }
+
+    deleteAgentGroup(id: string): void {
+        this.db.prepare('DELETE FROM group_members WHERE group_id = ?').run(id);
+        this.db.prepare('DELETE FROM agent_groups WHERE id = ?').run(id);
+    }
+
+    // ==================== v10.0: GROUP MEMBERS ====================
+
+    addGroupMember(data: { group_id: string; node_id: string; role: GroupRole; slot_index: number; is_filled?: boolean }): GroupMember {
+        const id = this.genId();
+        const stmt = this.db.prepare(`
+            INSERT INTO group_members (id, group_id, node_id, role, slot_index, is_filled, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        `);
+        stmt.run(id, data.group_id, data.node_id, data.role, data.slot_index, data.is_filled !== false ? 1 : 0);
+        return {
+            node_id: data.node_id,
+            role: data.role,
+            slot_index: data.slot_index,
+            is_filled: data.is_filled !== false,
+        };
+    }
+
+    getGroupMembers(groupId: string): GroupMember[] {
+        const stmt = this.db.prepare('SELECT * FROM group_members WHERE group_id = ? ORDER BY slot_index ASC');
+        const rows = stmt.all(groupId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            node_id: r.node_id as string,
+            role: r.role as GroupRole,
+            slot_index: r.slot_index as number,
+            is_filled: (r.is_filled as number) === 1,
+        }));
+    }
+
+    removeGroupMember(groupId: string, nodeId: string): void {
+        this.db.prepare('DELETE FROM group_members WHERE group_id = ? AND node_id = ?').run(groupId, nodeId);
+    }
+
+    updateGroupMemberRole(groupId: string, nodeId: string, role: GroupRole): void {
+        this.db.prepare('UPDATE group_members SET role = ? WHERE group_id = ? AND node_id = ?').run(role, groupId, nodeId);
+    }
+
+    // ==================== v10.0: LLM PROFILES ====================
+
+    createLLMProfile(data: Omit<LLMProfile, 'created_at'>): LLMProfile {
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+            INSERT INTO llm_profiles (id, type, model_name, endpoint, capabilities_json, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(data.id, data.type, data.model_name, data.endpoint,
+            JSON.stringify(data.capabilities), data.is_active ? 1 : 0, now, now);
+        return this.getLLMProfile(data.id)!;
+    }
+
+    getLLMProfile(id: string): LLMProfile | null {
+        const stmt = this.db.prepare('SELECT * FROM llm_profiles WHERE id = ?');
+        const row = stmt.get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return {
+            id: row.id as string,
+            type: row.type as LLMProfileType,
+            model_name: row.model_name as string,
+            endpoint: row.endpoint as string,
+            capabilities: JSON.parse((row.capabilities_json as string) ?? '[]'),
+            is_active: (row.is_active as number) === 1,
+            created_at: row.created_at as string,
+        };
+    }
+
+    getAllLLMProfiles(): LLMProfile[] {
+        const stmt = this.db.prepare('SELECT * FROM llm_profiles ORDER BY type ASC');
+        const rows = stmt.all() as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            type: r.type as LLMProfileType,
+            model_name: r.model_name as string,
+            endpoint: r.endpoint as string,
+            capabilities: JSON.parse((r.capabilities_json as string) ?? '[]'),
+            is_active: (r.is_active as number) === 1,
+            created_at: r.created_at as string,
+        }));
+    }
+
+    getActiveLLMProfile(): LLMProfile | null {
+        const stmt = this.db.prepare('SELECT * FROM llm_profiles WHERE is_active = 1 LIMIT 1');
+        const row = stmt.get() as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return this.getLLMProfile(row.id as string);
+    }
+
+    setActiveLLMProfile(id: string): void {
+        // Deactivate all profiles, then activate the specified one
+        this.db.prepare('UPDATE llm_profiles SET is_active = 0, updated_at = datetime(\'now\')').run();
+        this.db.prepare('UPDATE llm_profiles SET is_active = 1, updated_at = datetime(\'now\') WHERE id = ?').run(id);
+    }
+
+    updateLLMProfile(id: string, data: Partial<Pick<LLMProfile, 'model_name' | 'endpoint' | 'capabilities' | 'type'>>): void {
+        if (data.model_name !== undefined) {
+            this.db.prepare('UPDATE llm_profiles SET model_name = ?, updated_at = datetime(\'now\') WHERE id = ?').run(data.model_name, id);
+        }
+        if (data.endpoint !== undefined) {
+            this.db.prepare('UPDATE llm_profiles SET endpoint = ?, updated_at = datetime(\'now\') WHERE id = ?').run(data.endpoint, id);
+        }
+        if (data.capabilities !== undefined) {
+            this.db.prepare('UPDATE llm_profiles SET capabilities_json = ?, updated_at = datetime(\'now\') WHERE id = ?').run(JSON.stringify(data.capabilities), id);
+        }
+        if (data.type !== undefined) {
+            this.db.prepare('UPDATE llm_profiles SET type = ?, updated_at = datetime(\'now\') WHERE id = ?').run(data.type, id);
+        }
+    }
+
+    deleteLLMProfile(id: string): void {
+        this.db.prepare('DELETE FROM llm_profiles WHERE id = ?').run(id);
+    }
+
+    // ==================== v10.0: UPWARD REPORTS ====================
+
+    createUpwardReport(data: Omit<UpwardReport, 'timestamp' | 'acknowledged'>): UpwardReport {
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+            INSERT INTO upward_reports (id, from_node_id, to_node_id, ticket_id, report_type, content, metadata, acknowledged, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+        `);
+        stmt.run(data.id, data.from_node_id, data.to_node_id, data.ticket_id,
+            data.report_type, data.content, data.metadata ?? null, now);
+        return { ...data, timestamp: now, acknowledged: false };
+    }
+
+    getUpwardReport(id: string): UpwardReport | null {
+        const stmt = this.db.prepare('SELECT * FROM upward_reports WHERE id = ?');
+        const row = stmt.get(id) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return {
+            id: row.id as string,
+            from_node_id: row.from_node_id as string,
+            to_node_id: row.to_node_id as string,
+            ticket_id: row.ticket_id as string,
+            report_type: row.report_type as UpwardReportType,
+            content: row.content as string,
+            metadata: (row.metadata as string) ?? undefined,
+            timestamp: row.timestamp as string,
+            acknowledged: (row.acknowledged as number) === 1,
+        };
+    }
+
+    getUpwardReportsForNode(nodeId: string, limit?: number): UpwardReport[] {
+        const sql = `SELECT * FROM upward_reports WHERE to_node_id = ? ORDER BY timestamp DESC${limit ? ` LIMIT ${limit}` : ''}`;
+        const stmt = this.db.prepare(sql);
+        const rows = stmt.all(nodeId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            from_node_id: r.from_node_id as string,
+            to_node_id: r.to_node_id as string,
+            ticket_id: r.ticket_id as string,
+            report_type: r.report_type as UpwardReportType,
+            content: r.content as string,
+            metadata: (r.metadata as string) ?? undefined,
+            timestamp: r.timestamp as string,
+            acknowledged: (r.acknowledged as number) === 1,
+        }));
+    }
+
+    getUpwardReportsForTicket(ticketId: string): UpwardReport[] {
+        const stmt = this.db.prepare('SELECT * FROM upward_reports WHERE ticket_id = ? ORDER BY timestamp ASC');
+        const rows = stmt.all(ticketId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            from_node_id: r.from_node_id as string,
+            to_node_id: r.to_node_id as string,
+            ticket_id: r.ticket_id as string,
+            report_type: r.report_type as UpwardReportType,
+            content: r.content as string,
+            metadata: (r.metadata as string) ?? undefined,
+            timestamp: r.timestamp as string,
+            acknowledged: (r.acknowledged as number) === 1,
+        }));
+    }
+
+    acknowledgeUpwardReport(id: string): void {
+        this.db.prepare('UPDATE upward_reports SET acknowledged = 1 WHERE id = ?').run(id);
+    }
+
+    // ==================== v10.0: TOOL ASSIGNMENTS ====================
+
+    createToolAssignment(data: Omit<ToolAssignment, 'granted_at'>): ToolAssignment {
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO tool_assignments (id, node_id, tool_name, assigned_by, granted_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(data.id, data.node_id, data.tool_name, data.assigned_by, now, data.expires_at ?? null);
+        return { ...data, granted_at: now };
+    }
+
+    getToolAssignmentsForNode(nodeId: string): ToolAssignment[] {
+        const stmt = this.db.prepare('SELECT * FROM tool_assignments WHERE node_id = ? ORDER BY tool_name ASC');
+        const rows = stmt.all(nodeId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            node_id: r.node_id as string,
+            tool_name: r.tool_name as string,
+            assigned_by: r.assigned_by as 'self' | 'parent' | 'system',
+            granted_at: r.granted_at as string,
+            expires_at: (r.expires_at as string) ?? null,
+        }));
+    }
+
+    hasToolAssignment(nodeId: string, toolName: string): boolean {
+        const stmt = this.db.prepare('SELECT COUNT(*) as cnt FROM tool_assignments WHERE node_id = ? AND tool_name = ?');
+        const row = stmt.get(nodeId, toolName) as { cnt: number };
+        return row.cnt > 0;
+    }
+
+    removeToolAssignment(nodeId: string, toolName: string): void {
+        this.db.prepare('DELETE FROM tool_assignments WHERE node_id = ? AND tool_name = ?').run(nodeId, toolName);
+    }
+
+    removeAllToolAssignments(nodeId: string): void {
+        this.db.prepare('DELETE FROM tool_assignments WHERE node_id = ?').run(nodeId);
+    }
+
+    // ==================== v10.0: TICKET TODOS ====================
+
+    createTicketTodo(data: { ticket_id: string; description: string; sort_order?: number }): TicketTodo {
+        const id = this.genId();
+        const now = new Date().toISOString();
+        const sortOrder = data.sort_order ?? 0;
+        const stmt = this.db.prepare(`
+            INSERT INTO ticket_todos (id, ticket_id, description, completed, sort_order, created_at)
+            VALUES (?, ?, ?, 0, ?, ?)
+        `);
+        stmt.run(id, data.ticket_id, data.description, sortOrder, now);
+        // Update ticket todo_count
+        this.db.prepare('UPDATE tickets SET todo_count = (SELECT COUNT(*) FROM ticket_todos WHERE ticket_id = ?) WHERE id = ?')
+            .run(data.ticket_id, data.ticket_id);
+        return {
+            id,
+            ticket_id: data.ticket_id,
+            description: data.description,
+            completed: false,
+            sort_order: sortOrder,
+            created_at: now,
+        };
+    }
+
+    getTicketTodos(ticketId: string): TicketTodo[] {
+        const stmt = this.db.prepare('SELECT * FROM ticket_todos WHERE ticket_id = ? ORDER BY sort_order ASC, created_at ASC');
+        const rows = stmt.all(ticketId) as Record<string, unknown>[];
+        return rows.map(r => ({
+            id: r.id as string,
+            ticket_id: r.ticket_id as string,
+            description: r.description as string,
+            completed: (r.completed as number) === 1,
+            completed_by: (r.completed_by as string) ?? undefined,
+            completed_at: (r.completed_at as string) ?? undefined,
+            sort_order: r.sort_order as number,
+            created_at: r.created_at as string,
+        }));
+    }
+
+    completeTicketTodo(todoId: string, completedBy: string): void {
+        const now = new Date().toISOString();
+        this.db.prepare('UPDATE ticket_todos SET completed = 1, completed_by = ?, completed_at = ? WHERE id = ?')
+            .run(completedBy, now, todoId);
+        // Update ticket todo_completed count
+        const todo = this.db.prepare('SELECT ticket_id FROM ticket_todos WHERE id = ?').get(todoId) as { ticket_id: string } | undefined;
+        if (todo) {
+            this.db.prepare('UPDATE tickets SET todo_completed = (SELECT COUNT(*) FROM ticket_todos WHERE ticket_id = ? AND completed = 1) WHERE id = ?')
+                .run(todo.ticket_id, todo.ticket_id);
+        }
+    }
+
+    uncompleteTicketTodo(todoId: string): void {
+        this.db.prepare('UPDATE ticket_todos SET completed = 0, completed_by = NULL, completed_at = NULL WHERE id = ?')
+            .run(todoId);
+        const todo = this.db.prepare('SELECT ticket_id FROM ticket_todos WHERE id = ?').get(todoId) as { ticket_id: string } | undefined;
+        if (todo) {
+            this.db.prepare('UPDATE tickets SET todo_completed = (SELECT COUNT(*) FROM ticket_todos WHERE ticket_id = ? AND completed = 1) WHERE id = ?')
+                .run(todo.ticket_id, todo.ticket_id);
+        }
+    }
+
+    deleteTicketTodo(todoId: string): void {
+        const todo = this.db.prepare('SELECT ticket_id FROM ticket_todos WHERE id = ?').get(todoId) as { ticket_id: string } | undefined;
+        this.db.prepare('DELETE FROM ticket_todos WHERE id = ?').run(todoId);
+        if (todo) {
+            this.db.prepare('UPDATE tickets SET todo_count = (SELECT COUNT(*) FROM ticket_todos WHERE ticket_id = ?), todo_completed = (SELECT COUNT(*) FROM ticket_todos WHERE ticket_id = ? AND completed = 1) WHERE id = ?')
+                .run(todo.ticket_id, todo.ticket_id, todo.ticket_id);
+        }
     }
 
     close(): void {

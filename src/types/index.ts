@@ -29,7 +29,15 @@ export enum TicketStatus {
     Resolved = 'resolved',
     Escalated = 'escalated',
     Blocked = 'blocked',
-    Cancelled = 'cancelled'     // v7.0: Boss AI can cancel tickets (reviewable for re-engagement)
+    Cancelled = 'cancelled',        // v7.0: Boss AI can cancel tickets (reviewable for re-engagement)
+    // v10.0: Extended lifecycle states
+    Validated = 'validated',         // Boss has approved the ticket
+    Decomposing = 'decomposing',     // Ticket is being broken into sub-tickets
+    ReadyForWork = 'ready_for_work', // All dependencies met, assigned to a worker
+    UnderReview = 'under_review',    // Work done, going through bubble-up review
+    Verified = 'verified',           // Verification agent has approved
+    Completed = 'completed',         // Boss has signed off (Boss-only transition)
+    Failed = 'failed'                // Terminal failure state (from any state)
 }
 
 export enum TicketPriority {
@@ -145,23 +153,23 @@ export interface StandardErrorResponse {
 
 /** Error code metadata for retry/escalation logic */
 export const ERROR_CODE_META: Record<ErrorCode, { severity: ErrorSeverity; retryable: boolean; defaultRetryDelay: number; priorityImpact: PriorityImpact }> = {
-    [ErrorCode.InvalidParam]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.TokenLimitExceeded]:     { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 15, priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.Timeout]:                { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 30, priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.InternalError]:          { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.RateLimit]:              { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 60, priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.InvalidState]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.ResourceNotFound]:       { severity: 'LOW',      retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P3_IGNORABLE' },
-    [ErrorCode.AuthError]:              { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.SchemaValidationFailed]: { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.RecoveryTriggered]:      { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 10, priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.BreakerFailed]:          { severity: 'HIGH',     retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.ToolNotFound]:           { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.DelegationFailed]:       { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 15, priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.LoopDetected]:           { severity: 'HIGH',     retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.DriftThresholdExceeded]: { severity: 'MEDIUM',   retryable: false, defaultRetryDelay: 0,  priorityImpact: 'P1_BLOCKED' },
-    [ErrorCode.CoherenceDrop]:          { severity: 'MEDIUM',   retryable: true,  defaultRetryDelay: 20, priorityImpact: 'P2_DELAYED' },
-    [ErrorCode.TicketUpdateConflict]:   { severity: 'HIGH',     retryable: true,  defaultRetryDelay: 1,  priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.InvalidParam]: { severity: 'MEDIUM', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.TokenLimitExceeded]: { severity: 'HIGH', retryable: true, defaultRetryDelay: 15, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.Timeout]: { severity: 'HIGH', retryable: true, defaultRetryDelay: 30, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.InternalError]: { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.RateLimit]: { severity: 'MEDIUM', retryable: true, defaultRetryDelay: 60, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.InvalidState]: { severity: 'MEDIUM', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.ResourceNotFound]: { severity: 'LOW', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P3_IGNORABLE' },
+    [ErrorCode.AuthError]: { severity: 'CRITICAL', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.SchemaValidationFailed]: { severity: 'MEDIUM', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.RecoveryTriggered]: { severity: 'HIGH', retryable: true, defaultRetryDelay: 10, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.BreakerFailed]: { severity: 'HIGH', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.ToolNotFound]: { severity: 'MEDIUM', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.DelegationFailed]: { severity: 'MEDIUM', retryable: true, defaultRetryDelay: 15, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.LoopDetected]: { severity: 'HIGH', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.DriftThresholdExceeded]: { severity: 'MEDIUM', retryable: false, defaultRetryDelay: 0, priorityImpact: 'P1_BLOCKED' },
+    [ErrorCode.CoherenceDrop]: { severity: 'MEDIUM', retryable: true, defaultRetryDelay: 20, priorityImpact: 'P2_DELAYED' },
+    [ErrorCode.TicketUpdateConflict]: { severity: 'HIGH', retryable: true, defaultRetryDelay: 1, priorityImpact: 'P2_DELAYED' },
 };
 
 /** Helper to create a StandardErrorResponse */
@@ -427,9 +435,16 @@ export interface LLMConfig {
     timeoutSeconds: number;
     startupTimeoutSeconds: number;
     streamStallTimeoutSeconds: number;
-    /** Max tokens for output generation (sent to API as max_tokens). Default: 30000. */
+    /** Max time (seconds) to wait when model is thinking/reasoning with no output.
+     *  Reasoning models may produce zero visible tokens for extended periods while computing.
+     *  This is used as the stall interval during the thinking phase — the model gets this long
+     *  between tokens before the system declares it stalled.
+     *  Does NOT apply when content tokens are actively streaming (that uses streamStallTimeoutSeconds).
+     *  Default: 5400 (90 minutes). Not included in ticket time estimates. */
+    thinkingTimeoutSeconds: number;
+    /** Max tokens for output generation (sent to API as max_tokens). Should match model's maxOutputTokens. */
     maxTokens: number;
-    /** Max tokens for input prompt (hard limit from LM Studio). Default: 4000. Prompts exceeding this are truncated with a warning. */
+    /** Max tokens for input prompt. Computed from context window minus output budget. Prompts exceeding this are truncated with a warning. */
     maxInputTokens: number;
     /** v6.0: Max concurrent LLM requests (LM Studio thread limit). Default: 4. */
     maxConcurrentRequests?: number;
@@ -458,6 +473,8 @@ export interface LLMResponse {
     tokens_used: number;
     model: string;
     finish_reason: string;
+    /** v11.0: Number of reasoning/thinking tokens produced (reasoning models only) */
+    reasoning_tokens?: number;
 }
 
 export interface LLMStreamChunk {
@@ -645,24 +662,26 @@ export interface AgentResponse {
     sources?: string[];
     actions?: AgentAction[];
     tokensUsed?: number;
+    /** v10.0: Name of the agent that produced this response (especially useful for niche agents) */
+    agentName?: string;
 }
 
 export interface AgentAction {
     type: 'create_task' | 'create_ticket' | 'update_task' | 'escalate' | 'log'
-        | 'dispatch_agent'      // v6.0: call agent directly (always creates tracking ticket)
-        | 'reprioritize'        // v6.0: change ticket priority
-        | 'reorder_queue'       // v6.0: move ticket to front/back of queue
-        | 'hold_ticket'         // v6.0: put ticket on hold (model mismatch)
-        | 'update_notepad'      // v6.0: Boss AI writes to its persistent notepad
-        // v7.0: Team queue orchestration
-        | 'assign_task'         // Structured task assignment with success criteria
-        | 'escalate_to_boss'    // Lead agent returns ticket to Boss with structured reason
-        | 'call_support_agent'  // Lead agent calls support agent (sync or async)
-        | 'block_ticket'        // Mark ticket blocked with reason
-        | 'cancel_ticket'       // Remove ticket from queue, mark cancelled
-        | 'move_to_queue'       // Move ticket between team queues
-        | 'save_document'       // Save research findings to support docs folder
-        | 'update_slot_allocation'; // Boss dynamically reallocates team slots
+    | 'dispatch_agent'      // v6.0: call agent directly (always creates tracking ticket)
+    | 'reprioritize'        // v6.0: change ticket priority
+    | 'reorder_queue'       // v6.0: move ticket to front/back of queue
+    | 'hold_ticket'         // v6.0: put ticket on hold (model mismatch)
+    | 'update_notepad'      // v6.0: Boss AI writes to its persistent notepad
+    // v7.0: Team queue orchestration
+    | 'assign_task'         // Structured task assignment with success criteria
+    | 'escalate_to_boss'    // Lead agent returns ticket to Boss with structured reason
+    | 'call_support_agent'  // Lead agent calls support agent (sync or async)
+    | 'block_ticket'        // Mark ticket blocked with reason
+    | 'cancel_ticket'       // Remove ticket from queue, mark cancelled
+    | 'move_to_queue'       // Move ticket between team queues
+    | 'save_document'       // Save research findings to support docs folder
+    | 'update_slot_allocation'; // Boss dynamically reallocates team slots
     payload: Record<string, unknown>;
 }
 
@@ -2444,7 +2463,8 @@ export enum AgentLevel {
     L6_TeamLead = 6,
     L7_WorkerGroup = 7,
     L8_Worker = 8,
-    L9_Checker = 9
+    L9_Checker = 9,
+    L10_Worker = 10  // v10.0: Work-only level (lowest in hierarchy)
 }
 
 /** Permissions that can be granted to agents in the hierarchy */
@@ -3014,6 +3034,26 @@ export type TicketStage =
     | 'review'
     | 'deployment';
 
+/** A single step in the delegation chain — one level at a time */
+export interface DelegationStep {
+    /** Node that is delegating */
+    fromNodeId: string;
+    /** Node(s) that receive the delegation (fan-out = multiple) */
+    toNodeIds: string[];
+    /** Level of the delegating node */
+    fromLevel: number;
+    /** Level of the receiving node(s) */
+    toLevel: number;
+    /** Agent names of the receiving nodes */
+    toAgentNames: string[];
+    /** Whether this delegation was decided by keyword scoring or LLM */
+    delegationMethod: 'keyword' | 'llm';
+    /** Score(s) that led to this delegation decision */
+    scores: number[];
+    /** Timestamp when this delegation step occurred */
+    timestamp: number;
+}
+
 /** Tree-routed pipeline — replaces hardcoded AgentPipeline routing */
 export interface TreeRoutedPipeline {
     /** Node IDs from Boss → leaf */
@@ -3028,6 +3068,10 @@ export interface TreeRoutedPipeline {
     delegationReason: string;
     /** Whether this used fallback routing (tree couldn't route) */
     usedFallback: boolean;
+    /** Step-by-step delegation trace — one entry per level traversed */
+    delegationSteps?: DelegationStep[];
+    /** Whether this pipeline was built step-by-step (true) or via legacy findBestLeaf (false) */
+    stepByStep?: boolean;
 }
 
 /** Boss pre-dispatch validation — Boss confirms a ticket should be processed next */
@@ -3138,4 +3182,244 @@ export interface AgentErrorContext {
     severity: 'recoverable' | 'needs_human' | 'blocking';
     /** Timestamp */
     timestamp: string;
+}
+
+// ============================================================
+// v10.0: Group-Based Tree, LLM Profiles, Tool Assignments
+// ============================================================
+
+// --- v10.0 Enums ---
+
+/**
+ * v10.0: Role of an agent within a group.
+ * Each group of 10 has mandatory composition rules.
+ */
+export enum GroupRole {
+    HeadOrchestrator = 'head_orchestrator',        // slot 0, exactly 1 per group
+    Planning = 'planning',                          // exactly 1 per group
+    Verification = 'verification',                  // exactly 1 per group
+    Review = 'review',                              // exactly 1 per group
+    Observation = 'observation',                    // exactly 1 per group
+    StructureImprovement = 'structure_improvement', // exactly 1 per group
+    Orchestrator = 'orchestrator',                  // up to 3 per group (recommended)
+    OpenSlot = 'open_slot',                         // exactly 1 per group (hard rule — never auto-fill)
+    Worker = 'worker',                              // L10 work-only agents
+}
+
+/**
+ * v10.0: The 6 core branches of the agent tree.
+ * Each branch handles a specific domain of work.
+ */
+export enum Branch {
+    Planning = 'planning',
+    Verification = 'verification',
+    CodingExecution = 'coding_execution',
+    CoDirector = 'co_director',
+    Data = 'data',
+    Orchestrator = 'orchestrator',
+}
+
+/**
+ * v10.0: LLM profile types for multi-model routing.
+ * Each profile represents a different model capability set.
+ */
+export enum LLMProfileType {
+    Base = 'base',
+    Tool = 'tool',
+    Vision = 'vision',
+    Thinking = 'thinking',
+    AllRounder = 'all_rounder',
+}
+
+/**
+ * v10.0: Type of upward report flowing through the tree.
+ */
+export enum UpwardReportType {
+    Completion = 'completion',
+    Issue = 'issue',
+    Escalation = 'escalation',
+    Reroute = 'reroute',
+}
+
+/**
+ * v10.0: Valid ticket state transitions.
+ * Maps each state to the set of states it can transition to.
+ */
+export const TICKET_STATE_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
+    [TicketStatus.Open]: [TicketStatus.Validated, TicketStatus.Cancelled, TicketStatus.Failed],
+    [TicketStatus.Validated]: [TicketStatus.Blocked, TicketStatus.Decomposing, TicketStatus.ReadyForWork, TicketStatus.Cancelled, TicketStatus.Failed],
+    [TicketStatus.Blocked]: [TicketStatus.Validated, TicketStatus.Cancelled, TicketStatus.Failed],
+    [TicketStatus.Decomposing]: [TicketStatus.ReadyForWork, TicketStatus.Failed, TicketStatus.Cancelled],
+    [TicketStatus.ReadyForWork]: [TicketStatus.InReview, TicketStatus.Failed, TicketStatus.Cancelled],
+    [TicketStatus.InReview]: [TicketStatus.UnderReview, TicketStatus.Failed, TicketStatus.Cancelled],
+    [TicketStatus.UnderReview]: [TicketStatus.Verified, TicketStatus.ReadyForWork, TicketStatus.Failed, TicketStatus.Cancelled],
+    [TicketStatus.Verified]: [TicketStatus.Completed, TicketStatus.ReadyForWork, TicketStatus.Failed],
+    [TicketStatus.Completed]: [],  // Terminal state
+    [TicketStatus.Failed]: [TicketStatus.Open],  // Can be retried by reopening
+    [TicketStatus.Cancelled]: [TicketStatus.Open],  // Can be re-engaged
+    // Legacy states that still exist for backward compatibility:
+    [TicketStatus.OnHold]: [TicketStatus.Open, TicketStatus.Cancelled],
+    [TicketStatus.Resolved]: [TicketStatus.Completed, TicketStatus.Open],
+    [TicketStatus.Escalated]: [TicketStatus.Open, TicketStatus.Cancelled],
+};
+
+// --- v10.0 Interfaces ---
+
+/**
+ * v10.0: A group of up to 10 agents within a branch at a specific level.
+ * Groups enforce mandatory composition rules (1 Head + 9 sub-agents).
+ */
+export interface AgentGroup {
+    /** Unique group identifier */
+    id: string;
+    /** Which branch this group belongs to */
+    branch: Branch;
+    /** Level in the hierarchy (L1-L10) */
+    level: number;
+    /** Parent group ID (null for L1 groups) */
+    parent_group_id: string | null;
+    /** Node ID of the head orchestrator (slot 0) */
+    head_node_id: string;
+    /** Members of this group */
+    members: GroupMember[];
+    /** Max members (always 10: 1 head + 9 sub-agents) */
+    max_members: number;
+    /** When the group was created */
+    created_at: string;
+}
+
+/**
+ * v10.0: A member slot within a group.
+ */
+export interface GroupMember {
+    /** The tree node ID for this member */
+    node_id: string;
+    /** Role within the group */
+    role: GroupRole;
+    /** Slot index (0-9; 0 is always the Head Orchestrator, 9 is always the Open Slot) */
+    slot_index: number;
+    /** Whether this slot is filled or empty */
+    is_filled: boolean;
+}
+
+/**
+ * v10.0: LLM model profile for multi-model routing.
+ * Only one model is loaded at a time (single-model queue).
+ */
+export interface LLMProfile {
+    /** Unique profile identifier */
+    id: string;
+    /** Profile type (determines capability set) */
+    type: LLMProfileType;
+    /** Model name as reported by LM Studio */
+    model_name: string;
+    /** API endpoint for this model */
+    endpoint: string;
+    /** List of capabilities this model supports */
+    capabilities: string[];
+    /** Whether this is the currently active model */
+    is_active: boolean;
+    /** When the profile was created */
+    created_at: string;
+}
+
+/**
+ * v10.0: Upward report flowing through the agent tree.
+ * Workers → Group Orchestrator → Branch Orchestrator → L1 → Boss.
+ */
+export interface UpwardReport {
+    /** Unique report identifier */
+    id: string;
+    /** Node ID of the agent sending the report */
+    from_node_id: string;
+    /** Node ID of the agent receiving the report */
+    to_node_id: string;
+    /** Ticket being reported on */
+    ticket_id: string;
+    /** Type of report */
+    report_type: UpwardReportType;
+    /** Report content / summary */
+    content: string;
+    /** Optional structured data (JSON) */
+    metadata?: string;
+    /** When the report was created */
+    timestamp: string;
+    /** Whether the report has been acknowledged by the receiver */
+    acknowledged: boolean;
+}
+
+/**
+ * v10.0: Tool assignment for an agent.
+ * Agents can request tools; parent orchestrators approve/deny.
+ */
+export interface ToolAssignment {
+    /** Unique assignment identifier */
+    id: string;
+    /** Node ID of the agent that has the tool */
+    node_id: string;
+    /** Name of the tool (e.g., 'file_read', 'terminal', 'git') */
+    tool_name: string;
+    /** Who assigned the tool */
+    assigned_by: 'self' | 'parent' | 'system';
+    /** When the tool was granted */
+    granted_at: string;
+    /** Optional expiry (null = permanent) */
+    expires_at: string | null;
+}
+
+/**
+ * v10.0: Sub-item (todo) within a ticket.
+ * Agents can add/complete todos as they work.
+ */
+export interface TicketTodo {
+    /** Unique todo identifier */
+    id: string;
+    /** Parent ticket ID */
+    ticket_id: string;
+    /** Description of the sub-item */
+    description: string;
+    /** Whether the todo is completed */
+    completed: boolean;
+    /** Node ID of the agent that completed it */
+    completed_by?: string;
+    /** When it was completed */
+    completed_at?: string;
+    /** Order within the ticket's todo list */
+    sort_order: number;
+    /** When the todo was created */
+    created_at: string;
+}
+
+/**
+ * v10.0: Result of validating a group's composition.
+ */
+export interface GroupCompositionValidation {
+    /** Whether the group passes all hard rules */
+    valid: boolean;
+    /** Hard rule violations (must fix) */
+    errors: string[];
+    /** Soft rule warnings (should fix) */
+    warnings: string[];
+}
+
+/**
+ * v10.0: Built-in tool names that can be assigned to agents.
+ */
+export enum BuiltInTool {
+    FileRead = 'file_read',
+    FileWrite = 'file_write',
+    Terminal = 'terminal',
+    Git = 'git',
+    TestRun = 'test_run',
+    WebSearch = 'web_search',
+    CodeAnalyze = 'code_analyze',
+    DbQuery = 'db_query',
+    LLMCall = 'llm_call',
+    TicketManage = 'ticket_manage',
+    TreeManage = 'tree_manage',
+    ReportSubmit = 'report_submit',
+    Lint = 'lint',
+    Format = 'format',
+    Refactor = 'refactor',
+    Deploy = 'deploy',
 }

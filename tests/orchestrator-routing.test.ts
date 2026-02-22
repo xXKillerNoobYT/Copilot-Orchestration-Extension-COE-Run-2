@@ -30,6 +30,8 @@ const mockConfig = {
         agents: {},
     }),
     getAgentContextLimit: () => 4096,
+    getModelMaxOutputTokens: () => 4096,
+    getModelContextWindow: () => 32768,
     getLLMConfig: () => ({}),
     getCOEDir: () => tmpDir,
 } as any;

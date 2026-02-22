@@ -22,6 +22,8 @@ const mockLLM = {
 
 const mockConfig = {
     getAgentContextLimit: jest.fn().mockReturnValue(4000),
+    getModelMaxOutputTokens: jest.fn().mockReturnValue(4096),
+    getModelContextWindow: jest.fn().mockReturnValue(32768),
     getConfig: jest.fn().mockReturnValue({}),
 } as any;
 

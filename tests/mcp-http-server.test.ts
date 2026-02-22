@@ -80,6 +80,8 @@ const configManager = {
     }),
     getLLMConfig: () => ({ endpoint: 'http://localhost:9999/v1', model: 'test', timeoutSeconds: 30, startupTimeoutSeconds: 10, streamStallTimeoutSeconds: 60, maxTokens: 4000, maxRequestRetries: 0, maxConcurrentRequests: 4, bossReservedSlots: 1 }),
     getAgentContextLimit: () => 4000,
+    getModelMaxOutputTokens: () => 4096,
+    getModelContextWindow: () => 32768,
     getCOEDir: () => tmpDir,
 } as unknown as ConfigManager;
 
@@ -1051,7 +1053,7 @@ describe('MCP Server startup edge cases', () => {
         global.setInterval = ((fn: any, ms: any) => {
             if (ms === 30000) {
                 capturedPingCb = fn;
-                capturedId = realSetInterval(() => {}, 999999);
+                capturedId = realSetInterval(() => { }, 999999);
                 return capturedId;
             }
             return origSetInterval(fn, ms);

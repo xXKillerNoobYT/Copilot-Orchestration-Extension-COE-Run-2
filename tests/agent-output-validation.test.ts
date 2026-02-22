@@ -53,6 +53,8 @@ beforeEach(async () => {
         }),
         getLLMConfig: () => ({ endpoint: 'http://localhost:1234/v1', model: 'test', timeoutSeconds: 30, startupTimeoutSeconds: 10, streamStallTimeoutSeconds: 60, maxTokens: 4000, maxRequestRetries: 0, maxConcurrentRequests: 4, bossReservedSlots: 1 }),
         getAgentContextLimit: () => 4000,
+        getModelMaxOutputTokens: () => 4096,
+        getModelContextWindow: () => 32768,
         getCOEDir: () => ':memory:',
     } as unknown as ConfigManager;
 
