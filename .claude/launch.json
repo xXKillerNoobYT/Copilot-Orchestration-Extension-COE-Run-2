@@ -3,20 +3,20 @@
   "configurations": [
     {
       "name": "esbuild-watch",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "watch"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["esbuild.config.js", "--watch"],
       "port": 0
     },
     {
       "name": "jest-tests",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["jest", "--watchAll"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/jest/bin/jest.js", "--watchAll"],
       "port": 0
     },
     {
       "name": "playwright-e2e-ui",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["playwright", "test", "--ui"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/@playwright/test/cli.js", "test", "--ui"],
       "port": 0
     }
   ]

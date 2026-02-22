@@ -26,7 +26,10 @@
       "Bash(PLAYWRIGHT_BROWSERS_PATH=\"C:\\\\Users\\\\weird\\\\AppData\\\\Local\\\\ms-playwright\" npx playwright install:*)",
       "Bash(npx playwright install chromium)",
       "Bash(node scripts/fix-plan-generation.js:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

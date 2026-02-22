@@ -1,10 +1,9 @@
-import * as vscode from 'vscode';
 import * as http from 'http';
 import { Database } from '../core/database';
 import { ConfigManager } from '../core/config';
 import { Orchestrator } from '../agents/orchestrator';
 import { CodingAgentService } from '../core/coding-agent';
-import { AgentContext, TaskStatus, TicketPriority, TaskPriority, MCPConfirmationStatus } from '../types';
+import { AgentContext, TaskStatus, TicketPriority, TaskPriority, MCPConfirmationStatus, OutputChannelLike } from '../types';
 import { handleApiRequest } from '../webapp/api';
 import { getAppHtml } from '../webapp/app';
 import { TicketProcessorService } from '../core/ticket-processor';
@@ -33,7 +32,7 @@ export class MCPServer {
         private orchestrator: Orchestrator,
         private database: Database,
         private config: ConfigManager,
-        private outputChannel: vscode.OutputChannel,
+        private outputChannel: OutputChannelLike,
         private codingAgentService?: CodingAgentService
     ) {}
 

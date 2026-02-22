@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import { Database } from '../core/database';
 import { LLMService } from '../core/llm-service';
 import { ConfigManager } from '../core/config';
@@ -10,14 +9,14 @@ import type { AgentTreeManager } from '../core/agent-tree-manager';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
     LLMMessage, ConversationRole, ContentType, ContextItem,
-    AgentPermission,
+    AgentPermission, OutputChannelLike,
 } from '../types';
 
 export abstract class BaseAgent {
     protected database: Database;
     protected llm: LLMService;
     protected config: ConfigManager;
-    protected outputChannel: vscode.OutputChannel;
+    protected outputChannel: OutputChannelLike;
 
     // Token management services (optional — backward-compatible)
     protected budgetTracker: TokenBudgetTracker | null = null;
@@ -37,7 +36,7 @@ export abstract class BaseAgent {
         database: Database,
         llm: LLMService,
         config: ConfigManager,
-        outputChannel: vscode.OutputChannel
+        outputChannel: OutputChannelLike
     ) {
         this.database = database;
         this.llm = llm;

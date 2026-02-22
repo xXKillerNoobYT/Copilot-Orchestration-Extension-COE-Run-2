@@ -21,3 +21,6 @@ e2e/**/*.png
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Windows reserved device names
+nul

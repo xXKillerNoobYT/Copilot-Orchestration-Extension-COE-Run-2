@@ -25,15 +25,12 @@ import {
     ProjectPhase, PHASE_ORDER, PhaseGateResult, LeadAgentQueue, TeamQueueStatus,
     TreeRoutedPipeline, BossPreDispatchValidation, BubbleResult, BossCompletionAssessment,
     TreeNodeStatus,
+    OutputChannelLike,
     // v10.0
     TICKET_STATE_TRANSITIONS,
 } from '../types';
 
 // ==================== INTERFACES ====================
-
-export interface OutputChannelLike {
-    appendLine(msg: string): void;
-}
 
 /** v4.1: Minimal interface for ReviewAgent, avoiding tight coupling to concrete class */
 export interface ReviewAgentLike {

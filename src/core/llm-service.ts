@@ -1,5 +1,4 @@
-import * as vscode from 'vscode';
-import { LLMConfig, LLMMessage, LLMRequest, LLMResponse, LLMStreamChunk } from '../types';
+import { LLMConfig, LLMMessage, LLMRequest, LLMResponse, LLMStreamChunk, OutputChannelLike } from '../types';
 import type { EventBus } from './event-bus';
 
 /** v6.0: Request priority — boss requests get a reserved LLM slot */
@@ -50,7 +49,7 @@ export class LLMService {
 
     constructor(
         private config: LLMConfig,
-        private outputChannel: vscode.OutputChannel
+        private outputChannel: OutputChannelLike
     ) {
         this.maxConcurrent = config.maxConcurrentRequests ?? 4;
         this.bossReservedSlots = config.bossReservedSlots ?? 1;

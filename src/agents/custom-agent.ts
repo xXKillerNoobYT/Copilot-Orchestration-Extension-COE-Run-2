@@ -9,7 +9,7 @@ import {
 import { Database } from '../core/database';
 import { LLMService } from '../core/llm-service';
 import { ConfigManager } from '../core/config';
-import * as vscode from 'vscode';
+import { OutputChannelLike } from '../types';
 
 export class CustomAgentRunner extends BaseAgent {
     readonly name = 'Custom Agent Runner';
@@ -22,7 +22,7 @@ export class CustomAgentRunner extends BaseAgent {
         database: Database,
         llm: LLMService,
         config: ConfigManager,
-        outputChannel: vscode.OutputChannel
+        outputChannel: OutputChannelLike
     ) {
         super(database, llm, config, outputChannel);
         this.customAgentsDir = path.join(config.getCOEDir(), 'agents', 'custom');

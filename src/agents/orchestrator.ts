@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import { Database } from '../core/database';
 import { LLMService } from '../core/llm-service';
 import { ConfigManager } from '../core/config';
@@ -33,7 +32,7 @@ import type { NicheAgentFactory } from '../core/niche-agent-factory';
 import {
     AgentType, AgentStatus, AgentContext, AgentResponse,
     ConversationRole, Task, TaskStatus, TicketPriority,
-    LLMMessage, AgentTreeNode, NicheAgentDefinition
+    LLMMessage, AgentTreeNode, NicheAgentDefinition, OutputChannelLike
 } from '../types';
 
 const INTENT_CATEGORIES = [
@@ -278,7 +277,7 @@ If you cannot proceed or information is missing:
         database: Database,
         llm: LLMService,
         config: ConfigManager,
-        outputChannel: vscode.OutputChannel
+        outputChannel: OutputChannelLike
     ) {
         super(database, llm, config, outputChannel);
     }

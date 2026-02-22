@@ -3,6 +3,13 @@
 // Central type system for the Copilot Orchestration Extension
 // ============================================================
 
+// --- Universal Interfaces ---
+
+/** Logger interface compatible with both vscode.OutputChannel and console-based loggers */
+export interface OutputChannelLike {
+    appendLine(msg: string): void;
+}
+
 // --- Enums ---
 
 export enum TaskStatus {
